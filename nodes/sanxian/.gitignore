@@ -1,0 +1,19 @@
+# ---- Gradle / 构建产物 ----
+build/
+.gradle/
+.externalNativeBuild/
+.cxx/
+
+# ---- 本地 SDK 路径（含绝对路径，禁止入库）----
+local.properties
+
+# ---- IDE ----
+*.iml
+.idea/
+
+# ---- 系统 ----
+.DS_Store
+
+# ---- 签名 ----
+*.jks
+*.keystore

@@ -1,0 +1,19 @@
+{
+  "node_id": "sanxian-01",
+  "node_name": "散仙·01",
+  "port": 4011,
+  "auth_enabled": false,
+  "preload_models": [
+    "/sdcard/biyou/models/Qwen3-0.6B-Q8_0.gguf"
+  ],
+  "capabilities_map": {
+    "Qwen3-0.6B-Q8_0.gguf": {
+      "capabilities": ["chat"]
+    }
+  },
+  "max_concurrency": 2,
+  "mem_warn_pct": 85.0,
+  "cpu_warn_pct": 90.0,
+  "temp_warn_c": 45.0,
+  "request_timeout_ms": 300000
+}
