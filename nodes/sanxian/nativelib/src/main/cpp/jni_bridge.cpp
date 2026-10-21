@@ -19,7 +19,7 @@
 // 「could not reserve space」、compute 失败等）默认只写 stderr，在 Android 上不会进 logcat，
 // 导致 decode 失败时只能看到上层「prompt eval 失败」和折叠后的 -4，根因完全不可见。
 // 这里把整套日志桥接到 __android_log_print，真机 logcat 即可看到真实错误。
-static void smallphone_ggml_log(ggml_log_level level, const char* text, void* /*user_data*/) {
+static void sanxian_ggml_log(ggml_log_level level, const char* text, void* /*user_data*/) {
     if (!text) return;
     int prio;
     switch (level) {
@@ -36,7 +36,7 @@ static std::atomic<bool> g_llama_log_bridged{false};
 static void bridgeLlamaLogsOnce() {
     if (!g_llama_log_bridged.exchange(true)) {
         // llama_log_set 会同时接管 llama 与 ggml 两套回调，一处设置即可。
-        llama_log_set(smallphone_ggml_log, nullptr);
+        llama_log_set(sanxian_ggml_log, nullptr);
     }
 }
 
@@ -79,10 +79,10 @@ LlmSession* asSession(jlong handle) {
 
 // D4：采样扩展开关。置 0 时 rebuildSampler 跳过 top-k 与 penalties，
 // 采样链退化为 min_p -> temp -> top_p -> dist（等价 D3 之前行为），用于回归对照 / 快速回滚。
-#ifndef SMALLPHONE_SAMPLING_EXTENDED
-#define SMALLPHONE_SAMPLING_EXTENDED 1
+#ifndef SANXIAN_SAMPLING_EXTENDED
+#define SANXIAN_SAMPLING_EXTENDED 1
 #endif
-constexpr bool kSamplingExtended = (SMALLPHONE_SAMPLING_EXTENDED != 0);
+constexpr bool kSamplingExtended = (SANXIAN_SAMPLING_EXTENDED != 0);
 
 // 以会话保存的采样参数重建整条采样链。每轮 generate 调用一次（每用户消息一次），
 // 成本远小于 llama_decode 评估；同时规避 dist reset 的 RNG 语义歧义：
@@ -177,12 +177,12 @@ constexpr int32_t kSafetyMargin = 4;
 constexpr int32_t kSafetyRewind = 4;      // BPE 边界退让：重算末几个 token 换取确定性
 constexpr size_t  kMinReuseTokens = 32;   // 复用收益低于此阈值时直接全量重算
 
-// 增量 KV 复用总开关：#define SMALLPHONE_KV_INCREMENTAL 0（或 -D...=0）退回改动前
+// 增量 KV 复用总开关：#define SANXIAN_KV_INCREMENTAL 0（或 -D...=0）退回改动前
 // 「每轮 clear + 全量重算」行为，用于 A/B 与故障回退。
-#ifndef SMALLPHONE_KV_INCREMENTAL
-#define SMALLPHONE_KV_INCREMENTAL 1
+#ifndef SANXIAN_KV_INCREMENTAL
+#define SANXIAN_KV_INCREMENTAL 1
 #endif
-constexpr bool kEnableIncrementalKv = (SMALLPHONE_KV_INCREMENTAL != 0);
+constexpr bool kEnableIncrementalKv = (SANXIAN_KV_INCREMENTAL != 0);
 
 // 一条会话消息（原生持有字符串存储，供 llama_chat_message 借用指针）
 struct ChatMsg {
@@ -407,7 +407,7 @@ bool readChatArrays(JNIEnv* env, jobjectArray roles, jobjectArray contents,
 }  // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_smallphone_llm_LlamaNative_hello(JNIEnv* env, jclass /*clazz*/) {
+Java_com_biyou_sanxian_llm_LlamaNative_hello(JNIEnv* env, jclass /*clazz*/) {
     llama_backend_init();
 
     std::string info = "llama.cpp linked";
@@ -422,7 +422,7 @@ Java_com_smallphone_llm_LlamaNative_hello(JNIEnv* env, jclass /*clazz*/) {
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_smallphone_llm_LlamaNative_loadModel(
+Java_com_biyou_sanxian_llm_LlamaNative_loadModel(
         JNIEnv* env, jclass /*clazz*/,
         jstring jPath, jint nCtx, jint nThreads, jint nBatch, jint nGpuLayers,
         jboolean useMmap, jint kvCacheType, jfloat temperature, jfloat topP) {
@@ -499,7 +499,7 @@ Java_com_smallphone_llm_LlamaNative_loadModel(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_smallphone_llm_LlamaNative_setSamplingParams(
+Java_com_biyou_sanxian_llm_LlamaNative_setSamplingParams(
         JNIEnv* env, jclass /*clazz*/, jlong handle,
         jfloat temperature, jfloat topP, jint topK,
         jfloat repeatPenalty, jint repeatLastN, jlong seed) {
@@ -515,7 +515,7 @@ Java_com_smallphone_llm_LlamaNative_setSamplingParams(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_smallphone_llm_LlamaNative_freeModel(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+Java_com_biyou_sanxian_llm_LlamaNative_freeModel(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     LlmSession* s = asSession(handle);
     if (!s) return;
     if (s->sampler) llama_sampler_free(s->sampler);
@@ -525,13 +525,13 @@ Java_com_smallphone_llm_LlamaNative_freeModel(JNIEnv* /*env*/, jclass /*clazz*/,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_smallphone_llm_LlamaNative_stopGenerate(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+Java_com_biyou_sanxian_llm_LlamaNative_stopGenerate(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     if (LlmSession* s = asSession(handle)) s->cancelled = true;
 }
 
 /** 清空 KV Cache，用于开启新会话。 */
 extern "C" JNIEXPORT void JNICALL
-Java_com_smallphone_llm_LlamaNative_clearContext(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+Java_com_biyou_sanxian_llm_LlamaNative_clearContext(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     LlmSession* s = asSession(handle);
     if (!s || !s->ctx) return;
     llama_memory_clear(llama_get_memory(s->ctx), true);
@@ -541,7 +541,7 @@ Java_com_smallphone_llm_LlamaNative_clearContext(JNIEnv* /*env*/, jclass /*clazz
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_smallphone_llm_LlamaNative_modelDesc(JNIEnv* env, jclass /*clazz*/, jlong handle) {
+Java_com_biyou_sanxian_llm_LlamaNative_modelDesc(JNIEnv* env, jclass /*clazz*/, jlong handle) {
     LlmSession* s = asSession(handle);
     if (!s || !s->model) return env->NewStringUTF("");
     char buf[512] = {0};
@@ -550,13 +550,13 @@ Java_com_smallphone_llm_LlamaNative_modelDesc(JNIEnv* env, jclass /*clazz*/, jlo
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_smallphone_llm_LlamaNative_modelSize(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+Java_com_biyou_sanxian_llm_LlamaNative_modelSize(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     LlmSession* s = asSession(handle);
     return (s && s->model) ? static_cast<jlong>(llama_model_size(s->model)) : 0;
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_smallphone_llm_LlamaNative_modelParamCount(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+Java_com_biyou_sanxian_llm_LlamaNative_modelParamCount(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
     LlmSession* s = asSession(handle);
     return (s && s->model) ? static_cast<jlong>(llama_model_n_params(s->model)) : 0;
 }
@@ -581,7 +581,7 @@ Java_com_smallphone_llm_LlamaNative_modelParamCount(JNIEnv* /*env*/, jclass /*cl
  * @return 渲染后的 prompt；消息数组为空时返回空串
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_smallphone_llm_LlamaNative_formatChat(
+Java_com_biyou_sanxian_llm_LlamaNative_formatChat(
         JNIEnv* env, jclass /*clazz*/, jlong handle,
         jobjectArray roles, jobjectArray contents) {
 
@@ -603,7 +603,7 @@ Java_com_smallphone_llm_LlamaNative_formatChat(
  * 供诊断 / UI 查看「当前模型实际使用的模板」。模型未内嵌时返回空串。
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_smallphone_llm_LlamaNative_modelChatTemplate(
+Java_com_biyou_sanxian_llm_LlamaNative_modelChatTemplate(
         JNIEnv* env, jclass /*clazz*/, jlong handle) {
     LlmSession* s = asSession(handle);
     if (!s || !s->model) return env->NewStringUTF("");
@@ -624,7 +624,7 @@ Java_com_smallphone_llm_LlamaNative_modelChatTemplate(
  *         -6 无法构造合法 prompt（消息数组为空，或裁剪到极限仍超预算）
  */
 extern "C" JNIEXPORT jint JNICALL
-Java_com_smallphone_llm_LlamaNative_generate(
+Java_com_biyou_sanxian_llm_LlamaNative_generate(
         JNIEnv* env, jclass /*clazz*/,
         jlong handle, jobjectArray roles, jobjectArray contents,
         jint maxTokens, jobject sink) {

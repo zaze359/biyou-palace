@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.smallphone.nativelib"
+    namespace = "com.biyou.sanxian.nativelib"
     compileSdk = 35
 
     defaultConfig {

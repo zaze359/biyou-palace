@@ -1,16 +1,16 @@
 # 散仙节点 · 原生 / 构建集成指南
 
-本目录现为**自包含工程**：smallphone 底座已于 2026-10-18 完整并入本目录（`shared/`、`composeApp/`、`nativelib/` 即底座本体；`com.biyou.sanxian` 增量并存）。下面 §2–§7 描述的改动**均已永久应用到仓库文件**，此处保留为「变更记录 + 原生集成细节」与 embeddings JNI 落地参考。
+本目录现为**自包含工程**：散仙 底座已于 2026-10-18 完整并入本目录（`shared/`、`composeApp/`、`nativelib/` 即底座本体；`com.biyou.sanxian` 增量并存）。下面 §2–§7 描述的改动**均已永久应用到仓库文件**，此处保留为「变更记录 + 原生集成细节」与 embeddings JNI 落地参考。
 
-> 前置：JDK 17、Android SDK 35 + Build-Tools 35.0.0、NDK 27.x、Gradle 8.10（同 smallphone）。
+> 前置：JDK 17、Android SDK 35 + Build-Tools 35.0.0、NDK 27.x、Gradle 8.10（同 散仙）。
 
 ---
 
 ## 1. 合并状态（已并入仓库，无需手动派生）
 
-> 2026-10-18 起，smallphone 底座已**完整并入 `nodes/sanxian`**（`shared/`、`composeApp/`、`nativelib/` 即底座本体；`com.biyou.sanxian` 增量源码并存，全工程约 34M，含 llama.cpp/ggml 原生源码）。下列 §2–§7 描述的所有改动**均已永久应用到仓库文件**，不再有运行时 patch。本文件保留为「变更记录 + 原生集成细节」，供后续维护与 embeddings JNI 落地参考。
+> 2026-10-18 起，散仙 底座已**完整并入 `nodes/sanxian`**（`shared/`、`composeApp/`、`nativelib/` 即底座本体；`com.biyou.sanxian` 增量源码并存，全工程约 34M，含 llama.cpp/ggml 原生源码）。下列 §2–§7 描述的所有改动**均已永久应用到仓库文件**，不再有运行时 patch。本文件保留为「变更记录 + 原生集成细节」，供后续维护与 embeddings JNI 落地参考。
 
-新增源码包名为 `com.biyou.sanxian`（与 smallphone 的 `com.smallphone.llm` 并存，互不冲突）。
+新增源码包名为 `com.biyou.sanxian`（与 散仙 的 `com.biyou.sanxian.llm` 并存，互不冲突）。
 
 ---
 
@@ -56,16 +56,16 @@ external fun setEmbeddingsMode(handle: Long, on: Boolean)
 external fun embed(handle: Long, text: String): FloatArray
 ```
 
-### 4.2 `jni_bridge.cpp` 追加（与现有 `Java_com_smallphone_llm_LlamaNative_generate` 同文件）
+### 4.2 `jni_bridge.cpp` 追加（与现有 `Java_com_biyou_sanxian_llm_LlamaNative_generate` 同文件）
 
 ```cpp
 extern "C" JNIEXPORT void JNICALL
-Java_com_smallphone_llm_LlamaNative_setEmbeddingsMode(JNIEnv*, jobject, jlong h, jboolean on) {
+Java_com_biyou_sanxian_llm_LlamaNative_setEmbeddingsMode(JNIEnv*, jobject, jlong h, jboolean on) {
     if (h) llama_set_embeddings(reinterpret_cast<llama_context*>(h), on);
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_smallphone_llm_LlamaNative_embed(JNIEnv* env, jobject, jlong h, jstring jtext) {
+Java_com_biyou_sanxian_llm_LlamaNative_embed(JNIEnv* env, jobject, jlong h, jstring jtext) {
     auto* ctx = reinterpret_cast<llama_context*>(h);
     auto* model = llama_get_model(ctx);
     const auto n_embd = llama_model_n_embd(model);
@@ -117,11 +117,11 @@ class AndroidLlmEngine(...) : LlmEngine, com.biyou.sanxian.node.EmbeddingEngine 
     android:exported="false"
     android:foregroundServiceType="dataSync" />
 ```
-（`INTERNET` 权限 smallphone 已有。）
+（`INTERNET` 权限 散仙 已有。）
 
 ---
 
-## 6. 启动钩子（`SmallPhoneApplication.onCreate`）
+## 6. 启动钩子（`SanXianApplication.onCreate`）
 
 ```kotlin
 override fun onCreate() {

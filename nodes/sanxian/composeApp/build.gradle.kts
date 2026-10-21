@@ -49,11 +49,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.smallphone"
+    namespace = "com.biyou.sanxian"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.smallphone"
+        applicationId = "com.biyou.sanxian"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

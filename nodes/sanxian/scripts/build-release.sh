@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 小手机（smallphone）Release 构建脚本
+# 小手机（散仙）Release 构建脚本
 #
 # 职责：
 #   1. 重建 nativelib（libllama_jni.so，含 llama.cpp/ggml）
@@ -75,7 +75,7 @@ if [[ "$DO_CLEAN" == "true" ]]; then
 fi
 
 info "开始构建 :composeApp:assembleRelease ..."
-BUILD_LOG="$(mktemp -t smallphone-build)"
+BUILD_LOG="$(mktemp -t 散仙-build)"
 set +e
 ./gradlew :composeApp:assembleRelease --no-daemon 2>&1 | tee "$BUILD_LOG"
 BUILD_RC="${PIPESTATUS[0]}"
@@ -93,8 +93,8 @@ mkdir -p "$OUTPUTS_DIR"
 
 # 时间戳由系统 date 生成（勿手工推算）
 STAMP="$(date +%Y%m%d-%H%M%S)"
-APK_DST="$OUTPUTS_DIR/smallphone-release-$STAMP.apk"
-APK_LATEST="$OUTPUTS_DIR/smallphone-release-latest.apk"
+APK_DST="$OUTPUTS_DIR/散仙-release-$STAMP.apk"
+APK_LATEST="$OUTPUTS_DIR/散仙-release-latest.apk"
 
 cp "$APK_SRC" "$APK_DST"
 cp "$APK_DST" "$APK_LATEST"
@@ -124,7 +124,7 @@ fi
 # ---------------- 4. 构建信息清单 ----------------
 INFO_FILE="$OUTPUTS_DIR/build-info.txt"
 {
-  echo "smallphone Release 构建信息"
+  echo "散仙 Release 构建信息"
   echo "=========================="
   echo "构建时间 : $(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "构建方式 : $0 $*"

@@ -4,7 +4,7 @@
 
 协议基准：[`docs/node-agent-contract.md`](../../docs/node-agent-contract.md) v1.0 ｜ 实施细化：[`../.trellis/tasks/10-14-sanxian-node-agent/implement.md`](../.trellis/tasks/10-14-sanxian-node-agent/implement.md) ｜ 参照样板：准圣（[`../nodes/quasheng`](../nodes/quasheng)）
 
-> **本目录现已自包含**：smallphone 底座（KMP 骨架、llama.cpp JNI、`LlmEngine`、`ModelDownload`、Compose 聊天 UI）已于 2026-10-18 **完整并入本目录**（`shared/`、`composeApp/`、`nativelib/` 即底座本体，`com.biyou.sanxian` 增量源码并存），不再依赖外部 smallphone 仓库，也无运行时 patch 步骤。本目录下的 `com.biyou.sanxian` 包为散仙节点智能体新增源码；构建集成细节与已落地的补丁见 [`NATIVE_INTEGRATION.md`](./NATIVE_INTEGRATION.md)。
+> **本目录现已自包含**：散仙 底座（KMP 骨架、llama.cpp JNI、`LlmEngine`、`ModelDownload`、Compose 聊天 UI）已于 2026-10-18 **完整并入本目录**（`shared/`、`composeApp/`、`nativelib/` 即底座本体，`com.biyou.sanxian` 增量源码并存），不再依赖外部 散仙 仓库，也无运行时 patch 步骤。本目录下的 `com.biyou.sanxian` 包为散仙节点智能体新增源码；构建集成细节与已落地的补丁见 [`NATIVE_INTEGRATION.md`](./NATIVE_INTEGRATION.md)。
 
 ## 本目录结构
 
@@ -46,7 +46,7 @@ nodes/sanxian/
 
 ## 构建与验证（需真机 / CI）
 
-本工程已自包含，无需先派生 smallphone。前置：JDK 17、Android SDK 35 + Build-Tools 35.0.0、NDK 27.x、CMake 3.22.1、adb、ANDROID_HOME。本环境无工具链，无法编 APK，请在本机或 CI 执行：
+本工程已自包含，无需先派生 散仙。前置：JDK 17、Android SDK 35 + Build-Tools 35.0.0、NDK 27.x、CMake 3.22.1、adb、ANDROID_HOME。本环境无工具链，无法编 APK，请在本机或 CI 执行：
 
 ```bash
 export JAVA_HOME=$(brew --prefix openjdk@17)

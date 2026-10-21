@@ -15,11 +15,11 @@ import com.biyou.sanxian.contract.ModelList
 import com.biyou.sanxian.contract.ModelRef
 import com.biyou.sanxian.contract.NodeMeta
 import com.biyou.sanxian.contract.Usage
-import com.smallphone.llm.ChatMessage
-import com.smallphone.llm.ChatSession
-import com.smallphone.llm.LlmEngine
-import com.smallphone.llm.LlmError
-import com.smallphone.llm.Role
+import com.biyou.sanxian.llm.ChatMessage
+import com.biyou.sanxian.llm.ChatSession
+import com.biyou.sanxian.llm.LlmEngine
+import com.biyou.sanxian.llm.LlmError
+import com.biyou.sanxian.llm.Role
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode

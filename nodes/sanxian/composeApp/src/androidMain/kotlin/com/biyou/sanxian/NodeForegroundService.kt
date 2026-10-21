@@ -12,8 +12,8 @@ import com.biyou.sanxian.node.EmbeddingEngine
 import com.biyou.sanxian.node.NodeConfig
 import com.biyou.sanxian.node.NodeServer
 import com.biyou.sanxian.node.loadNodeConfig
-import com.smallphone.llm.LlmConfig
-import com.smallphone.llm.LlmEngineProvider
+import com.biyou.sanxian.llm.LlmConfig
+import com.biyou.sanxian.llm.LlmEngineProvider
 
 /**
  * 散仙节点的前台服务：进程保活 + 启动 Ktor 服务 + 模型预热。
@@ -21,7 +21,7 @@ import com.smallphone.llm.LlmEngineProvider
  * 对应准圣的 lifespan（启动探活 + 预热白名单）。差异：
  *  - 准圣探活 = Ollama /v1/models；散仙引擎单例在 [LlmEngineProvider] 构造即就绪。
  *  - 准圣预热 = Ollama keep_alive=-1；散仙 = 对白名单首项调 [LlmEngine.loadModel]
- *    （注意：当前 [com.smallphone.llm.LlmEngine] 为单句柄引擎，**同一时刻仅一个模型常驻**，
+ *    （注意：当前 [com.biyou.sanxian.llm.LlmEngine] 为单句柄引擎，**同一时刻仅一个模型常驻**，
  *    多模型轮换属后续工作；V1 只预热首项）。
  */
 class NodeForegroundService : Service() {

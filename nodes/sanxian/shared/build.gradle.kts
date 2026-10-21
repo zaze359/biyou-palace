@@ -31,7 +31,7 @@ kotlin {
 }
 
 android {
-    namespace = "com.smallphone.shared"
+    namespace = "com.biyou.sanxian.shared"
     compileSdk = 35
 
     defaultConfig {

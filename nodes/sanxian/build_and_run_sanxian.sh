@@ -11,8 +11,8 @@ export LANG=C
 #  散仙节点 · 一键编译 / 安装 / 启动脚本
 #  (BiYouPalace · sanxian Android node agent)
 #
-#  本工程已【自包含】：smallphone 底座 + 散仙增量源码 + Ktor/前台服务补丁，
-#  已全部并入 nodes/sanxian 本身（不再依赖外部 smallphone 仓库，也无运行时 patch 步骤）。
+#  本工程已【自包含】：散仙 底座 + 散仙增量源码 + Ktor/前台服务补丁，
+#  已全部并入 nodes/sanxian 本身（不再依赖外部 散仙 仓库，也无运行时 patch 步骤）。
 #  本脚本仅负责：补 local.properties → 编译 → 安装 → 拉起节点 HTTP 服务 → 探活。
 #
 #  前置（本机/Mac/CI 必须）：
@@ -156,7 +156,7 @@ if [ "$DO_INSTALL" -eq 1 ]; then
   "$ADB" install -r -t "$APK"
 
   echo "==> 拉起 App（触发 Application.onCreate → 节点前台服务自动启动）"
-  "$ADB" shell am start -n com.smallphone/.MainActivity
+  "$ADB" shell am start -n com.biyou.sanxian/.MainActivity
 
   echo "==> 端口转发 + 冒烟探活（/v1/health，5s 后重试）"
   "$ADB" forward tcp:4011 tcp:4011
@@ -174,5 +174,5 @@ echo "==> 完成。"
 echo "   节点工程 : $BUILD_DIR"
 echo "   节点地址 : http://127.0.0.1:4011  （已 adb forward；手机端 0.0.0.0:4011）"
 echo "   契约端点 : /v1/health  /v1/models  /v1/chat/completions  /v1/embeddings(未实现→501)"
-echo "   停止节点 : adb shell am force-stop com.smallphone"
+echo "   停止节点 : adb shell am force-stop com.biyou.sanxian"
 echo "   清理构建 : ./build_and_run_sanxian.sh --clean"
