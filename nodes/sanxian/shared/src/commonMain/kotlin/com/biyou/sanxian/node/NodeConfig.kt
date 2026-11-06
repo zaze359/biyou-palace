@@ -19,6 +19,11 @@ data class NodeConfig(
     val authEnabled: Boolean = false,
     /** 启动即预热常驻的模型（对应准圣 preload_models warmup），消除首请求阻塞 */
     val preloadModels: List<String> = emptyList(),
+    /**
+     * 独立 embedding 模型路径（Plan A）。非空时节点会额外加载该模型到独立 embedding 句柄，
+     * 并向集群声明该文件的 `embedding` 能力（见 [capabilitiesMap]）。为空则不承接 embedding。
+     */
+    val embeddingModel: String? = null,
     /** 能力声明：未登记的模型默认只有 chat */
     val capabilitiesMap: Map<String, ModelCapability> = emptyMap(),
     /** 并发上限（手机资源受限，建议 1~2），满载立即 429 */
@@ -86,6 +91,7 @@ fun NodeConfig.Companion.fromMap(raw: Map<String, Any?>): NodeConfig {
         sharedToken = token,
         authEnabled = auth,
         preloadModels = (raw["preload_models"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        embeddingModel = str("embedding_model"),
         capabilitiesMap = capabilities,
         maxConcurrency = int("max_concurrency") ?: 2,
         memWarnPct = dbl("mem_warn_pct") ?: 85.0,

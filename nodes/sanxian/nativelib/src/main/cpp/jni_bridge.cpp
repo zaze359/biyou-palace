@@ -13,6 +13,7 @@
 
 #define LOG_TAG "llama_jni"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // llama/ggml 的内部日志（含 LLAMA_LOG_ERROR，例如「failed to find a memory slot」、
@@ -425,7 +426,8 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_com_biyou_sanxian_llm_LlamaNative_loadModel(
         JNIEnv* env, jclass /*clazz*/,
         jstring jPath, jint nCtx, jint nThreads, jint nBatch, jint nGpuLayers,
-        jboolean useMmap, jint kvCacheType, jfloat temperature, jfloat topP) {
+        jboolean useMmap, jint kvCacheType, jfloat temperature, jfloat topP,
+        jboolean enableEmbeddings) {
 
     const char* pathChars = env->GetStringUTFChars(jPath, nullptr);
     if (!pathChars) return 0;
@@ -466,11 +468,37 @@ Java_com_biyou_sanxian_llm_LlamaNative_loadModel(
     cparams.n_batch = nBatch;
     cparams.n_ubatch = nBatch;
 
+    // embeddings 模式：只开启向量输出，不强行指定 pooling 策略。pooling_type 默认
+    // UNSPECIFIED，llama.cpp 优先采用模型自带元数据（如 Qwen3-Embedding 的 last-token
+    // pooling）；元数据缺失或为 NONE 时 llama_get_embeddings_seq 会返回 NULL，此时才回退
+    // 到 LAST（decoder-only 嵌入模型的 pooled 向量取末尾 token）。chat 句柄不传此开关，
+    // 仅独立的 embedding 句柄开启，二者 KV 互相隔离。
+    if (enableEmbeddings) {
+        cparams.embeddings = true;
+    }
+
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
         LOGE("创建 context 失败（内存不足？）: n_ctx=%d", nCtx);
         llama_model_free(model);
         return 0;
+    }
+
+    if (enableEmbeddings) {
+        const auto pooling = llama_pooling_type(ctx);
+        if (pooling == LLAMA_POOLING_TYPE_NONE) {
+            LOGW("embedding 模型未声明 pooling_type（元数据缺失/NONE），回退 LLAMA_POOLING_TYPE_LAST");
+            llama_free(ctx);
+            cparams.pooling_type = LLAMA_POOLING_TYPE_LAST;
+            ctx = llama_init_from_model(model, cparams);
+            if (!ctx) {
+                LOGE("创建 context 失败（回退 LAST pooling 后）: n_ctx=%d", nCtx);
+                llama_model_free(model);
+                return 0;
+            }
+        } else {
+            LOGI("embedding pooling 使用模型默认值: %d", static_cast<int>(pooling));
+        }
     }
 
     auto* s = new LlmSession();
@@ -844,4 +872,75 @@ Java_com_biyou_sanxian_llm_LlamaNative_generate(
     }
     LOGI("生成结束: %d tokens, prompt=%zu tokens, n_past=%d", nGenerated, tokens.size(), s->n_past);
     return nGenerated;
+}
+
+/**
+ * 文本向量化（embeddings JNI 桥，Plan A：独立 embedding 句柄）。
+ *
+ * 与 generate() 走不同的 llama.cpp 入口：generate 用 llama_decode + 采样，embed 用
+ * llama_encode + 取 pooled 向量。两者都写同一上下文的 KV，因此必须跑在**独立的**
+ * embedding 上下文上（loadModel 时 enableEmbeddings=true 创建），与 chat 句柄隔离，
+ * 否则会互相污染 KV。
+ *
+ * 流程：分词 → llama_batch_get_one(单序列, pos=0) → llama_encode →
+ *       llama_get_embeddings_seq(ctx, 0) 取 seq 0 的 pooled 向量 → jfloatArray。
+ *
+ * @return n_embd 维向量；失败（未加载 / 分词空 / encode 失败 / pooling 为 NONE）返回长度 0 数组。
+ */
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_biyou_sanxian_llm_LlamaNative_embed(
+        JNIEnv* env, jclass /*clazz*/, jlong handle, jstring jtext) {
+
+    LlmSession* s = asSession(handle);
+    if (!s || !s->model || !s->ctx) {
+        LOGE("embed 失败：句柄未加载");
+        return env->NewFloatArray(0);
+    }
+
+    const char* txt = env->GetStringUTFChars(jtext, nullptr);
+    if (!txt) return env->NewFloatArray(0);
+    std::string text(txt);
+    env->ReleaseStringUTFChars(jtext, txt);
+
+    std::vector<llama_token> toks;
+    if (!tokenizePrompt(s->vocab, text, &toks) || toks.empty()) {
+        LOGE("embed 分词失败（空文本或非法输入），返回空向量");
+        return env->NewFloatArray(0);
+    }
+
+    // llama_encode 的硬约束：n_tokens 不得超过 n_ubatch，否则 llama.cpp 内
+    // GGML_ASSERT(n_ubatch >= n_tokens) 会直接 abort 进程（不是返回错误码）。
+    // 因此按「实际分词结果」截断，而不是限制字符数（字符与 token 并非一一对应）。
+    const size_t maxTokens = static_cast<size_t>(llama_n_ubatch(s->ctx));
+    if (maxTokens == 0) {
+        LOGE("embed 失败：llama_n_ubatch 返回 0");
+        return env->NewFloatArray(0);
+    }
+    if (toks.size() > maxTokens) {
+        LOGW("embed 输入过长：%zu tokens 超过 n_ubatch=%zu，已截断保留前 %zu tokens",
+             toks.size(), maxTokens, maxTokens);
+        toks.resize(maxTokens);
+    }
+
+    // llama_batch_get_one 内部 pos=0、seq_id=0，返回的 batch 须用 llama_batch_free 释放。
+    llama_batch batch = llama_batch_get_one(toks.data(), static_cast<int32_t>(toks.size()));
+    if (llama_encode(s->ctx, batch) != 0) {
+        LOGE("embed llama_encode 失败");
+        llama_batch_free(batch);
+        return env->NewFloatArray(0);
+    }
+    llama_batch_free(batch);
+
+    // pooling_type=NONE 时返回 NULL（已在 loadModel 强制 MEAN 规避），此处仍兜底判空。
+    const float* emb = llama_get_embeddings_seq(s->ctx, 0);
+    if (!emb) {
+        LOGE("embed 取向量失败（pooling_type 可能为 NONE）");
+        return env->NewFloatArray(0);
+    }
+
+    const int32_t n = llama_model_n_embd(s->model);
+    jfloatArray out = env->NewFloatArray(n);
+    if (!out) return env->NewFloatArray(0);
+    env->SetFloatArrayRegion(out, 0, n, emb);
+    return out;
 }

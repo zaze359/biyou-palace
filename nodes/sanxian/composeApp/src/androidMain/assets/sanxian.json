@@ -6,9 +6,13 @@
   "preload_models": [
     "/sdcard/biyou/models/Qwen3-0.6B-Q8_0.gguf"
   ],
+  "embedding_model": "/sdcard/biyou/models/Qwen3-Embedding-0.6B-Q8_0.gguf",
   "capabilities_map": {
     "Qwen3-0.6B-Q8_0.gguf": {
       "capabilities": ["chat"]
+    },
+    "Qwen3-Embedding-0.6B-Q8_0.gguf": {
+      "capabilities": ["embedding"]
     }
   },
   "max_concurrency": 2,

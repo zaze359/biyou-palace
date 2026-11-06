@@ -41,6 +41,7 @@ object LlamaNative {
         kvCacheType: Int,
         temperature: Float,
         topP: Float,
+        enableEmbeddings: Boolean,
     ): Long
 
     /**
@@ -121,4 +122,16 @@ object LlamaNative {
      * @return 模板串；模型未内嵌时返回空串
      */
     external fun modelChatTemplate(handle: Long): String
+
+    /**
+     * 文本向量化（embeddings JNI 桥，Plan A：独立 embedding 句柄）。
+     *
+     * 调用方应传入**独立加载且开启 embeddings 的句柄**（loadModel 时 enableEmbeddings=true），
+     * 与 chat 句柄隔离，避免 llama_encode / llama_decode 互相污染 KV。
+     *
+     * @param handle 开启 embeddings 的上下文句柄
+     * @param text   待向量化文本（空串会被原生层以空格兜底，保持维度一致）
+     * @return n_embd 维向量；失败返回长度 0 的 FloatArray
+     */
+    external fun embed(handle: Long, text: String): FloatArray
 }

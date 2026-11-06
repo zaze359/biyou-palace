@@ -45,62 +45,52 @@ iosX64(); iosArm64(); iosSimulatorArm64()
 
 ## 4. embeddings JNI 桥（散仙主承接方，**真实向量化**）
 
-vendored llama.cpp 已原生支持：`llama_set_embeddings` / `llama_get_embeddings_seq` / `model_params.pooling_type`（见 `nativelib/.../include/llama.h`）。`LlamaNative` 当前**无** embed 方法，需补：
+vendored llama.cpp 已原生支持：`cparams.embeddings` / `cparams.pooling_type` / `llama_encode` / `llama_get_embeddings_seq`（见 `nativelib/.../include/llama.h`）。**本段描述的内容已落地到仓库（Plan A：独立 embedding 句柄）**，保留为变更记录。
 
-### 4.1 `LlamaNative.kt`（fork 的 `shared/src/androidMain/.../LlamaNative.kt`）追加
+### 4.1 拓扑：Plan A（独立 embedding 句柄）
 
-```kotlin
-/** 开启/关闭上下文 embedding 输出（加载 embedding 模型后调用一次） */
-external fun setEmbeddingsMode(handle: Long, on: Boolean)
-/** 单条文本向量化，返回 n_embd 维向量 */
-external fun embed(handle: Long, text: String): FloatArray
-```
+`AndroidLlmEngine` 同时持有两个 llama 上下文：
+- `handle`：chat 模型（`loadModel(enableEmbeddings=false)`），走 `llama_decode` + 采样；
+- `embeddingHandle`：独立 embedding 模型（`loadModel(enableEmbeddings=true)`），走 `llama_encode` + `llama_get_embeddings_seq`。
 
-### 4.2 `jni_bridge.cpp` 追加（与现有 `Java_com_biyou_sanxian_llm_LlamaNative_generate` 同文件）
+两者 KV 互不污染，并发安全。`NodeForegroundService` 仍以 `engine as? EmbeddingEngine` 把同一引擎实例注入 `NodeServer`，无需改动注入点。embedding 模型路径由 `LlmConfig.embeddingModelPath` / `NodeConfig.embeddingModel` / `sanxian.json` 的 `embedding_model` 字段驱动；为空则节点不承接 embedding（`/v1/embeddings` 落 501/503）。
 
-```cpp
-extern "C" JNIEXPORT void JNICALL
-Java_com_biyou_sanxian_llm_LlamaNative_setEmbeddingsMode(JNIEnv*, jobject, jlong h, jboolean on) {
-    if (h) llama_set_embeddings(reinterpret_cast<llama_context*>(h), on);
-}
+### 4.2 `LlamaNative.kt` / `jni_bridge.cpp`（已实现）
 
-extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_biyou_sanxian_llm_LlamaNative_embed(JNIEnv* env, jobject, jlong h, jstring jtext) {
-    auto* ctx = reinterpret_cast<llama_context*>(h);
-    auto* model = llama_get_model(ctx);
-    const auto n_embd = llama_model_n_embd(model);
+`loadModel` 新增末参 `enableEmbeddings: Boolean`：为真时在原生侧只设置
+`cparams.embeddings = true`，**不强制指定 pooling**。`pooling_type` 保持 `UNSPECIFIED`，
+由 llama.cpp 采用模型自带元数据（如 Qwen3-Embedding 的 last-token pooling）；仅当元数据
+缺失/为 `NONE`（`llama_get_embeddings_seq` 会返回 NULL）时，重建 context 回退到
+`LLAMA_POOLING_TYPE_LAST` 并在 logcat 打印 WARN。embedding 句柄的 `nBatch` 取
+`EMBEDDING_N_BATCH = 1024`（chat 句柄仍为 512），兼顾手机内存与长文本截断率。
 
-    const char* txt = env->GetStringUTFChars(jtext, nullptr);
-    // 1) tokenize
-    const int n_toks = llama_tokenize(model, txt, strlen(txt), nullptr, 0, true, true);
-    std::vector<llama_token> toks(n_toks);
-    llama_tokenize(model, txt, strlen(txt), toks.data(), n_toks, true, true);
-    env->ReleaseStringUTFChars(jtext, txt);
+新增原生 `embed(handle, jtext): jfloatArray`：
+`tokenizePrompt` → **按 `llama_n_ubatch(ctx)` 截断过长分词结果并打印 WARN** →
+`llama_batch_get_one(toks, n)` → `llama_encode(ctx, batch)` →
+`llama_get_embeddings_seq(ctx, 0)` → `jfloatArray(n_embd)`；任一环节失败返回长度 0 数组。
 
-    // 2) build batch + encode
-    llama_batch batch = llama_batch_get_one(toks.data(), n_toks, 0, 0);
-    if (llama_encode(ctx, batch) != 0) return env->NewFloatArray(0);
+> 截断必须发生在原生侧、且基于**实际分词结果**：`llama_encode` 内部有
+> `GGML_ASSERT(n_ubatch >= n_tokens)`（`GGML_ASSERT` 永远生效，触发即 abort 整个进程），
+> 而字符数与 token 数并非一一对应，在 Kotlin 层限制字符长度不足以规避该断言。
 
-    // 3) 取 pooled / seq=0 的 embedding
-    const float* emb = llama_get_embeddings_seq(ctx, 0);
-    jfloatArray out = env->NewFloatArray(n_embd);
-    env->SetFloatArrayRegion(out, 0, n_embd, emb);
-    return out;
-}
-```
-> ⚠️ 具体 API 名（`llama_tokenize`、`llama_batch_get_one`、`llama_get_embeddings_seq` 签名）随 vendored llama.cpp 版本而异，编译时按实际头文件校正。embedding 模型加载时须在 `loadModel` 后调一次 `setEmbeddingsMode(handle, true)`（可在 `AndroidLlmEngine.loadModel` 末尾，当 `config.embedMode` 时调用）。
+> ⚠️ 历史草稿曾设想单独的 `setEmbeddingsMode` + 单句柄 `as? EmbeddingEngine`；实际落地改为
+> 「`loadModel` 带 `enableEmbeddings` 参数 + 双句柄」，以避免 `llama_encode`/`llama_decode`
+> 共享 KV 互相污染。
 
-### 4.3 `AndroidLlmEngine.kt`（fork）实现 EmbeddingEngine
+### 4.3 `AndroidLlmEngine.kt` 实现 EmbeddingEngine
 
 ```kotlin
 class AndroidLlmEngine(...) : LlmEngine, com.biyou.sanxian.node.EmbeddingEngine {
     override fun embed(texts: List<String>): List<List<Float>> {
-        if (handle == 0L) throw LlmError.NotLoaded()
-        return texts.map { LlamaNative.embed(handle, it).toList() }
+        if (embeddingHandle == 0L) throw LlmError.NotLoaded()
+        return texts.map { raw ->
+            val text = if (raw.isBlank()) " " else raw  // 空串以空格兜底，保维度一致
+            LlamaNative.embed(embeddingHandle, text).toList()
+        }
     }
 }
 ```
-（fork 的 `LlmConfig` 可加 `embedMode: Boolean = false` 以在加载时开启 embedding 模式；或在 `NodeForegroundService` 预热后直接调 `LlamaNative.setEmbeddingsMode`。）
+（多并发下 embedding 与 chat 各自独立上下文，互不阻塞 KV；代价是设备上多一份 embedding 模型上下文内存，约与 chat 模型等量。）
 
 ---
 

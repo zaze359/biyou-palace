@@ -52,4 +52,11 @@ data class LlmConfig(
     val useMmap: Boolean = true,
     /** KV Cache 张量精度（默认 F16，精度/占用平衡）。Q8_0/Q4_0 可降低内存受限设备的 KV 占用 */
     val kvCacheType: KvCacheType = KvCacheType.F16,
+    /**
+     * 独立 embedding 模型路径（Plan A：与 chat 模型分属两个上下文句柄）。
+     * 非空时 AndroidLlmEngine 会在 loadModel 内额外加载该模型到 embedding 句柄，
+     * 并开启 embeddings（cparams.embeddings=true + pooling_type=MEAN）。
+     * 为空则不加载 embedding 模型，节点不承接 embedding 请求（/v1/embeddings 走 501/503）。
+     */
+    val embeddingModelPath: String? = null,
 )

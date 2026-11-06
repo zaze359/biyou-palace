@@ -35,10 +35,18 @@ class NodeForegroundService : Service() {
         val config = loadConfig()
         val engine = LlmEngineProvider.engine
 
-        // 预热：白名单首项（单句柄引擎，仅一项）
+        // 预热：chat 模型（preload 首项）+ 独立 embedding 模型（若配置）。
+        // embedding 模型经 LlmConfig.embeddingModelPath 传入，由 AndroidLlmEngine 加载到
+        // 独立句柄；embeddingModel 为空则节点不承接 embedding（/v1/embeddings 走 501/503）。
         config.preloadModels.firstOrNull()?.let { path ->
-            runCatching { engine.loadModel(LlmConfig(modelPath = path)) }
-                .onFailure { it.printStackTrace() }
+            runCatching {
+                engine.loadModel(
+                    LlmConfig(
+                        modelPath = path,
+                        embeddingModelPath = config.embeddingModel,
+                    ),
+                )
+            }.onFailure { it.printStackTrace() }
         }
 
         val embedding = engine as? EmbeddingEngine

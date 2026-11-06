@@ -1,5 +1,6 @@
 package com.biyou.sanxian.llm
 
+import com.biyou.sanxian.node.EmbeddingEngine
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,9 +28,12 @@ import kotlinx.coroutines.launch
  */
 actual fun createLlmEngine(config: LlmConfig): LlmEngine = AndroidLlmEngine(config)
 
-class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine {
+class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngine {
 
     private var handle: Long = 0L
+    // Plan A：与 chat 句柄隔离的独立 embedding 上下文。embed() 只走它，避免
+    // llama_encode（embedding）与 llama_decode（chat）互相污染 KV。
+    private var embeddingHandle: Long = 0L
 
     override fun loadModel(config: LlmConfig) {
         if (config.modelPath.isBlank()) {
@@ -47,6 +51,7 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine {
             kvCacheType = config.kvCacheType.nativeValue,
             temperature = config.temperature,
             topP = config.topP,
+            enableEmbeddings = false,
         )
         // D4：以完整 LlmConfig 应用采样参数（top-k / 重复惩罚 / 可控 seed），重建原生采样链。
         // loadModel 内部已用 D4 默认值兜底，此处用真实 config 覆盖。
@@ -64,6 +69,30 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine {
         }
         handle = h
         this.config = config   // 回写本次加载配置，使 getModelInfo()/generate() 与之一致
+
+        // Plan A：独立 embedding 句柄。embed 与 chat 分属两个上下文，KV 互不污染；
+        // 加载失败仅影响 embedding 能力，不拖累 chat（节点仍可正常聊天）。
+        if (!config.embeddingModelPath.isNullOrBlank()) {
+            val eh = LlamaNative.loadModel(
+                path = config.embeddingModelPath,
+                nCtx = config.contextSize,
+                nThreads = config.threads,
+                nBatch = EMBEDDING_N_BATCH,
+                nGpuLayers = config.gpuLayers,
+                useMmap = config.useMmap,
+                kvCacheType = config.kvCacheType.nativeValue,
+                temperature = config.temperature,
+                topP = config.topP,
+                enableEmbeddings = true,
+            )
+            if (eh == 0L) {
+                Log.e(TAG, "embedding 模型加载失败（路径错误/格式不支持/内存不足）：${config.embeddingModelPath}")
+            } else {
+                embeddingHandle = eh
+                Log.i(TAG, "embedding 模型已加载 handle=$embeddingHandle")
+            }
+        }
+
         val tmpl = LlamaNative.modelChatTemplate(handle)
         Log.i(
             TAG,
@@ -135,6 +164,27 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine {
             LlamaNative.freeModel(handle)
             handle = 0L
         }
+        if (embeddingHandle != 0L) {
+            LlamaNative.freeModel(embeddingHandle)
+            embeddingHandle = 0L
+        }
+    }
+
+    /**
+     * 批量向量化（实现 [EmbeddingEngine]，供 [com.biyou.sanxian.node.NodeServer] 的
+     * `/v1/embeddings` 路由调用）。
+     *
+     * 走独立 embedding 句柄（与 chat 隔离）。空串以空格兜底，保证输出维度一致——
+     * 原生层对空输入会返回长度 0 向量，会让下游客户端维度错位。
+     *
+     * @throws LlmError.NotLoaded 当 embedding 模型未加载（配置缺失或加载失败）
+     */
+    override fun embed(texts: List<String>): List<List<Float>> {
+        if (embeddingHandle == 0L) throw LlmError.NotLoaded()
+        return texts.map { raw ->
+            val text = if (raw.isBlank()) " " else raw
+            LlamaNative.embed(embeddingHandle, text).toList()
+        }
     }
 
     /**
@@ -161,5 +211,11 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine {
 
     private companion object {
         const val TAG = "AndroidLlmEngine"
+        /**
+         * embedding 句柄的 n_ubatch。原生 embed 会按实际分词结果截断到该上限，
+         * 避免 llama_encode 触发 GGML_ASSERT(n_ubatch >= n_tokens) 而 abort 进程；
+         * 取 1024 是在手机内存与「长文本少截断」之间的折中（chat 句柄仍为 512）。
+         */
+        const val EMBEDDING_N_BATCH = 1024
     }
 }
