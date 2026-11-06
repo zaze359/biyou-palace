@@ -1,0 +1,66 @@
+# ============================================================
+# biyou-palace 根级 .gitignore
+#
+# 子目录已自带忽略规则（不在此重复）：
+#   nodes/sanxian/.gitignore   Gradle / 构建产物 / IDE / 签名
+#   .trellis/.gitignore        Trellis 本地运行时
+#
+# 按约定：仅忽略 .workbuddy/；其余 IDE/agent 配置目录
+# （.claude / .codebuddy / .cursor / .trae）保留入库。
+# ============================================================
+
+# ---- Python / 虚拟环境 ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- 本地环境配置（模板 .env.example 必须入库）----
+.env
+.env.*
+!.env.example
+*.local
+
+# ---- 密钥 / 签名（禁止入库）----
+*.jks
+*.keystore
+
+# ---- Gradle / Kotlin / Android（各节点通用）----
+build/
+.gradle/
+.kotlin/
+.cxx/
+.externalNativeBuild/
+local.properties
+*.apk
+*.aab
+*.hprof
+captures/
+
+# ---- IDE / 编辑器（个人本地配置）----
+# 说明：.claude / .codebuddy / .cursor / .trae 是团队共享的 agent 规则，保留入库
+.idea/
+*.iml
+.vscode/
+
+# ---- 操作系统 ----
+.DS_Store
+._*
+Thumbs.db
+
+# ---- 日志 / 临时文件 ----
+*.log
+logs/
+*.tmp
+*.swp
+
+# ---- WorkBuddy 本地数据（个人/会话级，不入库）----
+.workbuddy/

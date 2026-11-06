@@ -1,0 +1,6 @@
+{"file": "docs/node-agent-contract.md", "reason": "验收基准：逐条核对四个端点字段、状态码、SSE 流式、错误格式与响应头"}
+{"file": ".trellis/tasks/10-13-biyou-v1-blueprint/prd.md", "reason": "父任务第一步的验收标准与已知限制，用于整体一致性检查"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码评审标准与测试要求"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误/异常返回的合规检查"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性检查参考"}
+{"file": ".trellis/tasks/10-14-quasheng-node-agent/research/ollama-openai-compat.md", "reason": "核验依据：SSE 是否被重解析、是否误转发 Authorization、是否实现并发闸门与 ≥0.5.x 版本探活"}

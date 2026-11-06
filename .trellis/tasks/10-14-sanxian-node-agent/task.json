@@ -1,0 +1,29 @@
+{
+  "id": "sanxian-node-agent",
+  "name": "sanxian-node-agent",
+  "title": "散仙安卓节点智能体（smallphone 改造 KMP + llama.cpp）",
+  "description": "自底向上第一步的子任务：从旧项目 smallphone 派生散仙节点智能体，剥离 iOS 目标、保留本地对话并用 Ktor 暴露节点智能体统一契约 v1.0 的四个端点",
+  "status": "implementing",
+  "dev_type": "feature",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-10-14",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-13-biyou-v1-blueprint",
+  "relatedFiles": [
+    "docs/node-agent-contract.md",
+    "nodes/sanxian/"
+  ],
+  "notes": "依赖外部旧项目 /Users/zaze/Documents/smallphone（KMP+Compose+llama.cpp JNI），勘察结论见 research/smallphone-assessment.md；建议准圣子任务跑通后再开工以对齐契约",
+  "meta": {}
+}

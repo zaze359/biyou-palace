@@ -1,0 +1,5 @@
+{"file": "docs/node-agent-contract.md", "reason": "必须严格遵守的节点智能体 HTTP 契约 v1.0：四个端点、字段、错误格式与通用切面，散仙与准圣共用同一份"}
+{"file": ".trellis/tasks/10-14-sanxian-node-agent/research/smallphone-assessment.md", "reason": "上游项目 smallphone 的勘察结论：可复用资产、必须改造项、iOS 剥离与 KMP 前提纠偏"}
+{"file": ".trellis/tasks/10-13-biyou-v1-blueprint/prd.md", "reason": "父任务主规划：第一步目标、验收、运行时分叉说明与 /v1/health 字段约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误分类与返回约定，用于 OpenAI 风格错误对象与 501 能力响应（语言无关原则）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用与抽象决策参考：判断哪些 smallphone 代码应复用、哪些应重写"}

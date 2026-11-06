@@ -1,0 +1,33 @@
+{
+  "id": "biyou-v1-blueprint",
+  "name": "biyou-v1-blueprint",
+  "title": "BiYouPalace 碧游宫 V1.0 开发蓝图",
+  "description": "基于 NewAPI + Ollama 的内网异构 AI 推理集群（网关/编排/节点/监控/检定）V1.0 全流程规划",
+  "status": "planning",
+  "dev_type": "feature",
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-10-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-14-quasheng-node-agent",
+    "10-14-sanxian-node-agent"
+  ],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/spec/backend/",
+    ".trellis/spec/guides/",
+    "docs/node-agent-contract.md"
+  ],
+  "notes": "由 trellis-brainstorm 从用户提供的 V1.0 蓝图初始化；本任务为父任务，承载整体需求与阶段拆分",
+  "meta": {}
+}

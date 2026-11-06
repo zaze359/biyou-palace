@@ -1,0 +1,7 @@
+{"file": "docs/node-agent-contract.md", "reason": "必须严格遵守的节点智能体 HTTP 契约 v1.0：端点、字段、错误格式与通用切面，实现与验收的唯一基准"}
+{"file": ".trellis/tasks/10-13-biyou-v1-blueprint/prd.md", "reason": "父任务主规划：第一步目标、验收标准与运行时说明（准圣=Ollama / 散仙=llama.cpp）"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Python 服务代码的目录组织约定（nodes/quasheng 包结构）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误分类、捕获与返回约定，用于统一 OpenAI 风格错误对象与 501 能力响应"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "日志分级与格式，便于后续灵脉采集与排障"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用与抽象决策参考：协议共享取代代码共享的设计判断"}
+{"file": ".trellis/tasks/10-14-quasheng-node-agent/research/ollama-openai-compat.md", "reason": "已查证：Ollama ≥0.5.x 自带 /v1 OpenAI 兼容端点，故本节点走「薄代理+契约表面」而非转码层；含 5 个必须写进实现的坑与版本强约束"}

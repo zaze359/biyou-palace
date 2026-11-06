@@ -1,0 +1,5 @@
+{"file": "docs/node-agent-contract.md", "reason": "验收基准：逐条核对四个端点字段、状态码、SSE 流式、错误格式与响应头"}
+{"file": ".trellis/tasks/10-14-sanxian-node-agent/prd.md", "reason": "本子任务的验收标准：含散仙专属电量/温度字段、本地模式与保活要求"}
+{"file": ".trellis/tasks/10-14-sanxian-node-agent/research/smallphone-assessment.md", "reason": "核验 iOS 目标是否已剥离干净、可复用资产是否被正确复用"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码评审标准与测试要求"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性检查参考"}
