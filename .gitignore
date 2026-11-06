@@ -5,8 +5,8 @@
 #   nodes/sanxian/.gitignore   Gradle / 构建产物 / IDE / 签名
 #   .trellis/.gitignore        Trellis 本地运行时
 #
-# 按约定：仅忽略 .workbuddy/；其余 IDE/agent 配置目录
-# （.claude / .codebuddy / .cursor / .trae）保留入库。
+# 按约定：仅忽略 .workbuddy/；其余 agent 配置目录
+# （.claude / .codebuddy / .trae）保留入库；.cursor 已移除。
 # ============================================================
 
 # ---- Python / 虚拟环境 ----
@@ -46,10 +46,17 @@ local.properties
 captures/
 
 # ---- IDE / 编辑器（个人本地配置）----
-# 说明：.claude / .codebuddy / .cursor / .trae 是团队共享的 agent 规则，保留入库
+# 说明：.claude / .codebuddy / .trae 是团队共享的 agent 规则，保留入库
 .idea/
 *.iml
 .vscode/
+
+# agent 目录内的本地运行态（规则目录本身入库，以下不入库）
+.claude/settings.local.json
+.claude/logs/
+.codebuddy/settings.local.json
+.codebuddy/logs/
+.trae/logs/
 
 # ---- 操作系统 ----
 .DS_Store
