@@ -15,6 +15,8 @@ import yaml
 CONTRACT_VERSION = "1.0"
 NODE_ROLE = "quasheng"
 NODE_RUNTIME = "ollama"
+# 契约 3.2：/v1/models 每项的 owned_by 必须是节点身份
+MODEL_OWNER = "biyou-node"
 
 
 def _normalize_caps(raw: dict | None) -> dict[str, dict]:

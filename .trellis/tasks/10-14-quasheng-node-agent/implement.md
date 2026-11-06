@@ -43,8 +43,8 @@ FastAPI 只负责三件事——**鉴权 / 响应头 / 并发闸门**；OpenAI �
    - 若该 Ollama 版本拒绝空 prompt，退化为一次 `POST /api/chat`（`num_predict: 1`、`keep_alive: -1`）的最小对话——**以实测为准**
    - 逐模型记录耗时（ms）与所走路径；预热失败仅告警，不阻断启动。
 8. **`/v1/health`**：`tags` + `ps` + `psutil` 组装；`models[].loaded` 取自 `ps`；`status` 按下方规则判定。
-9. **`/v1/models`**：直接代理 Ollama `GET /v1/models`，JSON **原样透传**，**不再**由 `/api/tags` 自行拼装 OpenAI 形状。
-   - ⚠️ **待定**：`owned_by` 目前沿用上游值（Ollama 通常返回 `library`），与契约 3.2 示例要求的 `biyou-node` 不一致；两种候选——改实现补齐 `owned_by="biyou-node"`，或修改契约与文档——待用户拍板
+9. **`/v1/models`**：代理 Ollama `GET /v1/models`，**除 `owned_by` 外** JSON 原样透传，**不再**由 `/api/tags` 自行拼装 OpenAI 形状。
+   - ✅ **已对齐契约**：每项 `owned_by` 统一改写为契约 3.2 要求的 `biyou-node`（常量 `MODEL_OWNER`，仅此端点改写上游 JSON）
 10. **`/v1/chat/completions`**：httpx **流式透传**（保留 SSE 头与 `data: [DONE]`），**不解析 body**。
     - 上游 `4xx/5xx`：先读上游响应头，按原状态码返回 OpenAI 错误体；**不得**包装成 `200` + SSE（否则错误体会被调用方当成 chunk）
 11. **`/v1/embeddings`**：按 `capabilities_map` 判定；无 embedding 能力返回 `501`。

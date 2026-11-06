@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .config import CONTRACT_VERSION, NODE_ROLE, Settings, load_settings
+from .config import CONTRACT_VERSION, MODEL_OWNER, NODE_ROLE, Settings, load_settings
 from .concurrency import ConcurrencyGate
 from .errors import (
     ConcurrencyLimitExceeded,
@@ -86,6 +86,23 @@ def _passthrough(resp) -> JSONResponse:
                 "code": "upstream_bad_response",
             }
         }
+    return JSONResponse(status_code=resp.status_code, content=body)
+
+
+def _models_response(resp) -> JSONResponse:
+    """`/v1/models` 唯一需要改写上游 JSON 的端点。
+
+    契约 3.2 要求每项 `owned_by` 为节点身份（biyou-node），而 Ollama 返回
+    `library`。其余字段原样透传，保持薄代理。
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        return _passthrough(resp)
+    if isinstance(body, dict) and isinstance(body.get("data"), list):
+        for item in body["data"]:
+            if isinstance(item, dict):
+                item["owned_by"] = MODEL_OWNER
     return JSONResponse(status_code=resp.status_code, content=body)
 
 
@@ -262,7 +279,7 @@ def create_app() -> FastAPI:
     @app.get("/v1/models")
     async def models(request: Request):
         resp = await request.app.state.client.get("/v1/models")
-        return _passthrough(resp)
+        return _models_response(resp)
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, payload: dict[str, Any]):

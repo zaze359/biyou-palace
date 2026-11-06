@@ -425,11 +425,11 @@ def test_models_openai_list_shape():
         assert item["id"]
 
 
-def test_models_owned_by_is_upstream_value_not_contract_value():
-    """记录当前行为：/v1/models 是上游原样透传，owned_by 来自 Ollama。
+def test_models_owned_by_is_rewritten_to_contract_value():
+    """/v1/models 是唯一改写上游 JSON 的端点：owned_by 统一为契约值。
 
-    契约 3.2 示例写的是 owned_by="biyou-node"；当前实现沿用上游值。
-    该用例锁定现状，供 Q9 决定「改实现」还是「改文档」。
+    契约 3.2 要求 owned_by="biyou-node"，Ollama 上游返回 "library"；
+    其余字段（id/object/created）必须原样透传。
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -443,7 +443,10 @@ def test_models_owned_by_is_upstream_value_not_contract_value():
 
     client, _ = _build_client(handler)
     item = client.get("/v1/models").json()["data"][0]
-    assert item["owned_by"] == "library"
+    assert item["owned_by"] == "biyou-node"
+    assert item["id"] == "m1"
+    assert item["object"] == "model"
+    assert item["created"] == 1700000000
 
 
 class _SlowSSE(httpx.AsyncByteStream):

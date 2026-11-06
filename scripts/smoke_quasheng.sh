@@ -280,7 +280,7 @@ assert d["updated_at"], d
 
 code="$(http_get /v1/models "$TMP_DIR/models.json" -H "$AUTH_HEADER")" || code="000"
 expect_code "GET /v1/models → 200" "200" "$code"
-json_check "/v1/models 列表形状（object=list / data[] / id+object=model）" "$TMP_DIR/models.json" '
+json_check "/v1/models 列表形状（object=list / data[] / id+object=model / owned_by=biyou-node）" "$TMP_DIR/models.json" '
 import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 assert d["object"] == "list", d
@@ -288,6 +288,7 @@ assert isinstance(d["data"], list) and d["data"], d
 for item in d["data"]:
     assert item["object"] == "model", item
     assert item["id"], item
+    assert item["owned_by"] == "biyou-node", item
 assert {i["id"] for i in d["data"]} == {"mock-7b", "mock-embed"}, d
 '
 

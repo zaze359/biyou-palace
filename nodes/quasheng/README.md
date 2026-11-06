@@ -138,6 +138,6 @@ SMOKE_MOCK_PORT=11499 SMOKE_NODE_PORT=4012 bash scripts/smoke_quasheng.sh
 
 ## 已知差异与限制（相对契约示例）
 
-- **`/v1/models` 的 `owned_by`（pending decision）**：实现直接代理 Ollama `GET /v1/models`（JSON 原样透传，不做字段改写），`owned_by` 当前取上游值（Ollama 通常为 `library`），与契约 3.2 示例的 `biyou-node` 不一致。两种候选——改实现补齐 `owned_by="biyou-node"`，或修改契约与文档——**尚未拍板**，不视为已接受的设计选择。
+- **`/v1/models` 的 `owned_by`（已对齐契约）**：代理 Ollama `GET /v1/models`，仅把每项 `owned_by` 统一改写为契约 3.2 要求的 `biyou-node`（常量 `MODEL_OWNER`），其余字段原样透传；这是本节点唯一改写上游 JSON 的端点。
 - **`show()` 未实现**：无调用方，模型详情与能力声明来自 `/api/tags` 和 `capabilities_map`，不依赖 `/api/show`。
 - **降级阈值不可用环境变量覆盖**：`mem_warn_pct` / `cpu_warn_pct` 只读 YAML（`QUASHENG_*` 仅覆盖 `.env.example` 列出的 6 项）。

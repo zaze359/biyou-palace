@@ -118,7 +118,8 @@
       "acceptance": "Ollama ≥ 0.5.x 下复验启动探针、预热后 loaded=true、首请无 30s 级延迟、断连日志、health 与 /api/ps 一致，并留核对记录",
       "depends_on": ["Q1", "Q2", "Q3"],
       "parallel": false,
-      "size": "M"
+      "size": "M",
+      "notes": "2026-11-07 探测：ollama 二进制已安装（/usr/local/bin/ollama），但服务未启动（curl 127.0.0.1:11434/api/version 连接被拒，exit 7），且 ~/.ollama 仅 8K、无已拉取模型。需人工执行 `ollama serve` 与 `ollama pull <model>`（≥0.5.x）后复验。"
     },
     {
       "id": "Q9",

@@ -258,7 +258,7 @@ biyou-palace/
 
 ## 八、已知限制
 
-- **准圣 `/v1/models` 的 `owned_by`（pending decision）**：当前直接透传 Ollama 上游值（通常 `library`），与契约示例 `biyou-node` 不一致，尚未拍板。
+- **准圣 `/v1/models` 的 `owned_by`（已对齐契约）**：节点将每项 `owned_by` 统一改写为契约值 `biyou-node`，其余字段原样透传。
 - **准圣 `show()` 未实现**：无调用方，模型详情与能力来自 `/api/tags` + `capabilities_map`。
 - **散仙 `embeddings` 真实向量化**：V1 边界，未打 JNI 补丁时返回 `501`。
 - 散仙本地聊天 UI 走 localhost 同端点：⚠️ 待改（见 `NATIVE_INTEGRATION.md` 本地模式一节）。
