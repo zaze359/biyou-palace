@@ -1,0 +1,146 @@
+{
+  "id": "quasheng-node-agent",
+  "name": "quasheng-node-agent",
+  "title": "准圣 PC 节点智能体（Python + Ollama）",
+  "description": "自底向上第一步的子任务：实现准圣 PC 节点智能体，本地 Ollama 推理对外暴露 OpenAI 兼容服务 + /v1/health 能力端面 + 本地对话模式，遵循节点智能体统一契约 v1.0",
+  "status": "implementing",
+  "dev_type": "feature",
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-10-14",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "Q1",
+      "title": "流式路径透传上游错误状态码",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/errors.py",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "上游 4xx/5xx 时返回相同状态码 + OpenAI 错误体，不再 200 + SSE 正文；上游 200 时 chunk 与 data: [DONE] 原样透传；用例覆盖且 pytest 全绿",
+      "depends_on": [],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "Q2",
+      "title": "错误归一补全（422/404/500）",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/errors.py",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "非法 JSON 422、未知路由 404、未捕获异常 500 均返回 {error:{message,type,param,code}} 且保留 X-Node-* 头；401/429/501/503 形状不变；用例覆盖且 pytest 全绿",
+      "depends_on": ["Q1"],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "Q3",
+      "title": "可观测性补齐",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "uvicorn 启动方式下可见 quasheng INFO 日志；预热逐模型记录耗时(ms)与结果；客户端断连必有一条“中止上游生成”日志；用例覆盖且 pytest 全绿",
+      "depends_on": ["Q2"],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "Q4",
+      "title": "补 .env.example 与环境变量说明",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/.env.example",
+        "nodes/quasheng/README.md"
+      ],
+      "acceptance": ".env.example 覆盖全部 QUASHENG_* 变量并与 config.py 的 _ENV_OVERRIDES 一一对应，无多余项",
+      "depends_on": [],
+      "parallel": true,
+      "size": "S"
+    },
+    {
+      "id": "Q5",
+      "title": "端点级集成测试",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "覆盖 health 结构、全端点 401、响应头、/v1/models 形状、SSE chunk 与 DONE、流式上游 404、501、429+Retry-After、queue_len，且不依赖真实 Ollama",
+      "depends_on": ["Q1", "Q2"],
+      "parallel": true,
+      "size": "M"
+    },
+    {
+      "id": "Q6",
+      "title": "降级与启动探针测试",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/tests/test_degradation.py",
+        "nodes/quasheng/ollama_client.py"
+      ],
+      "acceptance": "覆盖探针失败明确报错（含 ≥0.5.x 提示）、运行期上游断连 health=down 且进程不崩、psutil 异常降级为 null 不 500、预热 generate 400 走 api/chat 降级",
+      "depends_on": ["Q3"],
+      "parallel": true,
+      "size": "M"
+    },
+    {
+      "id": "Q7",
+      "title": "自动化冒烟脚本入库",
+      "status": "done",
+      "files": [
+        "scripts/smoke_quasheng.sh",
+        "nodes/quasheng/README.md"
+      ],
+      "acceptance": "一条命令启动 mock Ollama + 节点并断言 health/models/流式/501/429/断连，失败返回非零退出码，结束自动清理进程",
+      "depends_on": ["Q5"],
+      "parallel": true,
+      "size": "M"
+    },
+    {
+      "id": "Q8",
+      "title": "真实 Ollama 人工验收",
+      "status": "pending",
+      "files": [],
+      "acceptance": "Ollama ≥ 0.5.x 下复验启动探针、预热后 loaded=true、首请无 30s 级延迟、断连日志、health 与 /api/ps 一致，并留核对记录",
+      "depends_on": ["Q1", "Q2", "Q3"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "Q9",
+      "title": "文档与清单偏差收口",
+      "status": "done",
+      "files": [
+        ".trellis/tasks/10-14-quasheng-node-agent/implement.md",
+        "nodes/quasheng/README.md",
+        "scripts/verify.sh"
+      ],
+      "acceptance": "明确 /v1/models 实现路径、show() 取舍、步骤数（13/14）、脚本 Python 解释器与托管 3.13 路径一致",
+      "depends_on": [],
+      "parallel": true,
+      "size": "S"
+    }
+  ],
+  "children": [],
+  "parent": "10-13-biyou-v1-blueprint",
+  "relatedFiles": [
+    "docs/node-agent-contract.md",
+    "nodes/quasheng/"
+  ],
+  "notes": "第一步（自底向上）第一个开工子任务；作为散仙(Kotlin/llama.cpp)实现时的行为参照样板",
+  "meta": {}
+}

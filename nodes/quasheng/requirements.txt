@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn>=0.27
+httpx>=0.26
+psutil>=5.9
+PyYAML>=6.0
+
+# 测试
+pytest>=8.0

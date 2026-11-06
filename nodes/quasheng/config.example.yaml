@@ -1,0 +1,35 @@
+# 准圣节点智能体配置示例
+# 优先级：环境变量（QUASHENG_*）> 本文件 > 默认值
+# 使用：复制为 config.yaml，或设置 QUASHENG_CONFIG=/path/to/config.yaml
+
+ollama_base: "http://127.0.0.1:11434"
+port: 4010                     # 避开 Ollama 自身的 11434
+node_id: "quasheng-01"
+node_name: "准圣·01"
+
+# 鉴权：配置了 shared_token 即自动开启（也可显式写 auth_enabled: true）
+shared_token: ""
+auth_enabled: false
+
+# 启动即预热常驻的模型 —— 消除"首次请求阻塞 30s+"
+preload_models:
+  - "qwen2.5:7b-instruct-q4_K_M"
+
+# 能力声明。**未登记的模型默认只有 ["chat"]**——
+# 能力必须显式声明，不声明就不会被路由到（embeddings 会直接 501）
+capabilities_map:
+  "qwen2.5:7b-instruct-q4_K_M":
+    capabilities: ["chat"]
+    context_len: 32768
+  "nomic-embed-text":
+    capabilities: ["embedding"]
+    context_len: 8192
+
+# 并发闸门：满载立即 429 + Retry-After（不做本地排队）
+max_concurrency: 2
+
+# degraded 判定阈值
+mem_warn_pct: 85
+cpu_warn_pct: 90
+
+request_timeout: 300
