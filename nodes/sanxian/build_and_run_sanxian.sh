@@ -22,7 +22,9 @@ export LANG=C
 #   - ANDROID_HOME 指向 SDK（用于生成 local.properties）
 #   - Gradle 由工程自带 wrapper 驱动（无需全局安装）
 #
-#  ⚠️ embeddings：/v1/embeddings 在能力未声明/后端未就绪时返回 501（V1 边界，未打 JNI 补丁）。
+#  embeddings：/v1/embeddings 已落地真实向量化（Plan A 独立 embedding 句柄）。
+#     需在 sanxian.json 配置 embedding_model 并推送对应 GGUF（见 --push-model），
+#     否则该端点返回 503（能力已声明但后端未就绪；未声明能力时为 501）。
 #  ⚠️ 模型：sanxian.json 默认预热 /sdcard/biyou/models/Qwen3-0.6B-Q8_0.gguf，
 #     需自行 adb push（见 --push-model），否则 health=loading、chat 503。
 #  ⚠️ API 级别：NodeServer 用 java.time，需 API 26+；V1 面向现代设备。
@@ -173,6 +175,6 @@ echo ""
 echo "==> 完成。"
 echo "   节点工程 : $BUILD_DIR"
 echo "   节点地址 : http://127.0.0.1:4011  （已 adb forward；手机端 0.0.0.0:4011）"
-echo "   契约端点 : /v1/health  /v1/models  /v1/chat/completions  /v1/embeddings(未实现→501)"
+echo "   契约端点 : /v1/health  /v1/models  /v1/chat/completions  /v1/embeddings(需配置 embedding_model)"
 echo "   停止节点 : adb shell am force-stop com.biyou.sanxian"
 echo "   清理构建 : ./build_and_run_sanxian.sh --clean"

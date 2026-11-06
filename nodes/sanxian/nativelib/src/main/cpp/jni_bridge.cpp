@@ -931,7 +931,8 @@ Java_com_biyou_sanxian_llm_LlamaNative_embed(
     }
     llama_batch_free(batch);
 
-    // pooling_type=NONE 时返回 NULL（已在 loadModel 强制 MEAN 规避），此处仍兜底判空。
+    // pooling 跟随模型元数据（cparams.pooling_type 默认 UNSPECIFIED）；仅当元数据缺失
+    // 或为 NONE 时，loadModel 才重建 context 回退 LAST。此处仍兜底判空。
     const float* emb = llama_get_embeddings_seq(s->ctx, 0);
     if (!emb) {
         LOGE("embed 取向量失败（pooling_type 可能为 NONE）");

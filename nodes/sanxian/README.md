@@ -38,11 +38,11 @@ nodes/sanxian/
 | `/v1/models` OpenAI 列表 | ✅ | `buildModels` |
 | `/v1/chat/completions` SSE 流式（自产 chunk，`[DONE]` 收尾） | ✅ | `NodeServer.handleChat` 桥 `LlmEngine.generate(): Flow<String>` |
 | `/v1/embeddings` 能力驱动（无能力 501） | ✅ 路由 | `NodeServer.handleEmbeddings` |
-| embeddings **真实向量化** | ⚠️ 需 JNI 桥 | 见 `NATIVE_INTEGRATION.md`（llama.cpp 已原生支持） |
+| embeddings **真实向量化** | ✅ | 独立 embedding 句柄 + JNI `embed` 桥（`NATIVE_INTEGRATION.md` §4）；`embedding_model` 未配置或加载失败时 503 |
 | 并发闸门 429 + Retry-After | ✅ | `ConcurrencyGate` |
 | 可选 bearer 鉴权（覆盖全端点） | ✅ | `NodeServer` 鉴权中间件 |
 | 客户端断连即 `stopGeneration` | ✅ | Flow 取消 → `AndroidLlmEngine.finally` |
-| 本地聊天 UI 走 localhost 同端点 | ⚠️ 待改 | 见 `NATIVE_INTEGRATION.md` 本地模式一节 |
+| 本地聊天 UI 走 localhost 同端点 | ⚠️ 未实现（UI 仍直连 `LlmEngineProvider`，非 HTTP） | 待改；契约要求见 `implement.md` §2.5 |
 
 ## 构建与验证（需真机 / CI）
 

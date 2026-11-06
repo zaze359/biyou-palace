@@ -15,7 +15,7 @@
   "branch": null,
   "base_branch": null,
   "worktree_path": null,
-  "commit": null,
+  "commit": "ca35e83ce277895777468ffb794d16093fcd6ca6",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -24,6 +24,6 @@
     "docs/node-agent-contract.md",
     "nodes/sanxian/"
   ],
-  "notes": "依赖外部旧项目 /Users/zaze/Documents/smallphone（KMP+Compose+llama.cpp JNI），勘察结论见 research/smallphone-assessment.md；建议准圣子任务跑通后再开工以对齐契约",
+  "notes": "依赖外部旧项目 /Users/zaze/Documents/smallphone（KMP+Compose+llama.cpp JNI），勘察结论见 research/smallphone-assessment.md；建议准圣子任务跑通后再开工以对齐契约。进度：统一契约四端点与 embeddings 真实向量化（Plan A chat/embedding 双句柄、JNI embed 桥、pooling 跟随模型元数据、按分词结果截断到 llama_n_ubatch）已落地并提交于 ca35e83，代码文档已追平；status 保持 implementing，因真机尚未验收。剩余真机验证：① 启动后 /v1/health、/v1/models、/v1/chat/completions、/v1/embeddings 冒烟；② >1024 tokens 长文本 embedding 确认出现截断 WARN 且进程不崩；③ logcat 确认 pooling 采用模型默认值（Qwen3-Embedding 应为 LAST）而非回退；④ 客户端断连取消与后台长跑；⑤ embedding 模型 GGUF 推送后 200 向量维度正确。",
   "meta": {}
 }

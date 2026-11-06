@@ -260,7 +260,7 @@ biyou-palace/
 
 - **准圣 `/v1/models` 的 `owned_by`（已对齐契约）**：节点将每项 `owned_by` 统一改写为契约值 `biyou-node`，其余字段原样透传。
 - **准圣 `show()` 未实现**：无调用方，模型详情与能力来自 `/api/tags` + `capabilities_map`。
-- **散仙 `embeddings` 真实向量化**：V1 边界，未打 JNI 补丁时返回 `501`。
+- **散仙 `embeddings` 真实向量化（已落地）**：Plan A chat/embedding 双句柄 + JNI `embed` 桥，pooling 跟随模型元数据；未配置 `embedding_model` 或 embedding 句柄加载失败时返回 `503`，能力未声明时返回 `501`。
 - 散仙本地聊天 UI 走 localhost 同端点：⚠️ 待改（见 `NATIVE_INTEGRATION.md` 本地模式一节）。
 
 ---

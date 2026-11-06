@@ -41,7 +41,7 @@
 1. **剥离 iOS**：`shared/build.gradle.kts` 的 `iosX64/iosArm64/iosSimulatorArm64` target、`iosMain` sourceSet、`iosArm64{...linkerOpts(-L.../llama.xcframework...)}` 三段；删 `shared/src/iosMain`、`composeApp/src/iosMain`、`IosLlmEngine` 占位；删 `nativelib/ios` 相关。改后 `shared` 纯安卓编译须验证。
 2. **新增 Ktor(CIO) HTTP 服务层**暴露 4 端点（smallphone 当前纯本地 UI 直连 engine，**完全不对外供 HTTP**）。
 3. **补健康/资源采集**：电量/温度/热状态当前代码**完全没有**（散仙必填）。
-4. **embeddings**：vendored llama.cpp **已原生支持**（`llama_set_embeddings` / `llama_get_embeddings_seq` / `pooling_type`），但 `LlamaNative` **无 embed 方法** → 需新增 JNI 桥（见 §2.1）。
+4. **embeddings**：vendored llama.cpp **已原生支持**（`cparams.embeddings` / `llama_get_embeddings_seq` / `pooling_type`）；JNI embed 桥已新增并落地（Plan A 双句柄，见 §2.1，commit `ca35e83`）。
 5. **前台服务保活 + 通知**：避免系统杀后台。
 6. **本地聊天 UI 改为经 localhost 调本节点**（统一双模路径）。
 
@@ -49,14 +49,17 @@
 
 ## 2. 关键设计决策
 
-### 2.1 embeddings —— 真实向量化（散仙主承接方），新增 JNI
-- **证据**：`nativelib/.../llama.cpp/include/llama.h` 含 `llama_set_embeddings(ctx,true)`、`llama_get_embeddings_seq(ctx,seq_id)`、`llama_get_embeddings_ith`、`model_params.pooling_type`。**llama.cpp 已支持，无需升级原生库。**
-- **方案（新增原生能力）**：
-  - `LlmConfig` 增 `embedMode: Boolean`（embedding 模型加载时置 true）。
-  - `LlamaNative` 增 `external fun embed(handle: Long, text: String): FloatArray`；批处理可加 `embedBatch(handle, texts: Array<String>): Array<FloatArray>`。
-  - `jni_bridge.cpp` 新增 `Java_com_smallphone_llm_LlamaNative_embed`：对 embed 模型 `llama_set_embeddings(ctx,true)` 后 `llama_encode(text)` → `llama_get_embeddings_seq` 取向量（注意 pooled/seq 维）。
-  - `AndroidLlmEngine` 增 `embed(texts: List<String>): List<List<Float>>`；`LlmEngine` 接口（`commonMain`）同步增 `embed(...)`，`IosLlmEngine` 占位（iOS 已剥离，可抛 `UnsupportedOperationException` 走 501）。
-- **风险**：NDK 构建需重新验证 `:nativelib` 产出 `libllama_jni.so`；embedding 需单独 GGUF（如 `nomic-embed-text`）。风险可控，因为原生 API 已就绪。
+### 2.1 embeddings —— 真实向量化（散仙主承接方），Plan A 已落地
+- **证据**：`nativelib/.../llama.h` 含 `cparams.embeddings` / `cparams.pooling_type`、`llama_encode`、`llama_get_embeddings_seq`。**llama.cpp 已支持，无需升级原生库。**
+- **已落地方案（Plan A：chat / embedding 双句柄，commit `ca35e83`）**：
+  - `LlmConfig` 增 `embeddingModelPath: String?`；`NodeConfig` 增 `embeddingModel`（读取 `sanxian.json` 的 `embedding_model` 字段）。
+  - `AndroidLlmEngine` 同时持有 `handle`（chat）与 `embeddingHandle`（embedding），二者独立上下文、KV 互不污染；`loadModel` 新增 `enableEmbeddings` 参数，chat 句柄传 `false`、embedding 句柄传 `true`。
+  - `LlamaNative` 增 `external fun embed(handle, text): FloatArray`；`jni_bridge.cpp` 新增同名 JNI：分词 → `llama_batch_get_one` → `llama_encode` → `llama_get_embeddings_seq(ctx, 0)` → `jfloatArray(n_embd)`。
+  - `AndroidLlmEngine` 实现既有 `EmbeddingEngine` 接口的 `embed(texts)`；`NodeForegroundService` 预热时把 `embedding_model` 传入，服务层（`NodeServer.handleEmbeddings`）无需改动。
+  - pooling 不再强制 MEAN：`pooling_type` 保持 `UNSPECIFIED`，跟随模型元数据（Qwen3-Embedding 用 last-token pooling）；仅当元数据缺失/为 `NONE` 时重建 context 回退 `LAST`，并在 logcat 打 WARN。
+  - 健壮性：`embed` 按**实际分词结果**截断到 `llama_n_ubatch()`，避免 `llama_encode` 内 `GGML_ASSERT(n_ubatch >= n_tokens)` 触发 `GGML_ABORT`（字符与 token 非一一对应，故不在 Kotlin 侧按字符长度限制）；embedding 句柄 `nBatch=1024`（chat 句柄仍为 512）。
+- **能力边界**：`embedding_model` 未配置/能力未声明 → 501；能力已声明但 embedding 句柄未加载 → 503。
+- **风险**：见 §5。
 
 ### 2.2 SSE 自产（非代理）
 准圣是**代理** Ollama 透传字节；散仙是**桥接** `generate(): Flow<String>` **自己拼 OpenAI chunk**。逐块规则（与准圣 mock 输出完全一致，已验证）：
@@ -93,7 +96,7 @@
 1. **派生**：`smallphone` → `nodes/sanxian/`，保留 `shared/` `nativelib/` `composeApp/`。
 2. **剥离 iOS**：`shared/build.gradle.kts` 删 `ios*` target/`iosMain` sourceSet/`xcframework` linkerOpts；删 `shared/src/iosMain` `composeApp/src/iosMain` `IosLlmEngine`；删 `nativelib/ios`；验证 `shared` 纯安卓编译。
 3. **依赖**：`shared` + `composeApp` 加 Ktor server(CIO)、`kotlinx.serialization`（统一进 `libs.versions.toml`）。
-4. **embeddings JNI**：`LlmConfig.embedMode` → `LlamaNative.embed` → `jni_bridge.cpp` → `AndroidLlmEngine.embed` → `LlmEngine` 接口 + 占位。
+4. **embeddings JNI（已落地，commit `ca35e83`）**：`LlmConfig.embeddingModelPath` / `NodeConfig.embeddingModel` / `sanxian.json` 的 `embedding_model` → `AndroidLlmEngine.loadModel(enableEmbeddings)` 双句柄 → `LlamaNative.embed` → `jni_bridge.cpp`（pooling 跟随模型元数据、按分词结果截断到 `llama_n_ubatch`）。
 5. **健康采集**：新增 `NodeHealthCollector`（androidMain actual，仅安卓），实现电量/温度/热状态/内存；与准圣同构的 `determineStatus` 纯函数。
 6. **NodeServer(Ktor)**：4 端点 + 中间件（响应头/鉴权/429）+ 断连取消；`chat` 桥 `generate→SSE`、`embeddings` 桥 `embed→OpenAI embeddings`、能力缺失 `501`。
 7. **NodeForegroundService**：启动 Ktor + 常驻通知；`AndroidManifest` 权限/声明。
@@ -121,7 +124,8 @@
 ## 5. 风险（已更新）
 
 - **NDK/llama.cpp 构建是最大变量**（与原评估一致）：先确认 `:nativelib` 能产出 `libllama_jni.so` 再大改。
-- **embeddings JNI 新增原生工作量**：llama.cpp 已原生支持，风险可控，但需 NDK 重新编译验证。
+- **embeddings 双句柄的额外内存开销**（Plan A 已落地）：chat 与 embedding 两份模型上下文同时常驻，embedding 句柄的 KV/计算缓冲约为 chat 同量级；低内存机型需评估 `contextSize`、`nBatch` 与并发上限，避免 OOM 或热降频。
+- **embedding 模型文件获取/推送**：`sanxian.json` 默认指向 `/sdcard/biyou/models/Qwen3-Embedding-0.6B-Q8_0.gguf`，仓库不内置 GGUF、无自动下载；需用 `./build_and_run_sanxian.sh --push-model` 手动推送。缺失时节点仍可聊天，但 `/v1/embeddings` 返回 503，且 `/v1/health` 的 `loaded` 暂不反映 embedding 模型（已知偏差，后续单独修）。
 - **剥离 iOS 后 `shared` 纯安卓编译**：清理 cinterop/sourceSet 后须完整编译验证。
 - **后台被杀**：厂商策略差异大，需真机长跑；保活失效时 health 应体现为不可达，由上层剔除。
 - **温度/热状态部分机型无 API** → `null` 降级，不得 500。
