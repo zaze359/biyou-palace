@@ -34,6 +34,18 @@ def test_status_loading_when_preload_not_loaded():
     assert status == "loading"
 
 
+def test_status_loading_when_model_is_loading_on_demand():
+    status = determine_status(
+        ollama_ok=True,
+        preload_loaded=True,
+        mem_pct=10.0,
+        cpu_pct=10.0,
+        settings=_settings(),
+        on_demand_loading=True,
+    )
+    assert status == "loading"
+
+
 def test_status_degraded_when_memory_over_threshold():
     status = determine_status(
         ollama_ok=True,

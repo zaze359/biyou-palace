@@ -1,0 +1,3 @@
+{"file": "docs/node-agent-contract.md", "reason": "契约 3.1 queue_len、3.3 chat 501、2 章鉴权与响应头是本次语义修正的唯一基准"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误形状与状态码约定（保持 OpenAI 错误体不变）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码质量与测试要求"}

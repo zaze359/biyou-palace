@@ -1,0 +1,187 @@
+{
+  "id": "quasheng-delivery-hardening",
+  "name": "quasheng-delivery-hardening",
+  "title": "准圣节点对外交付加固",
+  "description": "把准圣节点从可演示推进到可对外交付：修正示例配置与能力校验、queue_len/loading 语义、默认监听安全、常驻自恢复与优雅停机、CLI 多轮与错误体显示",
+  "status": "in_progress",
+  "dev_type": "feature",
+  "scope": "nodes/quasheng",
+  "package": null,
+  "priority": "P0",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-07",
+  "completedAt": null,
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "D1",
+      "title": "示例配置与并发默认值对齐真实模型",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/config.example.yaml",
+        "nodes/quasheng/config.py",
+        "nodes/quasheng/.env.example",
+        "nodes/quasheng/tests/test_health.py"
+      ],
+      "acceptance": "示例中 embedding 能力键为 nomic-embed-text:latest（与 ollama pull 后的真实 tag 一致）；preload_models 只含真实可拉取 tag；Settings 默认、config.example.yaml、.env.example 的 max_concurrency 均为契约建议的 4；预热模型不存在时 /v1/health 不长期 loading；有单测覆盖",
+      "depends_on": [],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "D2",
+      "title": "chat 端点能力校验",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "声明为 embedding-only 的模型请求 /v1/chat/completions（流式与非流式）返回 501 + capability_not_supported，错误形状与 embeddings 判定一致；未登记模型仍默认 chat；用例覆盖且既有 501 用例不回归",
+      "depends_on": [
+        "D1"
+      ],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "D3",
+      "title": "queue_len 改为真实排队数",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/concurrency.py",
+        "nodes/quasheng/health.py",
+        "nodes/quasheng/static/index.html",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "resources.queue_len 取自闸门 waiting（当前策略满载立即 429，故恒为 0），不再等于在途并发；health 同时暴露 resources.active；面板分别显示在途并发/排队数，压测采样改为在途并发；原“queue_len==在途”用例改为断言 active==1 且 queue_len==0",
+      "depends_on": [],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "D4",
+      "title": "loading 覆盖按需加载",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/loading.py",
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/health.py",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "请求未加载模型时 health 在加载窗口内返回 loading；首个 chunk / 成功响应后回到 ready；上游错误或超时清除 pending；预热失败或模型不在 /api/tags 时不阻塞 ready；有单测覆盖",
+      "depends_on": [
+        "D3"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "D5",
+      "title": "默认监听回环与非回环裸奔拒绝",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/config.py",
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/config.example.yaml",
+        "nodes/quasheng/.env.example",
+        "nodes/quasheng/README.md",
+        "nodes/quasheng/tests/test_health.py"
+      ],
+      "acceptance": "Settings 与示例默认 host=127.0.0.1；__main__ 不再硬编码 0.0.0.0；host 非回环且 shared_token 为空时启动直接失败并输出明确中文提示；QUASHENG_HOST 可覆盖；README/.env.example 同步；有配置校验单测",
+      "depends_on": [
+        "D1"
+      ],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "D6",
+      "title": "launchd / systemd 常驻模板",
+      "status": "pending",
+      "files": [
+        "nodes/quasheng/deploy/launchd/com.biyou.quasheng.plist",
+        "nodes/quasheng/deploy/systemd/quasheng.service",
+        "nodes/quasheng/README.md"
+      ],
+      "acceptance": "两套模板均含工作目录、环境变量、重启策略、日志去处；README 给出安装/卸载/查看日志命令与占位符替换说明",
+      "depends_on": [],
+      "parallel": true,
+      "size": "S"
+    },
+    {
+      "id": "D7",
+      "title": "启动探针有限退避重试与运行期自恢复",
+      "status": "pending",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/tests/test_degradation.py",
+        "nodes/quasheng/README.md"
+      ],
+      "acceptance": "Ollama 启动未就绪时按有限次数指数退避重试，耗尽才失败；日志逐次记录尝试；运行期上游恢复后 /v1/health 自动回到 ready；用例覆盖重试成功、耗尽失败、恢复后 ready",
+      "depends_on": [
+        "D4"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "D8",
+      "title": "优雅停机",
+      "status": "pending",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/concurrency.py",
+        "nodes/quasheng/config.py",
+        "nodes/quasheng/.env.example",
+        "nodes/quasheng/README.md",
+        "nodes/quasheng/tests/test_app.py"
+      ],
+      "acceptance": "SIGTERM/SIGINT 后停止接受新请求（503 node_shutting_down），等待在途请求 drain 至 shutdown_timeout 或全部结束；uvicorn graceful timeout 与控制台退出路径一致；有单测覆盖停机拒新与 drain",
+      "depends_on": [],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "D9",
+      "title": "REPL 多轮上下文与 /reset、/model",
+      "status": "pending",
+      "files": [
+        "nodes/quasheng/cli.py",
+        "nodes/quasheng/tests/test_cli.py",
+        "nodes/quasheng/README.md"
+      ],
+      "acceptance": "交互模式维护 user/assistant 历史并逐轮发送；/reset 清空；运行中 /model <name> 切换且无需重启；/model 无参数列出模型；用例覆盖两轮上下文、reset、切换",
+      "depends_on": [],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "D10",
+      "title": "CLI 非 2xx 打印 OpenAI 错误体",
+      "status": "pending",
+      "files": [
+        "nodes/quasheng/cli.py",
+        "nodes/quasheng/tests/test_cli.py"
+      ],
+      "acceptance": "chat/模型列表非 2xx 时打印 HTTP 状态 + error.code + message，不再静默空输出；单轮模式失败返回非零退出码；用例覆盖 404/500 与纯文本错误体",
+      "depends_on": [
+        "D9"
+      ],
+      "parallel": false,
+      "size": "S"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-quasheng-node-agent",
+  "relatedFiles": [
+    "docs/node-agent-contract.md",
+    "nodes/quasheng/"
+  ],
+  "notes": "阶段划分：D1-D5 正确性与默认安全；D6-D8 常驻与自恢复；D9-D10 CLI 收尾。每阶段结束按具体路径提交，不 push。",
+  "meta": {}
+}

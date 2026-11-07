@@ -1,0 +1,3 @@
+{"file": "docs/node-agent-contract.md", "reason": "核对端点契约、health 结构与错误形状"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量检查清单"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误归一与状态码检查"}

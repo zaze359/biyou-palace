@@ -9,6 +9,7 @@ limits.max_concurrency + resources.queue_len）。
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 
 from .errors import ConcurrencyLimitExceeded
@@ -18,6 +19,7 @@ class ConcurrencyGate:
     def __init__(self, limit: int) -> None:
         self._limit = max(1, int(limit))
         self._active = 0
+        self._waiting = 0
         self._lock = asyncio.Lock()
 
     @property
@@ -26,8 +28,18 @@ class ConcurrencyGate:
 
     @property
     def active(self) -> int:
-        """在途请求数，供 /v1/health 的 resources.queue_len 使用。"""
+        """在途请求数（已拿到名额、尚未结束）。"""
         return self._active
+
+    @property
+    def waiting(self) -> int:
+        """真实排队数（契约 3.1 的 resources.queue_len）。
+
+        本节点策略是"满载立即 429 + Retry-After，不做本地排队"，因此这里
+        结构上恒为 0。保留计数而不是直接返回常量，是为了将来若引入本地
+        排队时语义不会再次退化成"在途并发"。
+        """
+        return self._waiting
 
     async def acquire(self) -> None:
         """抢占一个名额，已满则抛 429。
@@ -45,6 +57,15 @@ class ConcurrencyGate:
     async def release(self) -> None:
         async with self._lock:
             self._active = max(0, self._active - 1)
+
+    async def wait_idle(self, timeout: float) -> bool:
+        """优雅停机：等待在途请求结束，返回是否在超时前清空。"""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while self._active > 0:
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+        return True
 
     @asynccontextmanager
     async def slot(self):

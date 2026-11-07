@@ -42,7 +42,9 @@
         "nodes/quasheng/tests/test_app.py"
       ],
       "acceptance": "非法 JSON 422、未知路由 404、未捕获异常 500 均返回 {error:{message,type,param,code}} 且保留 X-Node-* 头；401/429/501/503 形状不变；用例覆盖且 pytest 全绿",
-      "depends_on": ["Q1"],
+      "depends_on": [
+        "Q1"
+      ],
       "parallel": false,
       "size": "S"
     },
@@ -55,7 +57,9 @@
         "nodes/quasheng/tests/test_app.py"
       ],
       "acceptance": "uvicorn 启动方式下可见 quasheng INFO 日志；预热逐模型记录耗时(ms)与结果；客户端断连必有一条“中止上游生成”日志；用例覆盖且 pytest 全绿",
-      "depends_on": ["Q2"],
+      "depends_on": [
+        "Q2"
+      ],
       "parallel": false,
       "size": "S"
     },
@@ -80,7 +84,10 @@
         "nodes/quasheng/tests/test_app.py"
       ],
       "acceptance": "覆盖 health 结构、全端点 401、响应头、/v1/models 形状、SSE chunk 与 DONE、流式上游 404、501、429+Retry-After、queue_len，且不依赖真实 Ollama",
-      "depends_on": ["Q1", "Q2"],
+      "depends_on": [
+        "Q1",
+        "Q2"
+      ],
       "parallel": true,
       "size": "M"
     },
@@ -93,7 +100,9 @@
         "nodes/quasheng/ollama_client.py"
       ],
       "acceptance": "覆盖探针失败明确报错（含 ≥0.5.x 提示）、运行期上游断连 health=down 且进程不崩、psutil 异常降级为 null 不 500、预热 generate 400 走 api/chat 降级",
-      "depends_on": ["Q3"],
+      "depends_on": [
+        "Q3"
+      ],
       "parallel": true,
       "size": "M"
     },
@@ -106,7 +115,9 @@
         "nodes/quasheng/README.md"
       ],
       "acceptance": "一条命令启动 mock Ollama + 节点并断言 health/models/流式/501/429/断连，失败返回非零退出码，结束自动清理进程",
-      "depends_on": ["Q5"],
+      "depends_on": [
+        "Q5"
+      ],
       "parallel": true,
       "size": "M"
     },
@@ -116,7 +127,11 @@
       "status": "done",
       "files": [],
       "acceptance": "Ollama ≥ 0.5.x 下复验启动探针、预热后 loaded=true、首请无 30s 级延迟、断连日志、health 与 /api/ps 一致，并留核对记录",
-      "depends_on": ["Q1", "Q2", "Q3"],
+      "depends_on": [
+        "Q1",
+        "Q2",
+        "Q3"
+      ],
       "parallel": false,
       "size": "M",
       "notes": "2026-11-07 真实验收通过（ollama pull 被 fake-IP 拦截，改用 HuggingFace GGUF + ollama create 导入）。环境：Ollama 0.40.11；qwen2.5:0.5b（GGUF Q4_K_M，491MB，630.17M 参数）、nomic-embed-text:latest（GGUF Q4_K_M，84MB，136.73M 参数）。实测：①启动探针成功（预热日志 /api/generate 路径 1327ms）；错误端口 11499 时启动失败 exit=3，日志含“无法连接 Ollama…需要 Ollama ≥ 0.5.x”与“Application startup failed. Exiting.”。②预热后 health.models loaded=[qwen=True,nomic=False]，/api/ps=[qwen2.5:0.5b]，一致；embeddings 请求后 nomic loaded 同步为 True。③首 token：不预热冷首次 1920ms，预热后 118ms，节省约 1.8s（小模型功能验证，非性能结论）。④断连：2s 中断（已收 21010 字节），服务端日志“客户端断开，中止上游生成”×1，health queue_len=0。⑤health status=ready。⑥embeddings：nomic 200/768 维；qwen2.5:0.5b（仅声明 chat）501 capability_not_supported。⑦真实上游 /v1/models 的 owned_by 两项均为 biyou-node。临时 GGUF 已删除，导入模型保留在 ~/.ollama（约 573MB）。"
@@ -136,7 +151,9 @@
       "size": "S"
     }
   ],
-  "children": [],
+  "children": [
+    "11-08-quasheng-delivery-hardening"
+  ],
   "parent": "10-13-biyou-v1-blueprint",
   "relatedFiles": [
     "docs/node-agent-contract.md",

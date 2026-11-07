@@ -12,6 +12,7 @@ import psutil
 
 from .config import CONTRACT_VERSION, NODE_ROLE, NODE_RUNTIME, Settings
 from .concurrency import ConcurrencyGate
+from .loading import LoadingTracker, model_key
 from .ollama_client import OllamaClient
 
 # 准圣是 PC：电池 / 温度无意义，按契约恒为 null
@@ -24,10 +25,12 @@ def _mb(value: float) -> int:
     return int(value / (1024 * 1024))
 
 
-def collect_resources(queue_len: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def collect_resources(queue_len: int, active: int) -> tuple[dict[str, Any], dict[str, Any]]:
     """采集主机资源。
 
     返回 (契约 resources, 内部指标 {cpu_pct, mem_pct})。
+    `queue_len` 是真实排队数（契约 3.1）；`active` 是节点内部的在途并发，
+    作为附加字段供面板/排障使用，不改变原有契约字段。
     任一采集失败降级为 null，绝不抛异常（资源采集失败不得导致 500）。
     """
     try:
@@ -55,6 +58,7 @@ def collect_resources(queue_len: int) -> tuple[dict[str, Any], dict[str, Any]]:
         "mem_total_mb": mem_total_mb,
         "disk_free_mb": disk_free_mb,
         "queue_len": queue_len,
+        "active": active,
         "battery_pct": _BATTERY,
         "temperature_c": _TEMPERATURE,
         "thermal_state": _THERMAL,
@@ -69,11 +73,16 @@ def determine_status(
     mem_pct: float | None,
     cpu_pct: float | None,
     settings: Settings,
+    on_demand_loading: bool = False,
 ) -> str:
-    """状态判定（纯函数，便于单测）。优先级：down > loading > degraded > ready。"""
+    """状态判定（纯函数，便于单测）。优先级：down > loading > degraded > ready。
+
+    `loading` 覆盖两类窗口：预热白名单未就绪，以及按需加载中的模型
+    （`on_demand_loading`，由 LoadingTracker 提供）。
+    """
     if not ollama_ok:
         return "down"
-    if not preload_loaded:
+    if not preload_loaded or on_demand_loading:
         return "loading"
     if (mem_pct is not None and mem_pct >= settings.mem_warn_pct) or (
         cpu_pct is not None and cpu_pct >= settings.cpu_warn_pct
@@ -96,7 +105,11 @@ def _model_entry(tag: dict[str, Any], loaded: set[str], settings: Settings) -> d
 
 
 async def build_health(
-    settings: Settings, client: OllamaClient, gate: ConcurrencyGate
+    settings: Settings,
+    client: OllamaClient,
+    gate: ConcurrencyGate,
+    loading: LoadingTracker | None = None,
+    warmup_failed: set[str] | None = None,
 ) -> dict[str, Any]:
     ollama_ok = True
     tags: list[dict[str, Any]] = []
@@ -108,18 +121,35 @@ async def build_health(
         ollama_ok = False
 
     loaded = {str(m.get("name") or m.get("model")) for m in running}
+    loaded_keys = {model_key(name) for name in loaded}
     models = [_model_entry(t, loaded, settings) for t in tags] if ollama_ok else []
 
-    resources, metrics = collect_resources(gate.active)
-    preload_loaded = (
-        all(m in loaded for m in settings.preload_models) if settings.preload_models else True
-    )
+    if loading is not None:
+        loading.sync(loaded)
+    on_demand_loading = loading.is_loading() if loading is not None else False
+
+    resources, metrics = collect_resources(gate.waiting, gate.active)
+
+    # 预热判定只统计真实存在于 /api/tags 的模型，并排除已知预热失败的模型：
+    # 配置里写了不存在/加载失败的模型不应让节点长期停留在 loading。
+    tag_keys = {model_key(str(t.get("name") or t.get("model") or "")) for t in tags}
+    failed_keys = {model_key(m) for m in (warmup_failed or set())}
+    pending_preload = [
+        m
+        for m in settings.preload_models
+        if model_key(m) in tag_keys
+        and model_key(m) not in loaded_keys
+        and model_key(m) not in failed_keys
+    ]
+    preload_loaded = not pending_preload
+
     status = determine_status(
         ollama_ok=ollama_ok,
         preload_loaded=preload_loaded,
         mem_pct=metrics.get("mem_pct"),
         cpu_pct=metrics.get("cpu_pct"),
         settings=settings,
+        on_demand_loading=on_demand_loading,
     )
 
     known_context = [m["context_len"] for m in models if m.get("context_len")]

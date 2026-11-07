@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -21,8 +22,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import logbuffer
-from .config import CONTRACT_VERSION, MODEL_OWNER, NODE_ROLE, Settings, load_settings
+from .config import CONTRACT_VERSION, MODEL_OWNER, NODE_ROLE, ConfigError, Settings, load_settings
 from .concurrency import ConcurrencyGate
+from .loading import LoadingTracker
 from .errors import (
     ConcurrencyLimitExceeded,
     NodeError,
@@ -37,6 +39,11 @@ logger = logging.getLogger("quasheng")
 
 # 控制面板静态资源目录（单文件 HTML，由 /ui 挂载；不经过 API 鉴权）
 _UI_DIR = Path(__file__).parent / "static"
+
+# 启动探针：有限次数 + 指数退避。Ollama 可能在开机时晚于节点就绪，
+# 立即退出会让 launchd/systemd 进入无效重启循环；重试窗口内恢复即可。
+PROBE_ATTEMPTS = 5
+PROBE_BASE_DELAY = 1.0
 
 
 def _configure_logging() -> None:
@@ -140,10 +147,27 @@ async def _read_upstream_error(upstream) -> dict[str, Any]:
     return normalize_upstream_error(upstream.status_code, raw)
 
 
-async def _stream_body(request: Request, upstream, stack: AsyncExitStack, gate: ConcurrencyGate):
-    """SSE 流式透传：**不解析 chunk**，客户端断开即中止上游生成。"""
+async def _stream_body(
+    request: Request,
+    upstream,
+    stack: AsyncExitStack,
+    gate: ConcurrencyGate,
+    *,
+    loading: LoadingTracker | None = None,
+    model: str | None = None,
+):
+    """SSE 流式透传：**不解析 chunk**，客户端断开即中止上游生成。
+
+    首个 chunk 到达意味着模型已完成加载，清除 loading；若流在首个 chunk
+    前结束/断开，则视为加载失败，同样清除 pending。
+    """
+    loaded_seen = False
     try:
         async for chunk in upstream.aiter_bytes():
+            if not loaded_seen:
+                loaded_seen = True
+                if loading is not None and model:
+                    loading.mark_loaded(model)
             if await request.is_disconnected():
                 logger.info("客户端断开，中止上游生成")
                 logbuffer.record("WARNING", "disconnect", "客户端断开，中止上游生成")
@@ -155,22 +179,43 @@ async def _stream_body(request: Request, upstream, stack: AsyncExitStack, gate: 
         logbuffer.record("WARNING", "disconnect", "客户端断开，中止上游生成")
         raise
     finally:
+        if not loaded_seen and loading is not None and model:
+            loading.mark_failed(model)
         await stack.aclose()
         await gate.release()
 
 
-# ---------------------------------------------------------------- 预热
+# ---------------------------------------------------------------- 预热与能力
 
 
-async def _warmup(client: OllamaClient, settings: Settings) -> None:
+def _require_capability(settings: Settings, model: str, capability: str) -> None:
+    """能力校验：未声明该能力的模型直接 501，由上层改路由（契约 3.3）。"""
+    if capability not in settings.capability_for(model):
+        raise NodeError(
+            f"模型 {model or '(未指定)'} 未声明 {capability} 能力",
+            status=501,
+            code="capability_not_supported",
+            type_="invalid_request_error",
+        )
+
+
+async def _warmup(
+    client: OllamaClient,
+    settings: Settings,
+    loading: LoadingTracker | None = None,
+    failed: set[str] | None = None,
+) -> None:
     """预热白名单模型使其常驻，消除"首次请求阻塞 30s+"。
 
     首选 /api/generate（keep_alive=-1 常驻）；若该 Ollama 版本拒绝空
     prompt，退化为一次 num_predict=1 的最小对话。以实测为准。
+    预热失败的模型记入 `failed`，health 不再把它算作 pending loading。
     """
     if not settings.preload_models:
         return
     for model in settings.preload_models:
+        if loading is not None:
+            loading.note_request(model)
         started = time.perf_counter()
         path = "/api/generate"
         try:
@@ -199,31 +244,84 @@ async def _warmup(client: OllamaClient, settings: Settings) -> None:
                 logbuffer.record(
                     "WARNING", "warmup", f"预热 {model} 失败：{path} HTTP {resp.status_code}，{elapsed_ms} ms"
                 )
+                if loading is not None:
+                    loading.mark_failed(model)
+                if failed is not None:
+                    failed.add(model)
             else:
                 logger.info("预热模型 %s 完成：路径=%s，耗时 %d ms", model, path, elapsed_ms)
                 logbuffer.record("INFO", "warmup", f"预热 {model} 完成：{path}，{elapsed_ms} ms")
+                if loading is not None:
+                    loading.mark_loaded(model)
         except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             logger.warning("预热模型 %s 异常：路径=%s，耗时 %d ms，%s", model, path, elapsed_ms, exc)
             logbuffer.record(
                 "WARNING", "warmup", f"预热 {model} 异常：{path}，{elapsed_ms} ms，{exc}"
             )
+            if loading is not None:
+                loading.mark_failed(model)
+            if failed is not None:
+                failed.add(model)
 
 
 # ---------------------------------------------------------------- 生命周期
 
 
+async def _probe_with_retry(
+    client: OllamaClient,
+    attempts: int | None = None,
+    base_delay: float | None = None,
+) -> None:
+    """启动探针：有限次数指数退避，给 Ollama 留出开机慢启动的窗口。"""
+    total = max(1, PROBE_ATTEMPTS if attempts is None else int(attempts))
+    delay = PROBE_BASE_DELAY if base_delay is None else max(0.0, float(base_delay))
+    last: NodeError | None = None
+    for index in range(total):
+        try:
+            await client.probe()  # 版本强约束：Ollama ≥ 0.5.x
+            return
+        except NodeError as exc:
+            last = exc
+            if index < total - 1:
+                wait = delay * (2 ** index)
+                logger.warning(
+                    "Ollama 未就绪（第 %d/%d 次）：%s；%.1fs 后重试",
+                    index + 1,
+                    total,
+                    exc.message,
+                    wait,
+                )
+                logbuffer.record(
+                    "WARNING",
+                    "startup",
+                    f"Ollama 未就绪（第 {index + 1}/{total} 次）：{exc.message}；{wait:.1f}s 后重试",
+                )
+                await asyncio.sleep(wait)
+    assert last is not None
+    raise last
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = load_settings()
+    logbuffer.configure(None)  # 先建缓冲，配置错误也要能记录
+    try:
+        settings = load_settings()
+    except ConfigError as exc:
+        logger.error("配置错误，拒绝启动：%s", exc)
+        logbuffer.record("ERROR", "startup", f"配置错误：{exc}")
+        raise
     client = OllamaClient(settings.ollama_base, settings.request_timeout)
     app.state.settings = settings
     app.state.client = client
     app.state.gate = ConcurrencyGate(settings.max_concurrency)
+    app.state.loading = LoadingTracker(settings.request_timeout)
+    app.state.warmup_failed = set()
+    app.state.shutting_down = False
     logbuffer.configure(settings.shared_token)  # 脱敏用的 token，仅内存
 
     try:
-        await client.probe()  # 版本强约束：Ollama ≥ 0.5.x，否则启动即失败
+        await _probe_with_retry(client)
     except NodeError as exc:
         logger.error("启动失败：%s", exc.message)
         logbuffer.record("ERROR", "startup", f"启动失败：{exc.message}")
@@ -232,10 +330,33 @@ async def lifespan(app: FastAPI):
         "准圣节点启动：%s（%s）→ Ollama %s", settings.node_id, settings.node_name, settings.ollama_base
     )
     logbuffer.record("INFO", "startup", f"节点启动：{settings.node_id}（{settings.node_name}）")
-    await _warmup(client, settings)
 
-    yield
-    await client.aclose()
+    # 用真实 /api/ps 初始化已加载集合，避免把本来就常驻的模型误判为 loading
+    try:
+        running = await client.ps()
+        app.state.loading.set_loaded(
+            [str(m.get("name") or m.get("model") or "") for m in running]
+        )
+    except Exception:  # noqa: BLE001 - 初始化快照失败不影响启动
+        pass
+
+    await _warmup(client, settings, app.state.loading, app.state.warmup_failed)
+
+    try:
+        yield
+    finally:
+        # 优雅停机：先拒绝新请求，再等待在途请求 drain 到超时
+        app.state.shutting_down = True
+        drained = await app.state.gate.wait_idle(settings.shutdown_timeout)
+        if drained:
+            logger.info("在途请求已清空，节点退出")
+            logbuffer.record("INFO", "shutdown", "在途请求已清空，节点退出")
+        else:
+            logger.warning("等待在途请求超时（%.0fs），强制退出", settings.shutdown_timeout)
+            logbuffer.record(
+                "WARNING", "shutdown", f"等待在途请求超时（{settings.shutdown_timeout:.0f}s），强制退出"
+            )
+        await client.aclose()
 
 
 def _node_headers(request: Request) -> dict[str, str]:
@@ -258,6 +379,16 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def add_node_headers(request: Request, call_next):
+        # 优雅停机窗口：不再接受新请求（在途请求由 lifespan 等待 drain）
+        if getattr(request.app.state, "shutting_down", False):
+            response = openai_error(
+                "节点正在停机，暂不接受新请求",
+                status=503,
+                type_="server_error",
+                code="node_shutting_down",
+            )
+            response.headers.update(_node_headers(request))
+            return response
         response = await call_next(request)
         response.headers.update(_node_headers(request))
         return response
@@ -314,7 +445,11 @@ def create_app() -> FastAPI:
     @app.get("/v1/health")
     async def health(request: Request):
         return await build_health(
-            request.app.state.settings, request.app.state.client, request.app.state.gate
+            request.app.state.settings,
+            request.app.state.client,
+            request.app.state.gate,
+            loading=getattr(request.app.state, "loading", None),
+            warmup_failed=getattr(request.app.state, "warmup_failed", None),
         )
 
     @app.get("/v1/models")
@@ -324,19 +459,28 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request, payload: dict[str, Any]):
+        settings: Settings = request.app.state.settings
         client: OllamaClient = request.app.state.client
         gate: ConcurrencyGate = request.app.state.gate
+        loading: LoadingTracker | None = getattr(request.app.state, "loading", None)
+
+        model = str(payload.get("model") or "")
+        _require_capability(settings, model, "chat")
 
         if bool(payload.get("stream")):
             # 先抢占名额（满了立刻 429），名额**由流结束时**释放——
             # 不能套 async with，否则返回 StreamingResponse 就释放了。
             await gate.acquire()
+            if loading is not None:
+                loading.note_request(model)
             stack = AsyncExitStack()
             try:
                 upstream = await stack.enter_async_context(
                     client.stream_post("/v1/chat/completions", payload)
                 )
             except BaseException:
+                if loading is not None:
+                    loading.mark_failed(model)
                 await stack.aclose()
                 await gate.release()
                 raise
@@ -346,16 +490,26 @@ def create_app() -> FastAPI:
             if upstream.status_code >= 400:
                 body = await _read_upstream_error(upstream)
                 _record_upstream_error(upstream.status_code, body)
+                if loading is not None:
+                    loading.mark_failed(model)
                 await stack.aclose()
                 await gate.release()
                 return JSONResponse(status_code=upstream.status_code, content=body)
 
             return StreamingResponse(
-                _stream_body(request, upstream, stack, gate), media_type="text/event-stream"
+                _stream_body(request, upstream, stack, gate, loading=loading, model=model),
+                media_type="text/event-stream",
             )
 
         async with gate.slot():
+            if loading is not None:
+                loading.note_request(model)
             resp = await client.post("/v1/chat/completions", payload)
+            if loading is not None:
+                if resp.status_code < 400:
+                    loading.mark_loaded(model)
+                else:
+                    loading.mark_failed(model)
             return _passthrough(resp)
 
     @app.post("/v1/embeddings")
@@ -363,18 +517,20 @@ def create_app() -> FastAPI:
         settings: Settings = request.app.state.settings
         client: OllamaClient = request.app.state.client
         gate: ConcurrencyGate = request.app.state.gate
+        loading: LoadingTracker | None = getattr(request.app.state, "loading", None)
 
         model = str(payload.get("model") or "")
-        if "embedding" not in settings.capability_for(model):
-            raise NodeError(
-                f"模型 {model or '(未指定)'} 未声明 embedding 能力",
-                status=501,
-                code="capability_not_supported",
-                type_="invalid_request_error",
-            )
+        _require_capability(settings, model, "embedding")
 
         async with gate.slot():
+            if loading is not None:
+                loading.note_request(model)
             resp = await client.post("/v1/embeddings", payload)
+            if loading is not None:
+                if resp.status_code < 400:
+                    loading.mark_loaded(model)
+                else:
+                    loading.mark_failed(model)
             return _passthrough(resp)
 
     @app.get("/v1/logs")
@@ -397,4 +553,14 @@ if __name__ == "__main__":
     import uvicorn
 
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run("nodes.quasheng.app:app", host="0.0.0.0", port=load_settings().port)
+    try:
+        settings = load_settings()
+    except ConfigError as exc:
+        print(f"[ERR] 配置错误，拒绝启动：{exc}", file=sys.stderr)
+        raise SystemExit(1)
+    uvicorn.run(
+        "nodes.quasheng.app:app",
+        host=settings.host,
+        port=settings.port,
+        timeout_graceful_shutdown=int(settings.shutdown_timeout),
+    )

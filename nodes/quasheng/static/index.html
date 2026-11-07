@@ -112,7 +112,8 @@
     <div class="bar"><div class="label"><span>CPU</span><b id="cpuVal">—</b></div><div class="track"><div id="cpuBar" class="fill"></div></div></div>
     <div class="bar"><div class="label"><span>内存</span><b id="memVal">—</b></div><div class="track"><div id="memBar" class="fill"></div></div></div>
     <div class="bar"><div class="label"><span>磁盘可用</span><b id="diskVal">—</b></div><div class="track"><div id="diskBar" class="fill ok"></div></div></div>
-    <div class="bar"><div class="label"><span>并发占用 queue_len</span><b id="queueVal">—</b></div><div class="track"><div id="queueBar" class="fill"></div></div></div>
+    <div class="bar"><div class="label"><span>在途并发</span><b id="activeVal">—</b></div><div class="track"><div id="activeBar" class="fill"></div></div></div>
+    <div class="bar"><div class="label"><span>排队 queue_len</span><b id="queueVal">—</b></div><div class="track"><div id="queueBar" class="fill"></div></div></div>
     <div class="meta" id="updatedAt"></div>
   </section>
 
@@ -165,7 +166,7 @@
       <button id="stopStress" disabled>停止</button>
     </div>
     <textarea id="stressPrompt">用一句话说明什么是本地推理</textarea>
-    <div class="meta" id="stressMeta">并发：— · queue_len 峰值：—</div>
+    <div class="meta" id="stressMeta">并发：— · 在途并发峰值：—</div>
     <div class="models" style="max-height:220px">
       <table>
         <thead><tr><th>#</th><th>状态</th><th>耗时</th><th>备注</th></tr></thead>
@@ -173,7 +174,7 @@
       </table>
     </div>
     <div class="queue" id="queueBars"></div>
-    <div class="meta" id="queueSeries">queue_len：—</div>
+    <div class="meta" id="queueSeries">在途并发：—</div>
     <div class="out" id="stressSummary" hidden></div>
   </section>
 </main>
@@ -320,10 +321,14 @@
     $("diskBar").style.width = "100%";
     $("diskBar").className = "fill " + (disk != null && disk < 2048 ? "warn" : "ok");
 
-    var q = r.queue_len == null ? 0 : r.queue_len;
     var max = lim.max_concurrency || 1;
-    $("queueVal").textContent = q + " / " + max;
-    setBar("queueBar", Math.min(100, q / max * 100), function (v) { return v >= 100 ? "bad" : (v > 0 ? "warn" : ""); });
+    // active = 在途并发（附加字段）；queue_len = 真实排队数（满载立即 429，故为 0）
+    var active = r.active == null ? 0 : r.active;
+    $("activeVal").textContent = active + " / " + max;
+    setBar("activeBar", Math.min(100, active / max * 100), function (v) { return v >= 100 ? "bad" : (v > 0 ? "warn" : ""); });
+    var q = r.queue_len == null ? 0 : r.queue_len;
+    $("queueVal").textContent = String(q);
+    setBar("queueBar", Math.min(100, q / max * 100), function (v) { return v > 0 ? "warn" : ""; });
   }
 
   function setBar(id, pct, cls) {
@@ -494,10 +499,10 @@
     stress.startedAt = performance.now();
     $("stressRows").innerHTML = "<tr><td colspan='4' class='muted'>运行中…</td></tr>";
     $("queueBars").innerHTML = "";
-    $("queueSeries").textContent = "queue_len：采样中…";
+    $("queueSeries").textContent = "在途并发：采样中…";
     $("stressSummary").hidden = true;
     $("stressSummary").textContent = "";
-    $("stressMeta").textContent = "并发：" + n + " · queue_len 峰值：—";
+    $("stressMeta").textContent = "并发：" + n + " · 在途并发峰值：—";
   }
 
   function stressBadge(r) {
@@ -532,18 +537,19 @@
     $("queueBars").innerHTML = qs.slice(-80).map(function (q) {
       var pct = Math.round(q / scale * 100);
       return "<div class='qbar" + (q >= lim ? " hot" : "") + "' style='height:" +
-        Math.max(3, pct) + "%' title='queue_len=" + q + "'></div>";
+        Math.max(3, pct) + "%' title='active=" + q + "'></div>";
     }).join("");
-    $("queueSeries").textContent = "queue_len：" + (qs.slice(-24).join(" → ") || "—") +
+    $("queueSeries").textContent = "在途并发：" + (qs.slice(-24).join(" → ") || "—") +
       "（峰值 " + peak + " / 上限 " + lim + "）";
     $("stressMeta").textContent = "并发：" + (stress.concurrency || 1) + " · 采样 " +
-      qs.length + " 次 · queue_len 峰值：" + peak;
+      qs.length + " 次 · 在途并发峰值：" + peak;
   }
 
   function sampleQueue() {
     return refreshHealth().then(function (h) {
       if (!stress.running || !h || !h.resources) return;
-      var q = h.resources.queue_len == null ? 0 : h.resources.queue_len;
+      // 压测关心的是真实在途并发（queue_len 在"满载立即 429"策略下恒为 0）
+      var q = h.resources.active == null ? 0 : h.resources.active;
       stress.samples.push({ q: q, t: Math.round(performance.now() - stress.startedAt) });
       renderQueue();
     });
@@ -614,7 +620,7 @@
     $("stressSummary").textContent =
       "成功 " + ok + " · 429 " + limited + " · 失败 " + failed + "\n" +
       "耗时（全部完成请求）：" + stats + "\n" +
-      "queue_len 采样 " + stress.samples.length + " 次，峰值 " + queuePeak() + "（上限 " + queueLimit() + "）";
+      "在途并发采样 " + stress.samples.length + " 次，峰值 " + queuePeak() + "（上限 " + queueLimit() + "）";
     renderStressRows();
     refreshLogs();
   }

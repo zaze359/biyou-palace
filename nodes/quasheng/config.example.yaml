@@ -2,6 +2,9 @@
 # 优先级：环境变量（QUASHENG_*）> 本文件 > 默认值
 # 使用：复制为 config.yaml，或设置 QUASHENG_CONFIG=/path/to/config.yaml
 
+# 默认只监听回环地址。要对外提供服务，必须同时配置 shared_token，
+# 否则节点会拒绝启动（避免裸推理端点暴露到局域网/公网）。
+host: "127.0.0.1"
 ollama_base: "http://127.0.0.1:11434"
 port: 4010                     # 避开 Ollama 自身的 11434
 node_id: "quasheng-01"
@@ -12,24 +15,32 @@ shared_token: ""
 auth_enabled: false
 
 # 启动即预热常驻的模型 —— 消除"首次请求阻塞 30s+"
+# 名称必须与 `ollama list` 完全一致（含 :tag）；不存在的模型会被跳过，
+# 不会让 /v1/health 长期停留在 loading。
 preload_models:
   - "qwen2.5:7b-instruct-q4_K_M"
 
 # 能力声明。**未登记的模型默认只有 ["chat"]**——
-# 能力必须显式声明，不声明就不会被路由到（embeddings 会直接 501）
+# 能力必须显式声明，不声明就不会被路由到（embeddings 会直接 501）。
+# 键名同样是 `ollama list` 里的真实名称：`ollama pull nomic-embed-text`
+# 落库后的名字带 `:latest`，这里必须写全，否则精确匹配失败会被当成 chat-only。
 capabilities_map:
   "qwen2.5:7b-instruct-q4_K_M":
     capabilities: ["chat"]
     context_len: 32768
-  "nomic-embed-text":
+  "nomic-embed-text:latest":
     capabilities: ["embedding"]
     context_len: 8192
 
-# 并发闸门：满载立即 429 + Retry-After（不做本地排队）
-max_concurrency: 2
+# 并发闸门：满载立即 429 + Retry-After（不做本地排队）。
+# 契约四章建议准圣（PC）≥ 4。
+max_concurrency: 4
 
 # degraded 判定阈值
 mem_warn_pct: 85
 cpu_warn_pct: 90
 
 request_timeout: 300
+
+# 优雅停机：SIGTERM/SIGINT 后等待在途请求结束的最长秒数
+shutdown_timeout: 10

@@ -405,6 +405,7 @@ def test_health_full_contract_structure():
     assert resources["temperature_c"] is None
     assert resources["thermal_state"] is None
     assert resources["queue_len"] == 0
+    assert resources["active"] == 0
     for key in ("cpu_pct", "mem_used_mb", "mem_total_mb", "disk_free_mb"):
         assert key in resources
 
@@ -585,7 +586,7 @@ def test_http_level_429_with_retry_after_and_openai_error():
     )
 
 
-def test_queue_len_reflects_in_flight_stream_and_returns_to_zero():
+def test_health_active_reflects_in_flight_stream_while_queue_len_stays_zero():
     def handler(request: httpx.Request) -> httpx.Response:
         return _concurrent_upstream(request)
 
@@ -613,7 +614,9 @@ def test_queue_len_reflects_in_flight_stream_and_returns_to_zero():
             assert first.startswith(b"data: ")
 
             health_during = await client.get("/v1/health")
-            observed["during"] = health_during.json()["resources"]["queue_len"]
+            during = health_during.json()["resources"]
+            observed["during_active"] = during["active"]
+            observed["during_queue"] = during["queue_len"]
 
             while True:
                 msg = await asyncio.wait_for(queue.get(), timeout=5)
@@ -622,12 +625,137 @@ def test_queue_len_reflects_in_flight_stream_and_returns_to_zero():
             await task
 
             health_after = await client.get("/v1/health")
-            observed["after"] = health_after.json()["resources"]["queue_len"]
+            after = health_after.json()["resources"]
+            observed["after_active"] = after["active"]
+            observed["after_queue"] = after["queue_len"]
 
     asyncio.run(scenario())
-    assert observed["during"] == 1
-    assert observed["after"] == 0
+    # 契约 3.1：queue_len 是真实排队数；满载立即 429 不排队，故恒为 0
+    assert observed["during_active"] == 1
+    assert observed["during_queue"] == 0
+    assert observed["after_active"] == 0
+    assert observed["after_queue"] == 0
     assert app.state.gate.active == 0
+
+
+def test_chat_on_embedding_only_model_returns_501_capability_not_supported():
+    """契约 3.3：chat 与 embeddings 的能力判定必须对称。"""
+
+    client, _ = _build_client(
+        _ok_upstream,
+        capabilities_map={"emb-only": {"capabilities": ["embedding"], "context_len": 8192}},
+    )
+
+    for stream in (False, True):
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "emb-only", "messages": [{"role": "user", "content": "hi"}], "stream": stream},
+        )
+        assert resp.status_code == 501
+        err = resp.json()["error"]
+        assert err["code"] == "capability_not_supported"
+        assert err["type"] == "invalid_request_error"
+        assert "chat" in err["message"]
+
+    # 同一模型走 embeddings 仍应放行（上游返回 200）
+    ok = client.post("/v1/embeddings", json={"model": "emb-only", "input": ["x"]})
+    assert ok.status_code == 200
+
+
+def test_missing_preload_model_does_not_block_ready():
+    client, _ = _build_client(_health_upstream, preload_models=["does-not-exist:latest"])
+    body = client.get("/v1/health").json()
+    assert body["status"] == "ready"
+
+
+def test_failed_warmup_model_does_not_block_ready():
+    client, app = _build_client(_health_upstream, preload_models=["nomic-embed-text"])
+    # 该模型存在于 /api/tags 但不在 /api/ps；模拟预热失败
+    app.state.warmup_failed = {"nomic-embed-text"}
+    assert client.get("/v1/health").json()["status"] == "ready"
+
+
+def test_preload_model_still_loading_when_exists_but_not_loaded():
+    client, _ = _build_client(_health_upstream, preload_models=["nomic-embed-text"])
+    assert client.get("/v1/health").json()["status"] == "loading"
+
+
+def test_on_demand_loading_then_ready_after_first_chunk():
+    """D4：按需加载窗口内 health=loading，首个 chunk 后回到 ready。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/api/tags", "/api/ps"):
+            return httpx.Response(200, json={"models": []})
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "0.5.7"})
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                stream=_SlowSSE([b"data: one\n\n", b"data: [DONE]\n\n"], delay=0.2),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    app = create_app()
+    app.state.settings = Settings(
+        node_id="test-node", node_name="测试节点", max_concurrency=1, mem_warn_pct=100, cpu_warn_pct=100
+    )
+    app.state.gate = ConcurrencyGate(1)
+    app.state.client = OllamaClient("http://upstream", transport=httpx.MockTransport(handler))
+    app.state.loading = app_module.LoadingTracker(300)
+    app.state.warmup_failed = set()
+
+    payload = {"model": "cold-model", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    queue: asyncio.Queue = asyncio.Queue()
+    observed: dict[str, str] = {}
+
+    async def scenario():
+        async with _asgi_client(app) as client:
+            task = asyncio.create_task(
+                _drive_asgi_stream(app, "/v1/chat/completions", payload, queue)
+            )
+            start = await asyncio.wait_for(queue.get(), timeout=5)
+            assert start["type"] == "http.response.start"
+            # 首个 chunk 前：模型尚未确认加载
+            observed["during"] = (await client.get("/v1/health")).json()["status"]
+
+            first = await _next_body_chunk(queue)
+            assert first.startswith(b"data: ")
+            observed["after_chunk"] = (await client.get("/v1/health")).json()["status"]
+
+            while True:
+                msg = await asyncio.wait_for(queue.get(), timeout=5)
+                if msg["type"] == "http.response.body" and not msg.get("more_body", False):
+                    break
+            await task
+
+    asyncio.run(scenario())
+    assert observed["during"] == "loading"
+    assert observed["after_chunk"] == "ready"
+
+
+def test_shutting_down_rejects_new_requests_with_openai_error():
+    client, app = _build_client(_ok_upstream)
+    app.state.shutting_down = True
+
+    resp = client.get("/v1/health")
+    assert resp.status_code == 503
+    err = resp.json()["error"]
+    assert err["code"] == "node_shutting_down"
+    assert err["type"] == "server_error"
+    assert resp.headers["X-Node-Id"] == "test-node"
+    assert resp.headers["Contract-Version"] == "1.0"
+
+
+def test_gate_wait_idle_times_out_then_drains():
+    async def scenario():
+        gate = ConcurrencyGate(1)
+        await gate.acquire()
+        assert await gate.wait_idle(0.1) is False
+        await gate.release()
+        assert await gate.wait_idle(0.1) is True
+
+    asyncio.run(scenario())
 
 
 # ---------------------------------------------------------------- /ui 控制面板

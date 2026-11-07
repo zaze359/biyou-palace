@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nodes.quasheng import app as app_module
-from nodes.quasheng.app import _warmup, create_app
+from nodes.quasheng.app import _probe_with_retry, _warmup, create_app
 from nodes.quasheng.concurrency import ConcurrencyGate
 from nodes.quasheng.config import Settings
 from nodes.quasheng.errors import UpstreamUnavailable
@@ -75,6 +75,8 @@ def test_probe_old_ollama_without_v1_raises_with_version_hint():
 def test_lifespan_aborts_startup_when_probe_fails(monkeypatch):
     """启动探针失败必须让 lifespan 抛错，节点不会带病启动。"""
     settings = Settings(preload_models=[])
+    monkeypatch.setattr(app_module, "PROBE_ATTEMPTS", 2)
+    monkeypatch.setattr(app_module, "PROBE_BASE_DELAY", 0.0)
     monkeypatch.setattr(app_module, "load_settings", lambda: settings)
     monkeypatch.setattr(
         app_module,
@@ -87,6 +89,38 @@ def test_lifespan_aborts_startup_when_probe_fails(monkeypatch):
     with pytest.raises(UpstreamUnavailable):
         with TestClient(app):
             pass
+
+
+def test_probe_retry_recovers_before_exhausting_attempts(monkeypatch):
+    class Flaky:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def probe(self) -> None:
+            self.calls += 1
+            if self.calls < 3:
+                raise UpstreamUnavailable("Ollama 未就绪")
+
+    monkeypatch.setattr(app_module, "PROBE_BASE_DELAY", 0.0)
+    flaky = Flaky()
+    asyncio.run(_probe_with_retry(flaky, attempts=3))
+    assert flaky.calls == 3
+
+
+def test_probe_retry_exhausts_finite_attempts(monkeypatch):
+    class Down:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def probe(self) -> None:
+            self.calls += 1
+            raise UpstreamUnavailable("Ollama 未就绪")
+
+    monkeypatch.setattr(app_module, "PROBE_BASE_DELAY", 0.0)
+    down = Down()
+    with pytest.raises(UpstreamUnavailable):
+        asyncio.run(_probe_with_retry(down, attempts=3))
+    assert down.calls == 3
 
 
 # ---------------------------------------------------------------- 2. 运行期断连
@@ -113,6 +147,21 @@ def test_health_down_and_chat_503_when_upstream_dies_at_runtime():
 
     # 进程未崩：后续健康检查依旧可用
     assert client.get("/v1/health").status_code == 200
+
+
+def test_health_auto_recovers_to_ready_after_upstream_returns():
+    state = {"down": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if state["down"]:
+            raise httpx.ConnectError("connection refused")
+        return _ok_upstream(request)
+
+    client, _ = _build_client(handler)
+    assert client.get("/v1/health").json()["status"] == "down"
+
+    state["down"] = False
+    assert client.get("/v1/health").json()["status"] == "ready"
 
 
 def test_stream_chat_503_when_upstream_dies_at_runtime():

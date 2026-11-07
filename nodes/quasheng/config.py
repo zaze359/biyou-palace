@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -38,8 +39,39 @@ def _normalize_caps(raw: dict | None) -> dict[str, dict]:
     return out
 
 
+class ConfigError(ValueError):
+    """配置不自洽，节点必须拒绝启动（不是可降级的运行期错误）。"""
+
+
+def is_loopback(host: str | None) -> bool:
+    """判断监听地址是否回环。
+
+    回环等价集：`localhost`、IPv4/IPv6 回环地址。空串/主机名视为非回环
+    （uvicorn 传空串会监听全部网卡）。
+    """
+    if not host:
+        return False
+    value = host.strip().strip("[]")
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_settings(settings: Settings) -> None:
+    """启动前的安全校验：对外监听必须带 token。"""
+    if not is_loopback(settings.host) and not (settings.shared_token or "").strip():
+        raise ConfigError(
+            f"监听地址 host={settings.host!r} 不是回环地址，但 shared_token 为空。"
+            "对外暴露推理端点必须配置 shared_token（或改为 host: 127.0.0.1）。"
+        )
+
+
 @dataclass
 class Settings:
+    host: str = "127.0.0.1"
     ollama_base: str = "http://127.0.0.1:11434"
     port: int = 4010
     node_id: str = "quasheng-01"
@@ -48,10 +80,13 @@ class Settings:
     auth_enabled: bool = False
     preload_models: list[str] = field(default_factory=list)
     capabilities_map: dict[str, dict] = field(default_factory=dict)
-    max_concurrency: int = 2
+    # 契约四章：准圣建议 ≥ 4
+    max_concurrency: int = 4
     mem_warn_pct: float = 85.0
     cpu_warn_pct: float = 90.0
     request_timeout: float = 300.0
+    # 优雅停机：等待在途请求 drain 的秒数
+    shutdown_timeout: float = 10.0
 
     def capability_for(self, model: str) -> list[str]:
         """未登记的模型默认只有 chat 能力——能力必须由配置显式声明。"""
@@ -66,12 +101,14 @@ class Settings:
 
 
 _ENV_OVERRIDES = {
+    "QUASHENG_HOST": ("host", str),
     "QUASHENG_OLLAMA_BASE": ("ollama_base", str),
     "QUASHENG_PORT": ("port", int),
     "QUASHENG_NODE_ID": ("node_id", str),
     "QUASHENG_NODE_NAME": ("node_name", str),
     "QUASHENG_SHARED_TOKEN": ("shared_token", str),
     "QUASHENG_MAX_CONCURRENCY": ("max_concurrency", int),
+    "QUASHENG_SHUTDOWN_TIMEOUT": ("shutdown_timeout", float),
 }
 
 
@@ -93,4 +130,6 @@ def load_settings(path: str | Path | None = None) -> Settings:
     # 未显式声明 auth_enabled 时：配了 token 就自动开启
     if "auth_enabled" not in raw and settings.shared_token:
         settings.auth_enabled = True
+
+    validate_settings(settings)
     return settings

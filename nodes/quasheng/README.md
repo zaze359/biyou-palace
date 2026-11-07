@@ -38,18 +38,22 @@ export QUASHENG_CONFIG=nodes/quasheng/config.yaml   # 不设置则只读当前�
 
 | 配置项 | 说明 |
 |---|---|
-| `preload_models` | 启动即预热常驻的模型，消除"首次请求阻塞 30s+" |
-| `capabilities_map` | 能力声明。**未登记的模型默认只有 `chat`** |
-| `max_concurrency` | 并发上限，满载立即 `429` + `Retry-After` |
+| `host` | 监听地址，默认 `127.0.0.1`（仅本机）。非回环地址必须配 `shared_token`，否则拒绝启动 |
+| `preload_models` | 启动即预热常驻的模型，消除"首次请求阻塞 30s+"；名称须与 `ollama list` 完全一致，不存在的模型会被跳过且不会卡住 `loading` |
+| `capabilities_map` | 能力声明。**未登记的模型默认只有 `chat`**；键名同样是 `ollama list` 的真实名称（如 `nomic-embed-text:latest`） |
+| `max_concurrency` | 并发上限，默认 4（契约建议准圣 ≥ 4），满载立即 `429` + `Retry-After`（不做本地排队） |
 | `shared_token` | 配了就自动开启 bearer 鉴权（覆盖全部端点，含 health） |
 | `mem_warn_pct` / `cpu_warn_pct` | `degraded` 判定阈值 |
+| `shutdown_timeout` | 优雅停机等待在途请求的最长秒数，默认 10 |
 
-> ⚠️ 能力必须显式声明：模型没登记进 `capabilities_map` 就没有 embedding 能力，请求 `/v1/embeddings` 会直接 `501`。
+> ⚠️ 能力必须显式声明：模型没登记进 `capabilities_map` 就没有 embedding 能力，请求 `/v1/embeddings` 会直接 `501`；反过来，只有 embedding 能力的模型请求 `/v1/chat/completions` 也会 `501 capability_not_supported`。
+
+> 🔒 默认只监听 `127.0.0.1`。要对外提供服务，必须同时把 `host` 改成实际地址**并**配置 `shared_token`；节点会在启动时校验，缺失则直接失败并打印明确提示（避免裸推理端点暴露到局域网/公网）。
 
 ### 环境变量（`.env.example`）
 
 `nodes/quasheng/.env.example` 列出全部可被环境变量覆盖的配置项，与 `config.py` 的 `_ENV_OVERRIDES` 一一对应：
-`QUASHENG_OLLAMA_BASE` / `QUASHENG_PORT` / `QUASHENG_NODE_ID` / `QUASHENG_NODE_NAME` / `QUASHENG_SHARED_TOKEN` / `QUASHENG_MAX_CONCURRENCY`。
+`QUASHENG_HOST` / `QUASHENG_OLLAMA_BASE` / `QUASHENG_PORT` / `QUASHENG_NODE_ID` / `QUASHENG_NODE_NAME` / `QUASHENG_SHARED_TOKEN` / `QUASHENG_MAX_CONCURRENCY` / `QUASHENG_SHUTDOWN_TIMEOUT`。
 
 ```bash
 cp nodes/quasheng/.env.example .env
@@ -62,8 +66,11 @@ set -a && source .env && set +a     # 进程不会自动读取 .env，需手动�
 
 ```bash
 python -m nodes.quasheng.app
-# 或：uvicorn nodes.quasheng.app:app --host 0.0.0.0 --port 4010
+# 或（默认只监听本机；对外监听需显式指定并配置 shared_token）：
+uvicorn nodes.quasheng.app:app --host 127.0.0.1 --port 4010
 ```
+
+启动时若 Ollama 尚未就绪，节点会按有限次数指数退避重试（1/2/4/8 秒），而不是立即退出；Ollama 版本低于 0.5.x 或重试耗尽才会启动失败。
 
 ## 可视控制面板（/ui）
 
@@ -84,11 +91,11 @@ http://<节点主机>:4010/ui/     # /ui 会自动 307 到 /ui/，不占用 /v1 
 | 区块 | 内容 | 端点 |
 |---|---|---|
 | 节点状态 | status、runtime 与版本、contract_version、node id、max_concurrency、max_context_len、模型列表（标出 loaded） | `GET /v1/health` |
-| 资源与并发 | cpu_pct、mem_used/total、disk_free、queue_len（进度条） | `GET /v1/health` |
+| 资源与并发 | cpu_pct、mem_used/total、disk_free、在途并发（进度条）、真实排队数 queue_len（满载立即 429，故通常为 0） | `GET /v1/health` |
 | 对话测试 | 选模型、流式逐字显示、首 token 耗时与总耗时 | `POST /v1/chat/completions`（`stream: true`） |
 | Embeddings 测试 | 选模型、返回维度与耗时；501 时展示错误码 | `POST /v1/embeddings` |
 | 运行日志 | 最近 N 条事件（时间/级别/消息），按级别过滤 | `GET /v1/logs?limit=N` |
-| 并发压测 | 并发流式请求、逐请求状态码/耗时、queue_len 曲线、汇总 | `POST /v1/chat/completions` × N + `GET /v1/health` 采样 |
+| 并发压测 | 并发流式请求、逐请求状态码/耗时、在途并发曲线、汇总 | `POST /v1/chat/completions` × N + `GET /v1/health` 采样 |
 
 **轮询协调**：状态区与日志区共用**一个 4 秒节拍**（同一 tick 内拉 health + logs），不各自起定时器。压测进行中改由 500ms 采样读取 health（因此暂停常规 health 拉取），只保留日志 4 秒刷新；页面切走或关闭即停止全部轮询与采样。
 
@@ -104,7 +111,7 @@ http://<节点主机>:4010/ui/     # /ui 会自动 307 到 /ui/，不占用 /v1 
 
 写入前统一脱敏：`shared_token` 替换为 `***`，常见绝对路径替换为 `<path>`，消息截断 500 字。**不记录请求 body、上游请求头与日志文件路径**；该端点与其它 `/v1/*` 一样要求 bearer token，无任何例外。
 
-**并发压测**：填并发数（1–8）、模型与提示词后发起 N 个流式请求，逐条显示状态码、耗时与备注；429 单独标色并展示 `Retry-After`。压测期间每 500ms 采样 `queue_len` 画成柱状序列，结束后汇总成功数、429 数、失败数与耗时（最小/中位/最大）。注意：结果受本机模型能力与 `max_concurrency` 配置影响，仅用于功能验证，不代表真实负载基线。
+**并发压测**：填并发数（1–8）、模型与提示词后发起 N 个流式请求，逐条显示状态码、耗时与备注；429 单独标色并展示 `Retry-After`。压测期间每 500ms 采样 `resources.active`（在途并发）画成柱状序列，结束后汇总成功数、429 数、失败数与耗时（最小/中位/最大）。`queue_len` 是真实排队数；本节点满载立即 429、不做本地排队，因此它恒为 0，不再用作并发指标。注意：结果受本机模型能力与 `max_concurrency` 配置影响，仅用于功能验证，不代表真实负载基线。
 
 状态区每 4 秒轮询一次；页面切走（`visibilitychange`）或关闭（`pagehide`）即停止轮询。任何调用失败都按 OpenAI 错误体原样展示 `HTTP 状态 · code · message`，不会只显示「请求失败」；401 会停止轮询并提示重新填写 token。
 
@@ -163,7 +170,7 @@ SMOKE_MOCK_PORT=11499 SMOKE_NODE_PORT=4012 bash scripts/smoke_quasheng.sh
 | 断言 | 预期 |
 |---|---|
 | mock 上游 + 节点启动 | 两者就绪，`/v1/health` 200 |
-| `/v1/health` 关键字段 | node（id/role/runtime/runtime_version/contract_version）、status、models（loaded/capabilities）、resources（queue_len=0、准圣专属字段为 null）、limits |
+| `/v1/health` 关键字段 | node（id/role/runtime/runtime_version/contract_version）、status、models（loaded/capabilities）、resources（queue_len=0、active=0、准圣专属字段为 null）、limits |
 | `/v1/models` | `object=list`，`data[]` 每项 `object=model` |
 | 流式 chat | 200 + `text/event-stream`，chunk 内容拼接完整，以 `data: [DONE]` 收尾 |
 | 无 embedding 能力的模型 | 501 + `capability_not_supported` |
@@ -185,4 +192,5 @@ SMOKE_MOCK_PORT=11499 SMOKE_NODE_PORT=4012 bash scripts/smoke_quasheng.sh
 
 - **`/v1/models` 的 `owned_by`（已对齐契约）**：代理 Ollama `GET /v1/models`，仅把每项 `owned_by` 统一改写为契约 3.2 要求的 `biyou-node`（常量 `MODEL_OWNER`），其余字段原样透传；这是本节点唯一改写上游 JSON 的端点。
 - **`show()` 未实现**：无调用方，模型详情与能力声明来自 `/api/tags` 和 `capabilities_map`，不依赖 `/api/show`。
-- **降级阈值不可用环境变量覆盖**：`mem_warn_pct` / `cpu_warn_pct` 只读 YAML（`QUASHENG_*` 仅覆盖 `.env.example` 列出的 6 项）。
+- **降级阈值不可用环境变量覆盖**：`mem_warn_pct` / `cpu_warn_pct` 只读 YAML（`QUASHENG_*` 仅覆盖 `.env.example` 列出的 8 项）。
+- **`resources.queue_len` 的真实语义**：契约 3.1 定义为"当前排队请求数"。节点采用"满载立即 429、不做本地排队"策略，因此该值恒为 0；在途并发作为附加字段 `resources.active` 暴露，面板与压测使用它。`queue_len` 不再表示在途并发。
