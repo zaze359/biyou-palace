@@ -149,7 +149,7 @@
     {
       "id": "D9",
       "title": "REPL 多轮上下文与 /reset、/model",
-      "status": "pending",
+      "status": "done",
       "files": [
         "nodes/quasheng/cli.py",
         "nodes/quasheng/tests/test_cli.py",
@@ -163,7 +163,7 @@
     {
       "id": "D10",
       "title": "CLI 非 2xx 打印 OpenAI 错误体",
-      "status": "pending",
+      "status": "done",
       "files": [
         "nodes/quasheng/cli.py",
         "nodes/quasheng/tests/test_cli.py"

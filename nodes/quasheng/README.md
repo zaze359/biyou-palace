@@ -164,10 +164,21 @@ http://<节点主机>:4010/ui/     # /ui 会自动 307 到 /ui/，不占用 /v1 
 
 ```bash
 python -m nodes.quasheng.cli --once "你好，介绍一下你自己"
-python -m nodes.quasheng.cli            # 进入交互 REPL，/exit 退出
+python -m nodes.quasheng.cli            # 进入交互 REPL
 ```
 
 CLI **不直连 Ollama**，而是走 `localhost` 的同一套 `/v1/*` 端点——以此证明本地模式与集群消费走完全相同的代码路径。
+
+REPL 命令：
+
+| 命令 | 作用 |
+|---|---|
+| `/reset` | 清空多轮上下文（下一轮从零开始） |
+| `/model <name>` | 运行中切换模型，无需重启 |
+| `/model` | 列出 `/v1/models` 的可用模型 |
+| `/exit` / `/quit` | 退出 |
+
+交互模式会把 `user` / `assistant` 历史逐轮带上，因此支持真正的多轮对话；失败轮次会回滚用户消息，避免污染上下文。非 2xx 响应会打印 `HTTP <status> · <error.code> · <error.message>`，`--once` 失败时以非零码退出，不会静默输出空行。
 
 ## 冒烟验证
 
