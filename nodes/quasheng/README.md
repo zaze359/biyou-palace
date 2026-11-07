@@ -72,6 +72,49 @@ uvicorn nodes.quasheng.app:app --host 127.0.0.1 --port 4010
 
 启动时若 Ollama 尚未就绪，节点会按有限次数指数退避重试（1/2/4/8 秒），而不是立即退出；Ollama 版本低于 0.5.x 或重试耗尽才会启动失败。
 
+## 常驻运行（开机自启）
+
+两套模板分别面向 macOS（launchd）与 Linux（systemd），都包含工作目录、环境变量、崩溃重启与日志去处。模板里的 `__REPO_ROOT__` / `__PYTHON__` / `__USER__` / `__LOG_DIR__` 需要替换为真实绝对路径。
+
+### macOS · launchd
+
+```bash
+mkdir -p ~/Library/Logs/biyou-quasheng          # 对应 __LOG_DIR__
+sed -e "s#__REPO_ROOT__#$PWD#g" \
+    -e "s#__PYTHON__#$PWD/.venv/bin/python#g" \
+    -e "s#__LOG_DIR__#$HOME/Library/Logs/biyou-quasheng#g" \
+    nodes/quasheng/deploy/launchd/com.biyou.quasheng.plist \
+    > ~/Library/LaunchAgents/com.biyou.quasheng.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.biyou.quasheng.plist
+
+tail -f ~/Library/Logs/biyou-quasheng/quasheng.out.log
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.biyou.quasheng.plist   # 停止
+```
+
+`KeepAlive` 只在崩溃/异常退出时拉起；`launchctl bootout` 的正常停止不会触发重启循环。
+
+### Linux · systemd
+
+```bash
+sudo sed -e "s#__REPO_ROOT__#$PWD#g" \
+         -e "s#__PYTHON__#$PWD/.venv/bin/python#g" \
+         -e "s#__USER__#$USER#g" \
+         nodes/quasheng/deploy/systemd/quasheng.service \
+         > /tmp/quasheng.service
+sudo cp /tmp/quasheng.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now quasheng
+
+journalctl -u quasheng -f
+sudo systemctl stop quasheng    # SIGTERM → 优雅停机
+```
+
+### 守护与自恢复
+
+- **进程崩溃**：由 launchd/systemd 按策略拉起；节点自身不退出。`RestartSec` / `ThrottleInterval` 防止重启风暴。
+- **Ollama 未就绪**：启动阶段有限次数退避重试，不会立即退出。
+- **Ollama 运行期抖动**：`/v1/health` 会变 `down`，但进程不崩；上游恢复后 health 自动回到 `ready`（每次 health 都实时探测 tags/ps）。
+- **优雅停机**：`SIGTERM` / `SIGINT` 后停止接受新请求（返回 503 `node_shutting_down`），等待在途流结束，超过 `shutdown_timeout` 才强制退出。uvicorn 以 `timeout_graceful_shutdown=shutdown_timeout` 运行，避免无限等待长流。
+
 ## 可视控制面板（/ui）
 
 节点启动后，用浏览器访问：

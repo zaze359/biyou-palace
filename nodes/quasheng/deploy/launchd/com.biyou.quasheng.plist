@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  准圣节点 launchd 模板（macOS）
+  使用前把 __REPO_ROOT__ / __PYTHON__ / __LOG_DIR__ 替换为真实绝对路径，然后：
+    cp nodes/quasheng/deploy/launchd/com.biyou.quasheng.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.biyou.quasheng.plist
+  查看日志：tail -f __LOG_DIR__/quasheng.out.log __LOG_DIR__/quasheng.err.log
+  停止：launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.biyou.quasheng.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.biyou.quasheng</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-m</string>
+    <string>nodes.quasheng.app</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>QUASHENG_CONFIG</key>
+    <string>__REPO_ROOT__/nodes/quasheng/config.yaml</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <!-- 对外监听时在这里补 QUASHENG_HOST / QUASHENG_SHARED_TOKEN；
+         不便把 token 写进 plist 时，可让 wrapper 先 source .env 再启动 -->
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- 崩溃/异常退出自动拉起；正常 stop 不拉起 -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key>
+    <true/>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/quasheng.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/quasheng.err.log</string>
+</dict>
+</plist>

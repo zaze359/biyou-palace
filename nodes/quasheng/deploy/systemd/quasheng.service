@@ -1,0 +1,43 @@
+# 准圣节点 systemd 模板（Linux）
+#
+# 使用前替换 __REPO_ROOT__ / __PYTHON__ / __USER__，然后：
+#   sudo cp nodes/quasheng/deploy/systemd/quasheng.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now quasheng
+# 查看日志：journalctl -u quasheng -f
+# 停止（发送 SIGTERM，节点会优雅 drain 在途请求）：sudo systemctl stop quasheng
+
+[Unit]
+Description=BiYouPalace 准圣节点智能体（Ollama 薄代理）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO_ROOT__
+
+Environment=PYTHONUNBUFFERED=1
+Environment=QUASHENG_CONFIG=__REPO_ROOT__/nodes/quasheng/config.yaml
+# 可选：把 token/host 等环境变量放在 .env（KEY=VALUE 形式），不存在时忽略
+EnvironmentFile=-__REPO_ROOT__/nodes/quasheng/.env
+
+ExecStart=__PYTHON__ -m nodes.quasheng.app
+
+# 进程守护：异常退出/崩溃后自动重启
+Restart=always
+RestartSec=5
+
+# 优雅停机：SIGTERM → 停止接新请求并等待在途请求（节点 shutdown_timeout=10s）
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# 143 = 128 + SIGTERM，正常停机不视为失败
+SuccessExitStatus=143
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quasheng
+
+[Install]
+WantedBy=multi-user.target

@@ -102,7 +102,7 @@
     {
       "id": "D6",
       "title": "launchd / systemd 常驻模板",
-      "status": "pending",
+      "status": "done",
       "files": [
         "nodes/quasheng/deploy/launchd/com.biyou.quasheng.plist",
         "nodes/quasheng/deploy/systemd/quasheng.service",
@@ -116,7 +116,7 @@
     {
       "id": "D7",
       "title": "启动探针有限退避重试与运行期自恢复",
-      "status": "pending",
+      "status": "done",
       "files": [
         "nodes/quasheng/app.py",
         "nodes/quasheng/tests/test_degradation.py",
@@ -132,7 +132,7 @@
     {
       "id": "D8",
       "title": "优雅停机",
-      "status": "pending",
+      "status": "done",
       "files": [
         "nodes/quasheng/app.py",
         "nodes/quasheng/concurrency.py",
