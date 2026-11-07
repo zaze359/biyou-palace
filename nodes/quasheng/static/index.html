@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>准圣节点 · 控制面板</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel-2:#1c2330; --line:#2b3444;
+    --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950;
+    --warn:#d29922; --bad:#f85149; --gray:#8b949e;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#1b2a41 0%,var(--bg) 55%);
+    color:var(--fg);font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    min-height:100vh}
+  header{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+    padding:14px 20px;background:rgba(13,17,23,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.3px}
+  h1 span{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+  .spacer{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    font-size:12px;border:1px solid var(--line);background:var(--panel-2)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--gray)}
+  .pill.ready .dot{background:var(--ok)} .pill.degraded .dot{background:var(--warn)}
+  .pill.loading .dot{background:var(--accent)} .pill.down .dot{background:var(--bad)}
+  input,select,textarea,button{font:inherit;color:var(--fg);background:var(--panel-2);
+    border:1px solid var(--line);border-radius:8px;padding:7px 10px;outline:none}
+  input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+  button{cursor:pointer;transition:.15s}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:#1f6feb;border-color:#1f6feb;font-weight:600}
+  button.primary:hover{background:#2b7ff5}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  main{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;padding:18px 20px 40px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;
+    box-shadow:0 8px 24px rgba(0,0,0,.25);min-width:0}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);
+    margin:0 0 12px;font-weight:600}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+  .kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
+  .tokens{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  .tag{font-size:11px;padding:2px 7px;border-radius:6px;background:var(--panel-2);
+    border:1px solid var(--line);color:var(--muted)}
+  .badge{font-size:11px;padding:2px 7px;border-radius:6px;font-weight:600}
+  .badge.on{background:rgba(63,185,80,.15);color:var(--ok);border:1px solid rgba(63,185,80,.4)}
+  .badge.off{background:rgba(139,148,158,.12);color:var(--muted);border:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  td.name{font-family:var(--mono);word-break:break-all}
+  .bar{margin:10px 0}
+  .bar .label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .bar .label b{color:var(--fg);font-family:var(--mono);font-weight:500}
+  .track{height:8px;border-radius:6px;background:var(--panel-2);overflow:hidden;border:1px solid var(--line)}
+  .fill{height:100%;width:0;border-radius:6px;background:linear-gradient(90deg,#1f6feb,#58a6ff);transition:width .4s}
+  .fill.ok{background:linear-gradient(90deg,#238636,#3fb950)}
+  .fill.warn{background:linear-gradient(90deg,#9e6a03,#d29922)}
+  .fill.bad{background:linear-gradient(90deg,#a12b2b,#f85149)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row > select{flex:1 1 160px;min-width:0}
+  textarea{width:100%;min-height:64px;resize:vertical;margin-top:8px}
+  .out{margin-top:10px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;min-height:44px;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  .meta{font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:8px;min-height:18px}
+  .err{color:var(--bad);background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.4);
+    border-radius:8px;padding:8px 10px;font-size:12px;margin-top:8px;white-space:pre-wrap;word-break:break-word}
+  .hint{color:var(--warn);font-size:12px;margin-top:8px}
+  .muted{color:var(--muted)}
+  .models{max-height:230px;overflow:auto}
+  @media (max-width:560px){header{padding:12px} main{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>准圣节点 · 控制面板<span id="nodeName"></span></h1>
+  <span id="statusPill" class="pill"><span class="dot"></span><span id="statusText">连接中…</span></span>
+  <div class="spacer"></div>
+  <input id="tokenInput" type="password" placeholder="Bearer token（可留空）" autocomplete="off" style="width:220px">
+  <button id="saveToken">保存 token</button>
+  <button id="refreshBtn">刷新</button>
+</header>
+
+<main>
+  <section class="card">
+    <h2>节点状态</h2>
+    <dl class="kv" id="nodeKv"><dt>状态</dt><dd class="muted">加载中…</dd></dl>
+    <div id="tokenHint" class="hint" hidden></div>
+    <div class="models">
+      <table>
+        <thead><tr><th>模型</th><th>参数</th><th>context</th><th>能力</th><th>loaded</th></tr></thead>
+        <tbody id="modelRows"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>资源与并发</h2>
+    <div class="bar"><div class="label"><span>CPU</span><b id="cpuVal">—</b></div><div class="track"><div id="cpuBar" class="fill"></div></div></div>
+    <div class="bar"><div class="label"><span>内存</span><b id="memVal">—</b></div><div class="track"><div id="memBar" class="fill"></div></div></div>
+    <div class="bar"><div class="label"><span>磁盘可用</span><b id="diskVal">—</b></div><div class="track"><div id="diskBar" class="fill ok"></div></div></div>
+    <div class="bar"><div class="label"><span>并发占用 queue_len</span><b id="queueVal">—</b></div><div class="track"><div id="queueBar" class="fill"></div></div></div>
+    <div class="meta" id="updatedAt"></div>
+  </section>
+
+  <section class="card">
+    <h2>对话测试</h2>
+    <div class="row">
+      <select id="chatModel"></select>
+      <button id="sendChat" class="primary">发送</button>
+      <button id="stopChat" disabled>停止</button>
+    </div>
+    <textarea id="chatInput" placeholder="输入消息，按「发送」流式请求 /v1/chat/completions">你好，用一句话介绍你自己</textarea>
+    <div class="meta" id="chatMeta">首 token：— · 总耗时：—</div>
+    <div class="out" id="chatOut"></div>
+    <div id="chatErr" class="err" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2>Embeddings 测试</h2>
+    <div class="row">
+      <select id="embedModel"></select>
+      <button id="sendEmbed" class="primary">计算</button>
+    </div>
+    <textarea id="embedInput" placeholder="输入要向量化的文本">准圣节点是一个本地推理节点</textarea>
+    <div class="meta" id="embedMeta">维度：— · 耗时：—</div>
+    <div class="out" id="embedOut"></div>
+    <div id="embedErr" class="err" hidden></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var TOKEN_KEY = "quasheng_token";
+  var state = { token: "", healthTimer: null, health: null, chatAbort: null, authBlocked: false };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ------------------------------------------------------------ token
+  try { state.token = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { state.token = ""; }
+  $("tokenInput").value = state.token;
+
+  $("saveToken").addEventListener("click", function () {
+    state.token = $("tokenInput").value.trim();
+    try { state.token ? localStorage.setItem(TOKEN_KEY, state.token) : localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    hideError("chatErr"); hideError("embedErr");
+    $("saveToken").textContent = "已保存";
+    setTimeout(function () { $("saveToken").textContent = "保存 token"; }, 1200);
+    resumePolling();
+  });
+  $("tokenInput").addEventListener("keydown", function (e) { if (e.key === "Enter") $("saveToken").click(); });
+
+  function headers(extra) {
+    var h = Object.assign({}, extra || {});
+    if (state.token) h["Authorization"] = "Bearer " + state.token;
+    return h;
+  }
+
+  function showError(id, status, body, fallback) {
+    var el = $(id);
+    var err = body && body.error ? body.error : null;
+    var text;
+    if (err) {
+      text = "HTTP " + status + " · " + (err.code || "unknown") + "\n" + (err.message || "");
+      if (err.type) text += "\n类型：" + err.type;
+      if (err.param !== undefined && err.param !== null) text += " · 参数：" + err.param;
+    } else {
+      text = "HTTP " + status + " · " + (body ? JSON.stringify(body) : (fallback || "请求失败"));
+    }
+    el.textContent = text;
+    el.hidden = false;
+  }
+  function hideError(id) { var el = $(id); el.hidden = true; el.textContent = ""; }
+
+  function parseJsonSafe(text) { try { return JSON.parse(text); } catch (e) { return null; } }
+
+  // ------------------------------------------------------------ health
+  function refreshHealth() {
+    return fetch("/v1/health", { headers: headers() })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var body = parseJsonSafe(t);
+          if (!r.ok) {
+            if (r.status === 401) { noteAuthFailure(); return; }
+            state.authBlocked = false;
+            renderDown("HTTP " + r.status + " · " +
+              ((body && body.error && (body.error.code + " " + body.error.message)) || "健康检查失败"));
+            return;
+          }
+          state.authBlocked = false;
+          state.health = body;
+          renderHealth(body);
+        });
+      })
+      .catch(function (e) {
+        if (state.authBlocked) return;
+        renderDown(e && e.message ? e.message : "无法连接节点");
+      });
+  }
+
+  function statusClass(s) { return (s === "ready" || s === "degraded" || s === "loading" || s === "down") ? s : ""; }
+
+  function renderHealth(h) {
+    var s = String(h.status || "unknown");
+    $("statusPill").className = "pill " + statusClass(s);
+    $("statusText").textContent = s;
+    $("nodeName").textContent = (h.node && h.node.name ? h.node.name : "") + (h.node && h.node.id ? " · " + h.node.id : "");
+
+    var n = h.node || {}, lim = h.limits || {};
+    setKv($("nodeKv"), [
+      ["status", s],
+      ["runtime", (n.runtime || "—") + (n.runtime_version ? " " + n.runtime_version : "")],
+      ["contract", n.contract_version || "—"],
+      ["role / arch", (n.role || "—") + " / " + (n.arch || "—")],
+      ["max_concurrency", lim.max_concurrency != null ? String(lim.max_concurrency) : "—"],
+      ["max_context_len", lim.max_context_len != null ? String(lim.max_context_len) : "—"]
+    ]);
+
+    var models = h.models || [];
+    var rows = models.map(function (m) {
+      return "<tr><td class='name'>" + esc(m.name) + "</td><td>" + esc(m.size_label || "—") +
+        "</td><td>" + (m.context_len != null ? m.context_len : "—") + "</td><td>" +
+        (m.capabilities || []).map(function (c) { return "<span class='tag'>" + esc(c) + "</span>"; }).join(" ") +
+        "</td><td>" + (m.loaded ? "<span class='badge on'>loaded</span>" : "<span class='badge off'>idle</span>") +
+        "</td></tr>";
+    });
+    $("modelRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='5' class='muted'>无模型</td></tr>";
+    fillSelects(models);
+
+    var r = h.resources || {};
+    bars(r, lim);
+    $("updatedAt").textContent = "更新于 " + (h.updated_at ? h.updated_at.replace("T", " ") : "—");
+  }
+
+  function renderDown(msg) {
+    $("statusPill").className = "pill down";
+    $("statusText").textContent = "unreachable";
+    $("nodeKv").innerHTML = "<dt>错误</dt><dd class='err' style='border:0;padding:0'>" + esc(msg) + "</dd>";
+    $("modelRows").innerHTML = "<tr><td colspan='5' class='muted'>无法获取模型</td></tr>";
+    $("updatedAt").textContent = "更新失败：" + nowStr();
+  }
+
+  function setKv(dl, pairs) {
+    dl.innerHTML = pairs.map(function (p) {
+      return "<dt>" + esc(p[0]) + "</dt><dd>" + esc(String(p[1])) + "</dd>";
+    }).join("");
+  }
+
+  function bars(r, lim) {
+    var cpu = r.cpu_pct;
+    $("cpuVal").textContent = cpu == null ? "null" : cpu.toFixed(1) + "%";
+    setBar("cpuBar", cpu, function (v) { return v >= 85 ? "bad" : (v >= 60 ? "warn" : ""); });
+
+    var used = r.mem_used_mb, total = r.mem_total_mb;
+    if (used == null || total == null || total === 0) {
+      $("memVal").textContent = "null";
+      setBar("memBar", null);
+    } else {
+      var pct = used / total * 100;
+      $("memVal").textContent = used + " / " + total + " MB（" + pct.toFixed(0) + "%）";
+      setBar("memBar", pct, function (v) { return v >= 85 ? "bad" : (v >= 70 ? "warn" : ""); });
+    }
+
+    var disk = r.disk_free_mb;
+    $("diskVal").textContent = disk == null ? "null" : (disk >= 1024 ? (disk / 1024).toFixed(1) + " GB" : disk + " MB");
+    $("diskBar").style.width = "100%";
+    $("diskBar").className = "fill " + (disk != null && disk < 2048 ? "warn" : "ok");
+
+    var q = r.queue_len == null ? 0 : r.queue_len;
+    var max = lim.max_concurrency || 1;
+    $("queueVal").textContent = q + " / " + max;
+    setBar("queueBar", Math.min(100, q / max * 100), function (v) { return v >= 100 ? "bad" : (v > 0 ? "warn" : ""); });
+  }
+
+  function setBar(id, pct, cls) {
+    var el = $(id), w = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+    el.style.width = w + "%";
+    el.className = "fill " + (cls ? cls(w) : "");
+  }
+
+  function fillSelects(models) {
+    var chatSel = $("chatModel"), embSel = $("embedModel");
+    var chat = models.filter(function (m) { return (m.capabilities || []).indexOf("chat") >= 0; });
+    var emb = models.filter(function (m) { return (m.capabilities || []).indexOf("embedding") >= 0; });
+    syncSelect(chatSel, chat, "无可用于 chat 的模型");
+    syncSelect(embSel, emb, "无 embedding 能力模型（/v1/embeddings 将 501）");
+  }
+
+  function syncSelect(sel, models, emptyText) {
+    var prev = sel.value;
+    if (!models.length) {
+      sel.innerHTML = "<option value=''>" + esc(emptyText) + "</option>";
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    sel.innerHTML = models.map(function (m) {
+      return "<option value='" + esc(m.name) + "'>" + esc(m.name) + (m.loaded ? " · loaded" : "") + "</option>";
+    }).join("");
+    if (prev && models.some(function (m) { return m.name === prev; })) sel.value = prev;
+    else if (models.some(function (m) { return m.loaded; })) {
+      sel.value = models.filter(function (m) { return m.loaded; })[0].name;
+    }
+  }
+
+  // ------------------------------------------------------------ 轮询
+  function startPolling() {
+    if (state.healthTimer || state.authBlocked) return;
+    state.healthTimer = setInterval(refreshHealth, 4000);
+  }
+  function stopPolling() {
+    if (state.healthTimer) { clearInterval(state.healthTimer); state.healthTimer = null; }
+  }
+  function onVisibility() {
+    if (document.hidden) stopPolling();
+    else { refreshHealth(); startPolling(); }
+  }
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("pagehide", stopPolling);
+
+  // 401 后停止轮询，避免刷屏；重新保存 token 或点「刷新」后恢复
+  function noteAuthFailure() {
+    state.authBlocked = true;
+    stopPolling();
+    $("statusPill").className = "pill down";
+    $("statusText").textContent = "需要 token";
+    $("updatedAt").textContent = "鉴权失败（401）：请在右上角填写 bearer token 后点「保存 token」";
+    $("tokenHint").textContent = state.token
+      ? "已填写 token 但被拒绝，请确认与节点 shared_token 一致。"
+      : "节点已开启鉴权：请在右上角输入 bearer token 并保存。";
+    $("tokenHint").hidden = false;
+  }
+
+  function resumePolling() {
+    state.authBlocked = false;
+    $("tokenHint").hidden = true;
+    refreshHealth();
+    startPolling();
+  }
+
+  $("refreshBtn").addEventListener("click", function () {
+    hideError("chatErr"); hideError("embedErr");
+    resumePolling();
+  });
+
+  function updateHint() {
+    if (state.authBlocked) return;
+    $("tokenHint").hidden = true;
+  }
+
+  // ------------------------------------------------------------ chat
+  $("sendChat").addEventListener("click", function () {
+    var model = $("chatModel").value;
+    var content = $("chatInput").value.trim();
+    if (!model) { showSimple("chatErr", "没有可用的 chat 模型"); return; }
+    if (!content) { showSimple("chatErr", "请输入消息"); return; }
+
+    hideError("chatErr");
+    $("chatOut").textContent = "";
+    $("chatMeta").textContent = "首 token：等待… · 总耗时：—";
+    $("sendChat").disabled = true;
+    $("stopChat").disabled = false;
+
+    var abort = new AbortController();
+    state.chatAbort = abort;
+    var t0 = performance.now(), ttft = null, acc = "";
+    var payload = { model: model, stream: true, messages: [{ role: "user", content: content }] };
+
+    fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+      signal: abort.signal
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.text().then(function (t) {
+          var body = parseJsonSafe(t);
+          showError("chatErr", resp.status, body, "请求失败");
+          noteAuthFailure();
+          finish();
+        });
+      }
+      if (!resp.body) { showSimple("chatErr", "当前浏览器不支持流式读取"); finish(); return; }
+
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) { complete(); return; }
+          buffer += decoder.decode(res.value, { stream: true });
+          var lines = buffer.split("\n");
+          buffer = lines.pop();
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].replace(/\r$/, "");
+            if (!line.startsWith("data:")) continue;
+            var data = line.slice(5).trim();
+            if (data === "[DONE]") { complete(); return; }
+            var obj = parseJsonSafe(data);
+            if (!obj) continue;
+            if (obj.error) {
+              showError("chatErr", 200, obj, "流内错误");
+              return;
+            }
+            var delta = obj.choices && obj.choices[0] && obj.choices[0].delta;
+            var piece = delta && delta.content;
+            if (piece) {
+              if (ttft === null) ttft = performance.now() - t0;
+              acc += piece;
+              $("chatOut").textContent = acc;
+              $("chatOut").scrollTop = $("chatOut").scrollHeight;
+            }
+          }
+          return pump();
+        });
+      }
+
+      function complete() {
+        var total = performance.now() - t0;
+        $("chatMeta").textContent = "首 token：" + (ttft === null ? "—" : Math.round(ttft) + " ms") +
+          " · 总耗时：" + Math.round(total) + " ms";
+        finish();
+      }
+
+      return pump().catch(function (e) {
+        if (e && e.name === "AbortError") { $("chatMeta").textContent = "已停止（首 token：" + (ttft === null ? "—" : Math.round(ttft) + " ms") + "）"; }
+        else showSimple("chatErr", "流式读取失败：" + (e && e.message ? e.message : e));
+        finish();
+      });
+    }).catch(function (e) {
+      if (e && e.name === "AbortError") { $("chatMeta").textContent = "已停止"; }
+      else showSimple("chatErr", "请求失败：" + (e && e.message ? e.message : e));
+      finish();
+    });
+
+    function finish() {
+      $("sendChat").disabled = false;
+      $("stopChat").disabled = true;
+      state.chatAbort = null;
+    }
+  });
+
+  $("stopChat").addEventListener("click", function () {
+    if (state.chatAbort) state.chatAbort.abort();
+  });
+
+  // ------------------------------------------------------------ embeddings
+  $("sendEmbed").addEventListener("click", function () {
+    var model = $("embedModel").value;
+    var text = $("embedInput").value;
+    if (!model) { showSimple("embedErr", "没有声明 embedding 能力的模型（后端会返回 501）"); return; }
+    if (!text) { showSimple("embedErr", "请输入文本"); return; }
+
+    hideError("embedErr");
+    $("embedOut").textContent = "";
+    $("embedMeta").textContent = "维度：计算中… · 耗时：—";
+    $("sendEmbed").disabled = true;
+    var t0 = performance.now();
+
+    fetch("/v1/embeddings", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ model: model, input: text })
+    }).then(function (resp) {
+      return resp.text().then(function (t) {
+        var body = parseJsonSafe(t);
+        var elapsed = Math.round(performance.now() - t0);
+        if (!resp.ok) {
+          showError("embedErr", resp.status, body, "请求失败");
+          $("embedMeta").textContent = "维度：— · 耗时：" + elapsed + " ms";
+          if (resp.status === 401) noteAuthFailure();
+          return;
+        }
+        var d = body && body.data && body.data[0];
+        var dim = d && d.embedding ? d.embedding.length : null;
+        $("embedMeta").textContent = "维度：" + (dim == null ? "—" : dim) + " · 耗时：" + elapsed + " ms" +
+          " · object：" + (body && body.object ? body.object : "—") + (body && body.model ? " · model：" + body.model : "");
+        var preview = d && d.embedding ? d.embedding.slice(0, 8).map(function (x) { return Number(x).toFixed(4); }).join(", ") : "";
+        $("embedOut").textContent = preview ? preview + " …（前 8 维）" : "（无向量数据）";
+      });
+    }).catch(function (e) {
+      showSimple("embedErr", "请求失败：" + (e && e.message ? e.message : e));
+    }).then(function () {
+      $("sendEmbed").disabled = false;
+    });
+  });
+
+  function showSimple(id, msg) {
+    var el = $(id); el.textContent = msg; el.hidden = false;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function nowStr() { return new Date().toLocaleTimeString(); }
+
+  // 启动
+  refreshHealth();
+  startPolling();
+  updateHint();
+})();
+</script>
+</body>
+</html>

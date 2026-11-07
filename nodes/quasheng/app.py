@@ -11,11 +11,13 @@ import asyncio
 import logging
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import CONTRACT_VERSION, MODEL_OWNER, NODE_ROLE, Settings, load_settings
@@ -31,6 +33,9 @@ from .health import build_health
 from .ollama_client import OllamaClient
 
 logger = logging.getLogger("quasheng")
+
+# 控制面板静态资源目录（单文件 HTML，由 /ui 挂载；不经过 API 鉴权）
+_UI_DIR = Path(__file__).parent / "static"
 
 
 def _configure_logging() -> None:
@@ -334,6 +339,11 @@ def create_app() -> FastAPI:
         async with gate.slot():
             resp = await client.post("/v1/embeddings", payload)
             return _passthrough(resp)
+
+    # 可视控制面板：纯静态页面，本身不需要 token；它调用的 /v1/* 仍走同一套
+    # bearer 鉴权（Starlette 的 Mount 不继承 app 级 dependencies，故这里没有
+    # 为面板开任何鉴权例外，也没有把 token 写进 HTML）。
+    app.mount("/ui", StaticFiles(directory=_UI_DIR, html=True), name="ui")
 
     return app
 

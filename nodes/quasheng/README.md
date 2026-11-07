@@ -65,6 +65,33 @@ python -m nodes.quasheng.app
 # 或：uvicorn nodes.quasheng.app:app --host 0.0.0.0 --port 4010
 ```
 
+## 可视控制面板（/ui）
+
+节点启动后，用浏览器访问：
+
+```text
+http://<节点主机>:4010/ui/     # /ui 会自动 307 到 /ui/，不占用 /v1 前缀
+```
+
+页面是单文件 `nodes/quasheng/static/index.html`（原生 JS + CSS，无构建链、无前端依赖），由 FastAPI `StaticFiles` 挂载到 `/ui`。
+
+**token 填写方式**：右上角输入 `shared_token`，点「保存 token」。token 存在**当前浏览器的 localStorage**（键 `quasheng_token`），之后页面发出的所有请求自动带 `Authorization: Bearer <token>`。token 不写进 HTML，也不落在后端任何位置；换浏览器或换设备需重新填写。未开启鉴权（`shared_token` 为空）时留空即可。
+
+> 静态页本身不需要 token（Starlette `Mount` 不继承 app 级 `dependencies`），**但页面调用的 `/v1/*` 仍走同一套 bearer 鉴权**——后端没有为面板开任何鉴权例外。
+
+四个区块与对应端点：
+
+| 区块 | 内容 | 端点 |
+|---|---|---|
+| 节点状态 | status、runtime 与版本、contract_version、node id、max_concurrency、max_context_len、模型列表（标出 loaded） | `GET /v1/health` |
+| 资源与并发 | cpu_pct、mem_used/total、disk_free、queue_len（进度条） | `GET /v1/health` |
+| 对话测试 | 选模型、流式逐字显示、首 token 耗时与总耗时 | `POST /v1/chat/completions`（`stream: true`） |
+| Embeddings 测试 | 选模型、返回维度与耗时；501 时展示错误码 | `POST /v1/embeddings` |
+
+状态区每 4 秒轮询一次；页面切走（`visibilitychange`）或关闭（`pagehide`）即停止轮询。任何调用失败都按 OpenAI 错误体原样展示 `HTTP 状态 · code · message`，不会只显示「请求失败」；401 会停止轮询并提示重新填写 token。
+
+**适用范围**：本机/内网调试与演示用的可视化壳（无登录态、无多用户隔离），不替代调用方 SDK，也不修改节点配置。
+
 ## 本地模式
 
 ```bash

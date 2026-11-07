@@ -605,3 +605,38 @@ def test_queue_len_reflects_in_flight_stream_and_returns_to_zero():
     assert observed["during"] == 1
     assert observed["after"] == 0
     assert app.state.gate.active == 0
+
+
+# ---------------------------------------------------------------- /ui 控制面板
+
+
+def test_ui_serves_single_file_control_panel():
+    """/ui/ 返回内置静态面板（不经过 API 鉴权，页面自己带 token 调 /v1）。"""
+    client, _ = _build_client(_ok_upstream, auth=True, token="fake-token")
+    resp = client.get("/ui/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "准圣节点 · 控制面板" in resp.text
+    # 页面不得内嵌任何 token
+    assert "fake-token" not in resp.text
+
+
+def test_ui_without_trailing_slash_redirects():
+    client, _ = _build_client(_ok_upstream)
+    resp = client.get("/ui", follow_redirects=False)
+    assert resp.status_code in (307, 308)
+    assert resp.headers["location"].endswith("/ui/")
+
+
+def test_ui_does_not_exempt_v1_from_auth():
+    """挂载静态面板不改变 /v1 行为：开启鉴权后无 token 仍 401。"""
+    client, _ = _build_client(_ok_upstream, auth=True, token="fake-token")
+    assert client.get("/ui/").status_code == 200
+
+    denied = client.get("/v1/health")
+    assert denied.status_code == 401
+    assert denied.json()["error"]["code"] == "invalid_api_key"
+
+    allowed = client.get("/v1/health", headers={"Authorization": "Bearer fake-token"})
+    assert allowed.status_code == 200
+
