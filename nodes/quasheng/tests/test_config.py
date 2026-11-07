@@ -6,7 +6,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from nodes.quasheng.config import ConfigError, Settings, is_loopback, load_settings
+from nodes.quasheng.config import (
+    ConfigError,
+    Secret,
+    Settings,
+    UpstreamModel,
+    UpstreamSettings,
+    check_local_model_conflicts,
+    is_loopback,
+    load_settings,
+)
 
 _EXAMPLE = Path(__file__).parents[1] / "config.example.yaml"
 
@@ -79,3 +88,127 @@ def test_example_config_uses_loopback_and_real_model_tags():
     # 预热白名单必须来自真实 tag（至少带显式 tag，避免精确匹配落空）
     for model in raw["preload_models"]:
         assert ":" in model
+
+
+# ---------------------------------------------------------------- 上游配置
+
+
+_UPSTREAM_YAML = """
+upstreams:
+  - id: relay-a
+    base_url: https://relay.example.com/v1
+    enabled: true
+    api_key_env: TEST_RELAY_KEY
+    visibility: local
+    data_leaves_lan: true
+    models:
+      - gpt-4o-mini
+"""
+
+
+def test_upstream_key_missing_fails_with_actionable_message(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, _UPSTREAM_YAML)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.delenv("TEST_RELAY_KEY", raising=False)
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    message = str(excinfo.value)
+    assert "TEST_RELAY_KEY" in message
+    assert "环境变量" in message
+    assert "sk-" not in message
+
+
+def test_upstream_key_from_env_is_wrapped_as_secret(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, _UPSTREAM_YAML)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+
+    settings = load_settings()
+    assert len(settings.upstreams) == 1
+    upstream = settings.upstreams[0]
+    assert upstream.id == "relay-a"
+    assert upstream.model_for("gpt-4o-mini") is not None
+    assert isinstance(upstream.api_key, Secret)
+    assert upstream.api_key.get() == "sk-live-value"
+    assert str(upstream.api_key) == "<redacted>"
+    assert "sk-live-value" not in repr(upstream.api_key)
+
+
+def test_upstream_disabled_does_not_require_env(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, _UPSTREAM_YAML.replace("enabled: true", "enabled: false"))
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.delenv("TEST_RELAY_KEY", raising=False)
+
+    settings = load_settings()
+    assert settings.upstreams[0].enabled is False
+    assert settings.upstreams[0].api_key is None
+
+
+def test_upstream_inline_api_key_is_rejected(tmp_path, monkeypatch):
+    path = _write_config(
+        tmp_path,
+        _UPSTREAM_YAML.replace("    api_key_env: TEST_RELAY_KEY", "    api_key: sk-inline"),
+    )
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "api_key_env" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _UPSTREAM_YAML.replace("https://relay.example.com/v1", "relay.example.com/v1"),
+        _UPSTREAM_YAML.replace(
+            "https://relay.example.com/v1", "https://user:pass@relay.example.com/v1"
+        ),
+        _UPSTREAM_YAML.replace(
+            "https://relay.example.com/v1", "https://relay.example.com/v1/chat/completions"
+        ),
+        _UPSTREAM_YAML.replace("visibility: local", "visibility: public"),
+        _UPSTREAM_YAML.replace("    models:\n      - gpt-4o-mini\n", ""),
+    ],
+)
+def test_invalid_upstream_fields_are_rejected(tmp_path, monkeypatch, text):
+    path = _write_config(tmp_path, text)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+    with pytest.raises(ConfigError):
+        load_settings()
+
+
+def test_duplicate_provider_id_is_rejected(tmp_path, monkeypatch):
+    duplicate = _UPSTREAM_YAML + _UPSTREAM_YAML.split("upstreams:\n", 1)[1]
+    path = _write_config(tmp_path, duplicate)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "上游 id 重复" in str(excinfo.value)
+
+
+def test_duplicate_remote_model_id_is_rejected(tmp_path, monkeypatch):
+    duplicate = _UPSTREAM_YAML + "      - gpt-4o-mini\n"
+    path = _write_config(tmp_path, duplicate)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "远程模型 id 冲突" in str(excinfo.value)
+
+
+def test_local_model_prefix_conflict_is_rejected():
+    upstream = UpstreamSettings(
+        id="relay-a",
+        base_url="https://relay.example.com/v1",
+        enabled=True,
+        api_key=Secret("sk"),
+        models=[UpstreamModel(id="gpt-4o-mini")],
+    )
+    settings = Settings(upstreams=[upstream])
+
+    check_local_model_conflicts(settings, ["llama3:8b"])
+    with pytest.raises(ConfigError) as excinfo:
+        check_local_model_conflicts(settings, ["relay-a/local-name", "llama3:8b"])
+    assert "relay-a/local-name" in str(excinfo.value)

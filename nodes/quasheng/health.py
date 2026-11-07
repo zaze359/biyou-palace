@@ -74,16 +74,25 @@ def determine_status(
     cpu_pct: float | None,
     settings: Settings,
     on_demand_loading: bool = False,
+    upstream_statuses: list[str] | None = None,
 ) -> str:
     """状态判定（纯函数，便于单测）。优先级：down > loading > degraded > ready。
 
     `loading` 覆盖两类窗口：预热白名单未就绪，以及按需加载中的模型
     （`on_demand_loading`，由 LoadingTracker 提供）。
+
+    上游只降级、不判 down：本地不可用但远程仍可用时节点仍是 degraded，
+    否则网关会把还能服务远程模型的节点整体剔除。未配置上游时
+    （`upstream_statuses` 为空/None）判定与现状完全一致。
     """
+    statuses = upstream_statuses or []
     if not ollama_ok:
-        return "down"
+        # 本地基线不可用；只要还有可用远程就仍是 degraded
+        return "degraded" if any(s == "ready" for s in statuses) else "down"
     if not preload_loaded or on_demand_loading:
         return "loading"
+    if any(s != "ready" for s in statuses):
+        return "degraded"
     if (mem_pct is not None and mem_pct >= settings.mem_warn_pct) or (
         cpu_pct is not None and cpu_pct >= settings.cpu_warn_pct
     ):
@@ -91,10 +100,16 @@ def determine_status(
     return "ready"
 
 
-def _model_entry(tag: dict[str, Any], loaded: set[str], settings: Settings) -> dict[str, Any]:
+def _model_entry(
+    tag: dict[str, Any],
+    loaded: set[str],
+    settings: Settings,
+    *,
+    include_source: bool = False,
+) -> dict[str, Any]:
     name = str(tag.get("name") or tag.get("model") or "")
     details = tag.get("details") or {}
-    return {
+    entry = {
         "name": name,
         "family": details.get("family"),
         "size_label": details.get("parameter_size"),
@@ -102,6 +117,18 @@ def _model_entry(tag: dict[str, Any], loaded: set[str], settings: Settings) -> d
         "loaded": name in loaded,
         "capabilities": settings.capability_for(name),
     }
+    if include_source:
+        # 可选字段：仅在配置了上游时出现，未配置时 health 与现状逐字段一致
+        entry.update(
+            {
+                "provider": None,
+                "source": "local",
+                "available": True,
+                "upstream_status": None,
+                "data_leaves_lan": False,
+            }
+        )
+    return entry
 
 
 async def build_health(
@@ -110,7 +137,16 @@ async def build_health(
     gate: ConcurrencyGate,
     loading: LoadingTracker | None = None,
     warmup_failed: set[str] | None = None,
+    upstream_states: list[dict[str, Any]] | None = None,
+    upstream_models: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """构建 health。
+
+    `upstream_states` / `upstream_models` 为 None 表示未配置上游：此时输出
+    与接入前逐字段一致。配置上游后，本地模型补 provider/source 等可选字段，
+    远程模型追加到 models[]，并新增顶层 upstreams[]。
+    """
+    include_source = upstream_states is not None
     ollama_ok = True
     tags: list[dict[str, Any]] = []
     running: list[dict[str, Any]] = []
@@ -122,7 +158,13 @@ async def build_health(
 
     loaded = {str(m.get("name") or m.get("model")) for m in running}
     loaded_keys = {model_key(name) for name in loaded}
-    models = [_model_entry(t, loaded, settings) for t in tags] if ollama_ok else []
+    models = (
+        [_model_entry(t, loaded, settings, include_source=include_source) for t in tags]
+        if ollama_ok
+        else []
+    )
+    if upstream_models:
+        models.extend(upstream_models)
 
     if loading is not None:
         loading.sync(loaded)
@@ -150,10 +192,11 @@ async def build_health(
         cpu_pct=metrics.get("cpu_pct"),
         settings=settings,
         on_demand_loading=on_demand_loading,
+        upstream_statuses=[str(s.get("status")) for s in (upstream_states or [])],
     )
 
     known_context = [m["context_len"] for m in models if m.get("context_len")]
-    return {
+    payload = {
         "node": {
             "id": settings.node_id,
             "name": settings.node_name,
@@ -172,3 +215,7 @@ async def build_health(
         },
         "updated_at": datetime.now().astimezone().isoformat(),
     }
+    if upstream_states is not None:
+        # 未配置上游时省略该键：health 与接入前逐字段一致
+        payload["upstreams"] = upstream_states
+    return payload

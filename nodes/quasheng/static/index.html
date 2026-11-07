@@ -355,7 +355,11 @@
     }
     sel.disabled = false;
     sel.innerHTML = models.map(function (m) {
-      return "<option value='" + esc(m.name) + "'>" + esc(m.name) + (m.loaded ? " · loaded" : "") + "</option>";
+      // 配置上游后 health 会带 source：下拉里显式区分本机模型与远程模型
+      var source = m.source === "upstream"
+        ? " · 远程/" + (m.provider || "")
+        : (m.source === "local" ? " · 本地" : "");
+      return "<option value='" + esc(m.name) + "'>" + esc(m.name) + source + (m.loaded ? " · loaded" : "") + "</option>";
     }).join("");
     if (prev && models.some(function (m) { return m.name === prev; })) sel.value = prev;
     else if (models.some(function (m) { return m.loaded; })) {

@@ -1,0 +1,147 @@
+{
+  "id": "quasheng-upstream-bridging-p0",
+  "name": "quasheng-upstream-bridging-p0",
+  "title": "准圣节点最小上游桥接（P0）",
+  "description": "按 11-08-upstream-provider-bridging/design.md 的 P0（方案 A）落地：静态上游清单 + provider 前缀路由 + chat 直通 + 默认本地可见 + 密钥仅环境变量。严格限定范围，不做聚合/动态发现/回退/计费/上游 embeddings。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "nodes/quasheng",
+  "package": null,
+  "priority": "P0",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-08",
+  "completedAt": "2026-11-08",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "U1",
+      "title": "配置：upstreams 列表与密钥仅环境变量",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/config.py",
+        "nodes/quasheng/tests/test_config.py"
+      ],
+      "acceptance": "upstreams 支持 id/base_url/api_key_env/connect_timeout_s/timeout_s/max_concurrency/models/visibility/data_leaves_lan；不配置时行为与现状一致；密钥只从环境变量读取，缺失时启动失败并提示变量名；拒绝配置文件内联 api_key；base_url 必须是 http(s) 且指向 /v1",
+      "depends_on": [],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U2",
+      "title": "命名与唯一性校验",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/config.py",
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/tests/test_config.py"
+      ],
+      "acceptance": "远程模型对外 id 为 <provider>/<model>，本地 id 不变；provider id 与远程全 id 重复在配置期失败；启动期用 /api/tags 校验本地模型首段不占用已启用 provider 前缀，冲突直接失败并列出冲突项",
+      "depends_on": ["U1"],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "U3",
+      "title": "上游客户端与运行时并发",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/upstream.py",
+        "nodes/quasheng/tests/test_upstream.py"
+      ],
+      "acceptance": "httpx 客户端只使用节点自持密钥、不转发调用方 Authorization；每上游独立并发名额，满载立即 429 upstream_capacity + Retry-After 1，不排队；错误体与日志经密钥/base_url 脱敏",
+      "depends_on": ["U1"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U4",
+      "title": "路由与可见性",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/tests/test_upstream.py"
+      ],
+      "acceptance": "精确匹配本地走原路径；<provider>/<model> 走对应上游；未知模型/未知 provider/不可见来源统一 404 model_not_found，不做模糊匹配；visibility 默认 local，非回环来源访问 local 模型 404",
+      "depends_on": ["U2", "U3"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U5",
+      "title": "chat 直通与流式错误",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/tests/test_upstream.py"
+      ],
+      "acceptance": "流式/非流式 chat 原样转发（仅 model 换回上游原生 id）；上游 4xx/5xx 按原状态码 + OpenAI 错误体返回，429 透传 Retry-After；流开始后上游中断发 SSE error 帧 upstream_stream_aborted 并关闭，不补 [DONE]",
+      "depends_on": ["U3"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U6",
+      "title": "模型发现与健康",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py",
+        "nodes/quasheng/health.py",
+        "nodes/quasheng/tests/test_upstream.py"
+      ],
+      "acceptance": "/v1/models 远程项带 provider/source/available，owned_by 仍为 biyou-node；visibility=local 不进 /v1/models；上游不可达时上游标记 down、节点 degraded 不判 down（本地不可用但远程可用也为 degraded）；未配置上游时 health/models 逐字段不变；上游不影响全局 max_concurrency/queue_len",
+      "depends_on": ["U4"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U7",
+      "title": "密钥零泄漏断言与 UI 最小适配",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/tests/test_upstream.py",
+        "nodes/quasheng/static/index.html"
+      ],
+      "acceptance": "日志/models/health/错误体/响应头四处断言密钥与 base_url 零泄漏；上游响应头不转发；UI 模型下拉在配置上游后能区分本地与远程来源，其余不动",
+      "depends_on": ["U5", "U6"],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "U8",
+      "title": "文档与回归",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/README.md",
+        "nodes/quasheng/.env.example",
+        "nodes/quasheng/config.example.yaml"
+      ],
+      "acceptance": "README 与 .env.example 说明上游配置方式、密钥只从环境变量读取与出网提示；config.example.yaml 提供注释版 upstreams 示例；现有 86 用例与新增用例全部通过，smoke 脚本通过",
+      "depends_on": ["U1"],
+      "parallel": false,
+      "size": "S"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-quasheng-node-agent",
+  "relatedFiles": [
+    ".trellis/tasks/11-08-upstream-provider-bridging/design.md",
+    "docs/node-agent-contract.md",
+    "nodes/quasheng/"
+  ],
+  "notes": "实现范围严格限定为设计稿 P0。已知边界：单节点可配多个静态上游但无聚合；不做动态发现、跨上游回退、用量计费、上游 embeddings；不做调用方 Authorization 转发；上游请求遵循 HTTP(S)_PROXY，本地 Ollama 仍直连。需要真实上游才能验证的项见任务报告。",
+  "meta": {
+    "commits": [],
+    "tests": "120 passed",
+    "smoke": "18/18 assertions passed",
+    "realUpstreamVerification": [
+      "真实中转站的鉴权成功路径、429 限流与流式中断行为未验证（单测使用 MockTransport）",
+      "真实上游的 SSE chunk 形状/错误体差异未验证（当前按原样透传，不做解析）",
+      "企业代理（HTTP(S)_PROXY）下的出网连通性未验证"
+    ]
+  }
+}

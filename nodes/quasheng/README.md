@@ -9,6 +9,7 @@
 调用方 ──▶ FastAPI ──┬─▶ 切面：bearer 鉴权 / 响应头 / 429 并发闸门 / 断连取消
                      ├─▶ 代理：Ollama /v1/chat/completions（SSE **原样透传**）
                      ├─▶ 代理：Ollama /v1/models · /v1/embeddings
+                     ├─▶ 可选：<provider>/<model> 直通外部 OpenAI 兼容上游（默认关闭）
                      └─▶ 原生：/api/tags + /api/ps + psutil ──▶ /v1/health
 ```
 
@@ -45,6 +46,7 @@ export QUASHENG_CONFIG=nodes/quasheng/config.yaml   # 不设置则只读当前�
 | `shared_token` | 配了就自动开启 bearer 鉴权（覆盖全部端点，含 health） |
 | `mem_warn_pct` / `cpu_warn_pct` | `degraded` 判定阈值 |
 | `shutdown_timeout` | 优雅停机等待在途请求的最长秒数，默认 10 |
+| `upstreams` | 可选的外部 OpenAI 兼容上游列表（默认空 = 行为与未接入时完全一致），见下节 |
 
 > ⚠️ 能力必须显式声明：模型没登记进 `capabilities_map` 就没有 embedding 能力，请求 `/v1/embeddings` 会直接 `501`；反过来，只有 embedding 能力的模型请求 `/v1/chat/completions` 也会 `501 capability_not_supported`。
 
@@ -55,12 +57,46 @@ export QUASHENG_CONFIG=nodes/quasheng/config.yaml   # 不设置则只读当前�
 `nodes/quasheng/.env.example` 列出全部可被环境变量覆盖的配置项，与 `config.py` 的 `_ENV_OVERRIDES` 一一对应：
 `QUASHENG_HOST` / `QUASHENG_OLLAMA_BASE` / `QUASHENG_PORT` / `QUASHENG_NODE_ID` / `QUASHENG_NODE_NAME` / `QUASHENG_SHARED_TOKEN` / `QUASHENG_MAX_CONCURRENCY` / `QUASHENG_SHUTDOWN_TIMEOUT`。
 
+上游密钥变量名由各上游的 `api_key_env` 自行指定（示例见 `.env.example` 中的 `QUASHENG_UPSTREAM_RELAY_A_KEY`），节点启动时按名读取。
+
 ```bash
 cp nodes/quasheng/.env.example .env
 set -a && source .env && set +a     # 进程不会自动读取 .env，需手动导入后再启动
 ```
 
 优先级：**环境变量 > config.yaml > 默认值**。其中 `QUASHENG_CONFIG` 只决定 YAML 路径（默认 `./config.yaml`），不属于字段覆盖；`QUASHENG_SHARED_TOKEN` 留空等同未设置。降级阈值 `mem_warn_pct` / `cpu_warn_pct` 暂无环境变量覆盖，只能写在 YAML。
+
+### 外部上游（可选，P0 最小桥接）
+
+节点可以额外接入一个或多个**静态配置**的 OpenAI 兼容上游（中转站 / 其他推理服务），用于「本机自用外部模型」。不配置 `upstreams` 时，`/v1/chat/completions`、`/v1/models`、`/v1/health` 与未接入前逐字段一致。
+
+```yaml
+upstreams:
+  - id: relay-a                 # provider id，同时作为远程模型 id 前缀
+    base_url: https://relay.example.com/v1   # 必须指向上游 /v1 根
+    enabled: true               # 默认 false：只有显式开启才参与探活/列表/路由
+    api_key_env: QUASHENG_UPSTREAM_RELAY_A_KEY   # 密钥只从该环境变量读取
+    connect_timeout_s: 10
+    timeout_s: 120
+    max_concurrency: 4          # 单上游独立名额；满载立即 429，不排队
+    visibility: local           # local | cluster | both，默认 local
+    data_leaves_lan: true       # 声明会把 prompt 送出局域网
+    models:                     # 静态清单；P0 不做动态发现
+      - id: gpt-4o-mini
+        capabilities: [chat]
+        context_len: 128000
+```
+
+行为约定：
+
+- **模型命名**：远程模型对外 id 为 `<provider>/<model>`（如 `relay-a/gpt-4o-mini`）；本地模型 id 保持不变。启动时会校验本地模型首段不得占用已启用的 provider 前缀，冲突直接拒绝启动并列出冲突项。
+- **路由**：精确匹配本地模型走原路径；`<provider>/<model>` 走对应上游；未知 provider/模型或当前调用方不可见，统一 `404 model_not_found`，不做模糊匹配、不泄漏模型是否存在。
+- **直通**：流式与非流式 chat 原样转发（仅把 `model` 换回上游原生 id，其余字段不解析、不改写）；上游错误按原状态码 + OpenAI 错误体返回；流开始后上游中断会发一帧 SSE `error`（`upstream_stream_aborted`）并关闭，**不补 `data: [DONE]`**。
+- **可见性**：`visibility: local` 时只允许回环来源调用；非回环来源访问该模型返回 404。`/v1/models` 只列出 `cluster` / `both` 的远程模型；`/v1/health` 对回环来源额外展示 `local` 模型的可用性。
+- **密钥安全**：密钥只经 `api_key_env` 读取；缺失时启动直接失败并提示变量名（不会静默降级）。密钥与 `base_url` 不进入日志、`/v1/models`、`/v1/health`、错误体或响应头；节点使用自持密钥访问上游，**不转发调用方的 `Authorization`**。
+- **健康**：上游不可达时单个上游标记 `down`，节点整体最多降为 `degraded`（本地正常时不判 `down`；本地不可用但远程可用时也判 `degraded`）。上游不影响全局 `max_concurrency` 与 `queue_len` 默认值。
+- **出网提示**：`data_leaves_lan: true` 会在启动日志与 health 中明示「prompt 会送出局域网」；集群可见（`visibility != local`）时为警告级。请确认上游可信、链路加密（公网建议 `https`），并注意企业代理：**本地 Ollama 仍强制直连（`trust_env=False`），上游请求则遵循 `HTTP(S)_PROXY` 环境变量**。
+- **P0 边界**：不做多上游聚合、动态发现、跨上游回退、用量计费；`/v1/embeddings` 不桥接到上游（远程模型一律按不可用处理）。
 
 ## 运行
 
