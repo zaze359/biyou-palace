@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import logbuffer
 from .config import CONTRACT_VERSION, MODEL_OWNER, NODE_ROLE, Settings, load_settings
 from .concurrency import ConcurrencyGate
 from .errors import (
@@ -70,12 +71,29 @@ async def require_auth(
         return
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or token != settings.shared_token:
+        # 只记录“失败”这一事实，不记录调用方提供的 token 值
+        logbuffer.record("WARNING", "auth", "鉴权失败：缺少或无效的 bearer token")
         raise NodeError(
             "缺少或无效的 bearer token",
             status=401,
             code="invalid_api_key",
             type_="invalid_request_error",
         )
+
+
+def _record_upstream_error(status: int, body: Any) -> None:
+    """把上游错误收敛成一条脱敏事件（不写请求头/请求体）。"""
+    code = "unknown"
+    message = ""
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        code = str(body["error"].get("code") or code)
+        message = str(body["error"].get("message") or "")
+    tail = f" · {message[:120]}" if message else ""
+    logbuffer.record(
+        "ERROR" if status >= 500 else "WARNING",
+        "upstream",
+        f"上游错误：HTTP {status} · {code}{tail}",
+    )
 
 
 def _passthrough(resp) -> JSONResponse:
@@ -91,6 +109,8 @@ def _passthrough(resp) -> JSONResponse:
                 "code": "upstream_bad_response",
             }
         }
+    if resp.status_code >= 400:
+        _record_upstream_error(resp.status_code, body)
     return JSONResponse(status_code=resp.status_code, content=body)
 
 
@@ -126,11 +146,13 @@ async def _stream_body(request: Request, upstream, stack: AsyncExitStack, gate: 
         async for chunk in upstream.aiter_bytes():
             if await request.is_disconnected():
                 logger.info("客户端断开，中止上游生成")
+                logbuffer.record("WARNING", "disconnect", "客户端断开，中止上游生成")
                 break
             yield chunk
     except (asyncio.CancelledError, GeneratorExit):
         # Starlette 在客户端断开时会取消流任务；显式断连检查可能来不及触发。
         logger.info("客户端断开，中止上游生成")
+        logbuffer.record("WARNING", "disconnect", "客户端断开，中止上游生成")
         raise
     finally:
         await stack.aclose()
@@ -174,11 +196,18 @@ async def _warmup(client: OllamaClient, settings: Settings) -> None:
                     resp.status_code,
                     elapsed_ms,
                 )
+                logbuffer.record(
+                    "WARNING", "warmup", f"预热 {model} 失败：{path} HTTP {resp.status_code}，{elapsed_ms} ms"
+                )
             else:
                 logger.info("预热模型 %s 完成：路径=%s，耗时 %d ms", model, path, elapsed_ms)
+                logbuffer.record("INFO", "warmup", f"预热 {model} 完成：{path}，{elapsed_ms} ms")
         except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             logger.warning("预热模型 %s 异常：路径=%s，耗时 %d ms，%s", model, path, elapsed_ms, exc)
+            logbuffer.record(
+                "WARNING", "warmup", f"预热 {model} 异常：{path}，{elapsed_ms} ms，{exc}"
+            )
 
 
 # ---------------------------------------------------------------- 生命周期
@@ -191,15 +220,18 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.client = client
     app.state.gate = ConcurrencyGate(settings.max_concurrency)
+    logbuffer.configure(settings.shared_token)  # 脱敏用的 token，仅内存
 
     try:
         await client.probe()  # 版本强约束：Ollama ≥ 0.5.x，否则启动即失败
     except NodeError as exc:
         logger.error("启动失败：%s", exc.message)
+        logbuffer.record("ERROR", "startup", f"启动失败：{exc.message}")
         raise
     logger.info(
         "准圣节点启动：%s（%s）→ Ollama %s", settings.node_id, settings.node_name, settings.ollama_base
     )
+    logbuffer.record("INFO", "startup", f"节点启动：{settings.node_id}（{settings.node_name}）")
     await _warmup(client, settings)
 
     yield
@@ -236,6 +268,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(ConcurrencyLimitExceeded)
     async def handle_concurrency(request: Request, exc: ConcurrencyLimitExceeded):
+        settings: Settings | None = getattr(request.app.state, "settings", None)
+        limit = settings.max_concurrency if settings else None
+        logbuffer.record("WARNING", "concurrency", f"并发拒绝：已达上限 {limit}，返回 429")
         return openai_error(
             exc.message,
             status=exc.status,
@@ -269,6 +304,7 @@ def create_app() -> FastAPI:
         # 500 由 ServerErrorMiddleware 直接返回，绕过了自定义 http 中间件，
         # 因此这里显式补上 X-Node-* 响应头。
         logger.exception("未捕获异常：%s %s", request.method, request.url.path)
+        logbuffer.record("ERROR", "exception", f"未捕获异常：{type(exc).__name__}: {exc}")
         return JSONResponse(
             status_code=500,
             content=openai_error_payload("节点内部错误", type_="server_error", code="internal_error"),
@@ -309,6 +345,7 @@ def create_app() -> FastAPI:
             # 200 + SSE 正文（那样调用方会以为流已开始，错误体被当成 chunk）。
             if upstream.status_code >= 400:
                 body = await _read_upstream_error(upstream)
+                _record_upstream_error(upstream.status_code, body)
                 await stack.aclose()
                 await gate.release()
                 return JSONResponse(status_code=upstream.status_code, content=body)
@@ -339,6 +376,11 @@ def create_app() -> FastAPI:
         async with gate.slot():
             resp = await client.post("/v1/embeddings", payload)
             return _passthrough(resp)
+
+    @app.get("/v1/logs")
+    async def logs(limit: int = 50):
+        """最近的运行事件（白名单环形缓冲，已脱敏；limit 夹到 1..200）。"""
+        return JSONResponse(content=logbuffer.recent(limit))
 
     # 可视控制面板：纯静态页面，本身不需要 token；它调用的 /v1/* 仍走同一套
     # bearer 鉴权（Starlette 的 Mount 不继承 app 级 dependencies，故这里没有

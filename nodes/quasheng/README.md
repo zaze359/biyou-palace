@@ -79,7 +79,7 @@ http://<节点主机>:4010/ui/     # /ui 会自动 307 到 /ui/，不占用 /v1 
 
 > 静态页本身不需要 token（Starlette `Mount` 不继承 app 级 `dependencies`），**但页面调用的 `/v1/*` 仍走同一套 bearer 鉴权**——后端没有为面板开任何鉴权例外。
 
-四个区块与对应端点：
+六个区块与对应端点：
 
 | 区块 | 内容 | 端点 |
 |---|---|---|
@@ -87,6 +87,24 @@ http://<节点主机>:4010/ui/     # /ui 会自动 307 到 /ui/，不占用 /v1 
 | 资源与并发 | cpu_pct、mem_used/total、disk_free、queue_len（进度条） | `GET /v1/health` |
 | 对话测试 | 选模型、流式逐字显示、首 token 耗时与总耗时 | `POST /v1/chat/completions`（`stream: true`） |
 | Embeddings 测试 | 选模型、返回维度与耗时；501 时展示错误码 | `POST /v1/embeddings` |
+| 运行日志 | 最近 N 条事件（时间/级别/消息），按级别过滤 | `GET /v1/logs?limit=N` |
+| 并发压测 | 并发流式请求、逐请求状态码/耗时、queue_len 曲线、汇总 | `POST /v1/chat/completions` × N + `GET /v1/health` 采样 |
+
+**轮询协调**：状态区与日志区共用**一个 4 秒节拍**（同一 tick 内拉 health + logs），不各自起定时器。压测进行中改由 500ms 采样读取 health（因此暂停常规 health 拉取），只保留日志 4 秒刷新；页面切走或关闭即停止全部轮询与采样。
+
+**运行日志（`GET /v1/logs`）**：返回 `{lines:[{time,level,event,message}], limit, capacity, total}`，`limit` 默认 50、夹到 1..200。数据源是进程内的白名单环形缓冲（容量 200），只记录这些事件：
+
+- `startup`：启动成功 / 探针失败
+- `warmup`：模型名 + 路径 + 耗时（ms）
+- `auth`：鉴权失败（不记录调用方 token 值）
+- `concurrency`：并发拒绝（含上限）
+- `upstream`：上游错误状态码 + `code` + 截短消息
+- `disconnect`：客户端断连中止
+- `exception`：未捕获异常类型与消息（不写堆栈）
+
+写入前统一脱敏：`shared_token` 替换为 `***`，常见绝对路径替换为 `<path>`，消息截断 500 字。**不记录请求 body、上游请求头与日志文件路径**；该端点与其它 `/v1/*` 一样要求 bearer token，无任何例外。
+
+**并发压测**：填并发数（1–8）、模型与提示词后发起 N 个流式请求，逐条显示状态码、耗时与备注；429 单独标色并展示 `Retry-After`。压测期间每 500ms 采样 `queue_len` 画成柱状序列，结束后汇总成功数、429 数、失败数与耗时（最小/中位/最大）。注意：结果受本机模型能力与 `max_concurrency` 配置影响，仅用于功能验证，不代表真实负载基线。
 
 状态区每 4 秒轮询一次；页面切走（`visibilitychange`）或关闭（`pagehide`）即停止轮询。任何调用失败都按 OpenAI 错误体原样展示 `HTTP 状态 · code · message`，不会只显示「请求失败」；401 会停止轮询并提示重新填写 token。
 

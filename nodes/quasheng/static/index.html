@@ -69,6 +69,18 @@
   .hint{color:var(--warn);font-size:12px;margin-top:8px}
   .muted{color:var(--muted)}
   .models{max-height:230px;overflow:auto}
+  .logs{max-height:300px;overflow:auto;font-family:var(--mono);font-size:12px}
+  .logline{display:flex;gap:8px;padding:3px 0;border-bottom:1px dashed rgba(43,52,68,.7)}
+  .logline:last-child{border-bottom:0}
+  .lv{flex:0 0 64px;font-weight:600}
+  .lv.INFO{color:var(--accent)} .lv.WARNING{color:var(--warn)} .lv.ERROR{color:var(--bad)}
+  .lt{flex:0 0 72px;color:var(--muted)}
+  .lm{flex:1;min-width:0;word-break:break-word}
+  .queue{display:flex;align-items:flex-end;gap:2px;height:56px;margin-top:10px;
+    border-bottom:1px solid var(--line);padding-bottom:2px;overflow:hidden}
+  .qbar{flex:1 1 0;min-width:2px;background:linear-gradient(180deg,#58a6ff,#1f6feb);
+    border-radius:2px 2px 0 0}
+  .qbar.hot{background:linear-gradient(180deg,#d29922,#9e6a03)}
   @media (max-width:560px){header{padding:12px} main{padding:12px}}
 </style>
 </head>
@@ -128,6 +140,42 @@
     <div class="out" id="embedOut"></div>
     <div id="embedErr" class="err" hidden></div>
   </section>
+
+  <section class="card">
+    <h2>运行日志 <span class="muted" id="logMeta"></span></h2>
+    <div class="row">
+      <select id="logLevel">
+        <option value="">全部级别</option>
+        <option value="INFO">INFO</option>
+        <option value="WARNING">WARNING</option>
+        <option value="ERROR">ERROR</option>
+      </select>
+      <input id="logLimit" type="number" min="1" max="200" value="50" title="显示最近 N 条" style="width:90px">
+      <button id="logRefresh">刷新日志</button>
+    </div>
+    <div class="out logs" id="logOut"><span class="muted">加载中…</span></div>
+  </section>
+
+  <section class="card">
+    <h2>并发压测</h2>
+    <div class="row">
+      <input id="stressConcurrency" type="number" min="1" max="8" value="4" title="并发数" style="width:80px">
+      <select id="stressModel"></select>
+      <button id="startStress" class="primary">开始压测</button>
+      <button id="stopStress" disabled>停止</button>
+    </div>
+    <textarea id="stressPrompt">用一句话说明什么是本地推理</textarea>
+    <div class="meta" id="stressMeta">并发：— · queue_len 峰值：—</div>
+    <div class="models" style="max-height:220px">
+      <table>
+        <thead><tr><th>#</th><th>状态</th><th>耗时</th><th>备注</th></tr></thead>
+        <tbody id="stressRows"><tr><td colspan="4" class="muted">未运行</td></tr></tbody>
+      </table>
+    </div>
+    <div class="queue" id="queueBars"></div>
+    <div class="meta" id="queueSeries">queue_len：—</div>
+    <div class="out" id="stressSummary" hidden></div>
+  </section>
 </main>
 
 <script>
@@ -135,7 +183,9 @@
   "use strict";
 
   var TOKEN_KEY = "quasheng_token";
-  var state = { token: "", healthTimer: null, health: null, chatAbort: null, authBlocked: false };
+  var state = { token: "", healthTimer: null, health: null, chatAbort: null, authBlocked: false,
+    logs: [], logTotal: null };
+  var stress = { running: false, aborts: [], results: [], samples: [], timer: null, startedAt: 0 };
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -193,6 +243,7 @@
           state.authBlocked = false;
           state.health = body;
           renderHealth(body);
+          return body;
         });
       })
       .catch(function (e) {
@@ -282,11 +333,12 @@
   }
 
   function fillSelects(models) {
-    var chatSel = $("chatModel"), embSel = $("embedModel");
+    var chatSel = $("chatModel"), embSel = $("embedModel"), stressSel = $("stressModel");
     var chat = models.filter(function (m) { return (m.capabilities || []).indexOf("chat") >= 0; });
     var emb = models.filter(function (m) { return (m.capabilities || []).indexOf("embedding") >= 0; });
     syncSelect(chatSel, chat, "无可用于 chat 的模型");
     syncSelect(embSel, emb, "无 embedding 能力模型（/v1/embeddings 将 501）");
+    syncSelect(stressSel, chat, "无可用于压测的 chat 模型");
   }
 
   function syncSelect(sel, models, emptyText) {
@@ -307,19 +359,31 @@
   }
 
   // ------------------------------------------------------------ 轮询
+  // 单一 4 秒节拍同时拉 health + logs，避免两个独立定时器重复请求。
+  // 压测进行中由 500ms 采样负责 health，这里只刷新日志。
+  function pollTick() {
+    var jobs = [refreshLogs()];
+    if (!stress.running) jobs.push(refreshHealth());
+    return Promise.all(jobs);
+  }
   function startPolling() {
     if (state.healthTimer || state.authBlocked) return;
-    state.healthTimer = setInterval(refreshHealth, 4000);
+    state.healthTimer = setInterval(pollTick, 4000);
   }
   function stopPolling() {
     if (state.healthTimer) { clearInterval(state.healthTimer); state.healthTimer = null; }
   }
   function onVisibility() {
-    if (document.hidden) stopPolling();
-    else { refreshHealth(); startPolling(); }
+    if (document.hidden) {
+      stopPolling();
+      setStressSampling(false);
+    } else {
+      refreshHealth(); refreshLogs(); startPolling();
+      if (stress.running) setStressSampling(true);
+    }
   }
   document.addEventListener("visibilitychange", onVisibility);
-  window.addEventListener("pagehide", stopPolling);
+  window.addEventListener("pagehide", function () { stopPolling(); setStressSampling(false); });
 
   // 401 后停止轮询，避免刷屏；重新保存 token 或点「刷新」后恢复
   function noteAuthFailure() {
@@ -338,6 +402,7 @@
     state.authBlocked = false;
     $("tokenHint").hidden = true;
     refreshHealth();
+    refreshLogs();
     startPolling();
   }
 
@@ -350,6 +415,235 @@
     if (state.authBlocked) return;
     $("tokenHint").hidden = true;
   }
+
+  // ------------------------------------------------------------ 运行日志
+  function clampLogLimit() {
+    var n = parseInt($("logLimit").value, 10);
+    if (!n || n < 1) n = 50;
+    if (n > 200) n = 200;
+    $("logLimit").value = n;
+    return n;
+  }
+
+  function refreshLogs() {
+    var limit = clampLogLimit();
+    return fetch("/v1/logs?limit=" + limit, { headers: headers() })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var body = parseJsonSafe(t);
+          if (!r.ok) {
+            if (r.status === 401) { noteAuthFailure(); return; }
+            $("logMeta").textContent = "HTTP " + r.status + " · " +
+              ((body && body.error && (body.error.code + " " + body.error.message)) || "日志拉取失败");
+            return;
+          }
+          state.logs = (body && body.lines) || [];
+          state.logTotal = body ? body.total : null;
+          renderLogs();
+        });
+      })
+      .catch(function (e) {
+        if (!state.authBlocked) $("logMeta").textContent = "日志拉取失败：" + (e && e.message ? e.message : e);
+      });
+  }
+
+  function renderLogs() {
+    var level = $("logLevel").value;
+    var lines = (state.logs || []).filter(function (l) { return !level || l.level === level; });
+    $("logMeta").textContent = (state.logTotal != null ? "共 " + state.logTotal + " 条 · " : "") +
+      "显示 " + lines.length + " 条";
+    if (!lines.length) { $("logOut").innerHTML = "<span class='muted'>暂无该级别日志</span>"; return; }
+    $("logOut").innerHTML = lines.slice().reverse().map(function (l) {
+      var full = String(l.time || "").replace("T", " ");
+      var t = full.indexOf(" ") >= 0 ? full.split(" ")[1] : full;
+      return "<div class='logline'><span class='lv " + esc(l.level) + "'>" + esc(l.level) + "</span>" +
+        "<span class='lt'>" + esc(t) + "</span><span class='lm'>" + esc(l.message) + "</span></div>";
+    }).join("");
+  }
+
+  $("logRefresh").addEventListener("click", function () { refreshLogs(); });
+  $("logLevel").addEventListener("change", renderLogs);
+  $("logLimit").addEventListener("change", function () { refreshLogs(); });
+
+  // ------------------------------------------------------------ 并发压测
+  function stressNum() {
+    var n = parseInt($("stressConcurrency").value, 10);
+    if (!n || n < 1) n = 1;
+    if (n > 8) n = 8;
+    $("stressConcurrency").value = n;
+    return n;
+  }
+
+  function setStressButtons(running) {
+    $("startStress").disabled = running;
+    $("stopStress").disabled = !running;
+  }
+
+  function setStressSampling(on) {
+    if (on) {
+      if (stress.running && !stress.timer) stress.timer = setInterval(sampleQueue, 500);
+    } else if (stress.timer) {
+      clearInterval(stress.timer);
+      stress.timer = null;
+    }
+  }
+
+  function resetStressView(n) {
+    stress.results = [];
+    stress.samples = [];
+    stress.startedAt = performance.now();
+    $("stressRows").innerHTML = "<tr><td colspan='4' class='muted'>运行中…</td></tr>";
+    $("queueBars").innerHTML = "";
+    $("queueSeries").textContent = "queue_len：采样中…";
+    $("stressSummary").hidden = true;
+    $("stressSummary").textContent = "";
+    $("stressMeta").textContent = "并发：" + n + " · queue_len 峰值：—";
+  }
+
+  function stressBadge(r) {
+    if (!r.done && !r.status) return "<span class='badge off'>运行中</span>";
+    if (r.status === 200) return "<span class='badge on'>200</span>";
+    if (r.status === 429) return "<span class='badge off' style='color:var(--warn)'>429</span>";
+    return "<span class='badge off' style='color:var(--bad)'>" + esc(r.status || "—") + "</span>";
+  }
+
+  function renderStressRows() {
+    var rows = stress.results.map(function (r) {
+      return "<tr><td>" + r.idx + "</td><td>" + stressBadge(r) + "</td><td>" +
+        (r.duration == null ? "—" : Math.round(r.duration) + " ms") + "</td><td>" +
+        esc(r.note || "") + "</td></tr>";
+    });
+    $("stressRows").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='4' class='muted'>未运行</td></tr>";
+  }
+
+  function queuePeak() {
+    return stress.samples.reduce(function (a, s) { return Math.max(a, s.q); }, 0);
+  }
+
+  function queueLimit() {
+    var lim = state.health && state.health.limits ? state.health.limits.max_concurrency : null;
+    return lim || 1;
+  }
+
+  function renderQueue() {
+    var qs = stress.samples.map(function (s) { return s.q; });
+    var peak = queuePeak(), lim = queueLimit();
+    var scale = Math.max(1, lim, peak);
+    $("queueBars").innerHTML = qs.slice(-80).map(function (q) {
+      var pct = Math.round(q / scale * 100);
+      return "<div class='qbar" + (q >= lim ? " hot" : "") + "' style='height:" +
+        Math.max(3, pct) + "%' title='queue_len=" + q + "'></div>";
+    }).join("");
+    $("queueSeries").textContent = "queue_len：" + (qs.slice(-24).join(" → ") || "—") +
+      "（峰值 " + peak + " / 上限 " + lim + "）";
+    $("stressMeta").textContent = "并发：" + (stress.concurrency || 1) + " · 采样 " +
+      qs.length + " 次 · queue_len 峰值：" + peak;
+  }
+
+  function sampleQueue() {
+    return refreshHealth().then(function (h) {
+      if (!stress.running || !h || !h.resources) return;
+      var q = h.resources.queue_len == null ? 0 : h.resources.queue_len;
+      stress.samples.push({ q: q, t: Math.round(performance.now() - stress.startedAt) });
+      renderQueue();
+    });
+  }
+
+  function runStressRequest(idx, model, prompt) {
+    var abort = new AbortController();
+    stress.aborts.push(abort);
+    var t0 = performance.now();
+    var rec = { idx: idx, status: 0, duration: null, note: "", done: false, retryAfter: null };
+    stress.results.push(rec);
+    renderStressRows();
+
+    return fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ model: model, stream: true, messages: [{ role: "user", content: prompt }] }),
+      signal: abort.signal
+    }).then(function (resp) {
+      rec.status = resp.status;
+      if (resp.status === 429) rec.retryAfter = resp.headers.get("Retry-After");
+      if (!resp.ok) {
+        return resp.text().then(function (t) {
+          var body = parseJsonSafe(t);
+          var err = body && body.error;
+          if (rec.status === 429) {
+            rec.note = "Retry-After: " + (rec.retryAfter || "—") + (err && err.code ? " · " + err.code : "");
+          } else {
+            rec.note = err ? (err.code + " " + err.message) : ("HTTP " + rec.status);
+          }
+          if (rec.status === 401) noteAuthFailure();
+        });
+      }
+      if (!resp.body) { rec.note = "响应无 body"; return; }
+      var reader = resp.body.getReader();
+      function pump() {
+        return reader.read().then(function (x) { if (!x.done) return pump(); });
+      }
+      return pump();
+    }).then(function () {
+      rec.duration = performance.now() - t0;
+    }).catch(function (e) {
+      rec.duration = performance.now() - t0;
+      rec.note = (e && e.name === "AbortError") ? "已中止" : ("网络错误：" + (e && e.message ? e.message : e));
+    }).then(function () {
+      rec.done = true;
+      renderStressRows();
+    });
+  }
+
+  function finishStress() {
+    stress.running = false;
+    setStressSampling(false);
+    setStressButtons(false);
+    stress.aborts = [];
+    var done = stress.results.filter(function (r) { return r.duration != null; });
+    var ok = done.filter(function (r) { return r.status === 200; }).length;
+    var limited = done.filter(function (r) { return r.status === 429; }).length;
+    var failed = done.length - ok - limited;
+    var ds = done.map(function (r) { return r.duration; }).sort(function (a, b) { return a - b; });
+    var stats = "—";
+    if (ds.length) {
+      var mid = ds.length % 2 ? ds[(ds.length - 1) / 2] : (ds[ds.length / 2 - 1] + ds[ds.length / 2]) / 2;
+      stats = "最小 " + Math.round(ds[0]) + " ms · 中位 " + Math.round(mid) + " ms · 最大 " +
+        Math.round(ds[ds.length - 1]) + " ms";
+    }
+    $("stressSummary").hidden = false;
+    $("stressSummary").textContent =
+      "成功 " + ok + " · 429 " + limited + " · 失败 " + failed + "\n" +
+      "耗时（全部完成请求）：" + stats + "\n" +
+      "queue_len 采样 " + stress.samples.length + " 次，峰值 " + queuePeak() + "（上限 " + queueLimit() + "）";
+    renderStressRows();
+    refreshLogs();
+  }
+
+  $("startStress").addEventListener("click", function () {
+    if (stress.running) return;
+    var n = stressNum();
+    var model = $("stressModel").value;
+    var prompt = $("stressPrompt").value.trim();
+    $("stressSummary").hidden = false;
+    if (!model) { $("stressSummary").textContent = "没有可用的 chat 模型"; return; }
+    if (!prompt) { $("stressSummary").textContent = "请输入提示词"; return; }
+    stress.running = true;
+    stress.concurrency = n;
+    stress.aborts = [];
+    resetStressView(n);
+    setStressButtons(true);
+    setStressSampling(true);
+    sampleQueue();
+    var jobs = [];
+    for (var i = 1; i <= n; i++) jobs.push(runStressRequest(i, model, prompt));
+    Promise.all(jobs).then(finishStress);
+  });
+
+  $("stopStress").addEventListener("click", function () {
+    stress.aborts.forEach(function (a) { try { a.abort(); } catch (e) {} });
+    setStressSampling(false);
+    $("stopStress").disabled = true;
+  });
 
   // ------------------------------------------------------------ chat
   $("sendChat").addEventListener("click", function () {
@@ -502,6 +796,7 @@
 
   // 启动
   refreshHealth();
+  refreshLogs();
   startPolling();
   updateHint();
 })();

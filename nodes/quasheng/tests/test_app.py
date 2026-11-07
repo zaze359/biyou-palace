@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nodes.quasheng import app as app_module
+from nodes.quasheng import logbuffer
 from nodes.quasheng.app import _stream_body, _warmup, create_app
 from nodes.quasheng.concurrency import ConcurrencyGate
 from nodes.quasheng.config import Settings
@@ -24,6 +25,14 @@ SSE_BODY = (
     'data: {"choices":[{"delta":{"content":"世界"}}]}\n\n'
     "data: [DONE]\n\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_log_ring():
+    """每个用例前后清空事件环形缓冲，避免跨用例串味。"""
+    logbuffer.clear()
+    yield
+    logbuffer.clear()
 
 
 def _build_client(handler, *, auth: bool = False, token: str | None = None, limit: int = 2, **settings_kwargs):
@@ -166,6 +175,9 @@ def test_unexpected_exception_returns_openai_style_500_with_headers():
     assert err["code"] == "internal_error"
     assert resp.headers["X-Node-Id"] == "test-node"
     assert resp.headers["X-Node-Role"] == "quasheng"
+    # 未捕获异常会写入事件缓冲（只记类型与消息，不含堆栈）
+    events = [l for l in logbuffer.recent(10)["lines"] if l["event"] == "exception"]
+    assert events and "RuntimeError" in events[0]["message"]
 
 
 def test_auth_and_capability_error_shapes_unchanged():
@@ -223,6 +235,11 @@ def test_warmup_logs_elapsed_ms_per_model(caplog):
     assert any("m1" in m and "路径=/api/generate" in m for m in messages)
     assert any("m2" in m for m in messages)
 
+    # 环形缓冲同样记录预热事件（模型 + 路径 + 耗时）
+    warm = [l for l in logbuffer.recent(10)["lines"] if l["event"] == "warmup"]
+    assert len(warm) == 2
+    assert all("ms" in l["message"] and "预热" in l["message"] for l in warm)
+
 
 def test_warmup_logs_fallback_path(caplog):
     class FakeResp:
@@ -268,6 +285,7 @@ def test_disconnect_logs_and_releases_slot(caplog):
     caplog.set_level(logging.INFO, logger="quasheng")
     asyncio.run(scenario())
     assert any("中止上游生成" in r.getMessage() for r in caplog.records if r.name == "quasheng")
+    assert any(l["event"] == "disconnect" for l in logbuffer.recent(10)["lines"])
 
 
 def test_generator_close_logs_abort(caplog):
@@ -560,6 +578,11 @@ def test_http_level_429_with_retry_after_and_openai_error():
     assert err["code"] == "concurrency_limit_exceeded"
     # 被拒请求不得泄漏名额；两个成功流结束后应归零
     assert app.state.gate.active == 0
+    # 并发拒绝写入事件缓冲（含上限，不含请求体）
+    assert any(
+        l["event"] == "concurrency" and "429" in l["message"]
+        for l in logbuffer.recent(50)["lines"]
+    )
 
 
 def test_queue_len_reflects_in_flight_stream_and_returns_to_zero():
@@ -639,4 +662,80 @@ def test_ui_does_not_exempt_v1_from_auth():
 
     allowed = client.get("/v1/health", headers={"Authorization": "Bearer fake-token"})
     assert allowed.status_code == 200
+
+
+# ---------------------------------------------------------------- /v1/logs
+
+
+def test_logs_requires_bearer_auth_and_returns_shape():
+    client, _ = _build_client(_ok_upstream, auth=True, token="fake-token")
+
+    denied = client.get("/v1/logs")
+    assert denied.status_code == 401
+    assert denied.json()["error"]["code"] == "invalid_api_key"
+
+    allowed = client.get("/v1/logs", headers={"Authorization": "Bearer fake-token"})
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["capacity"] == 200
+    assert body["total"] >= 1  # 上面那次 401 已写入 auth 事件
+    assert body["limit"] == 50
+    for line in body["lines"]:
+        assert set(line) == {"time", "level", "event", "message"}
+    assert any(l["event"] == "auth" for l in body["lines"])
+    # 401 事件不得包含调用方 token
+    assert all("fake-token" not in l["message"] for l in body["lines"])
+
+
+def test_logs_limit_is_clamped():
+    for i in range(5):
+        logbuffer.record("INFO", "startup", f"e{i}")
+
+    client, _ = _build_client(_ok_upstream)
+    body = client.get("/v1/logs?limit=2").json()
+    assert body["limit"] == 2
+    assert [x["message"] for x in body["lines"]] == ["e3", "e4"]
+
+    assert client.get("/v1/logs?limit=0").json()["limit"] == 1
+    assert client.get("/v1/logs?limit=9999").json()["limit"] == 200
+
+
+def test_logs_invalid_limit_returns_openai_style_422():
+    client, _ = _build_client(_ok_upstream)
+    resp = client.get("/v1/logs?limit=abc")
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "invalid_request_error"
+    assert resp.headers["X-Node-Id"] == "test-node"
+
+
+def test_logs_redacts_token_and_absolute_paths():
+    logbuffer.configure("secret-token-value")
+    logbuffer.record("ERROR", "exception", "boom at /home/test/proj/app.py token=secret-token-value")
+
+    line = logbuffer.recent(1)["lines"][0]
+    assert "secret-token-value" not in line["message"]
+    assert "/home/test" not in line["message"]
+    assert "***" in line["message"]
+    assert "<path>" in line["message"]
+
+
+def test_upstream_error_is_recorded_without_request_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={"error": {"message": "model not found", "type": "invalid_request_error", "code": "model_not_found"}},
+        )
+
+    client, _ = _build_client(handler)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"model": "nope", "messages": [{"role": "user", "content": "secret prompt"}], "stream": True},
+    )
+    assert resp.status_code == 404
+
+    lines = [l for l in logbuffer.recent(20)["lines"] if l["event"] == "upstream"]
+    assert lines and "404" in lines[0]["message"] and "model_not_found" in lines[0]["message"]
+    # 不记录请求 body（提示词不得出现在事件里）
+    assert all("secret prompt" not in l["message"] for l in logbuffer.recent(20)["lines"])
+
 
