@@ -3,7 +3,7 @@
   "name": "quasheng-delivery-hardening",
   "title": "准圣节点对外交付加固",
   "description": "把准圣节点从可演示推进到可对外交付：修正示例配置与能力校验、queue_len/loading 语义、默认监听安全、常驻自恢复与优雅停机、CLI 多轮与错误体显示",
-  "status": "in_progress",
+  "status": "done",
   "dev_type": "feature",
   "scope": "nodes/quasheng",
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "zaze",
   "assignee": "zaze",
   "createdAt": "2026-11-07",
-  "completedAt": null,
+  "completedAt": "2026-11-07",
   "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
@@ -183,5 +183,18 @@
     "nodes/quasheng/"
   ],
   "notes": "阶段划分：D1-D5 正确性与默认安全；D6-D8 常驻与自恢复；D9-D10 CLI 收尾。每阶段结束按具体路径提交，不 push。",
-  "meta": {}
+  "meta": {
+    "commits": [
+      "7bd8e62",
+      "37f1e4d",
+      "f9bc0ea"
+    ],
+    "tests": "86 passed",
+    "smoke": "18/18 assertions passed",
+    "milestones": {
+      "stage1": "D1-D5 完成，pytest 86 passed，smoke 18/18",
+      "stage2": "D6-D8 完成，launchd plist lint OK，pytest 86 passed",
+      "stage3": "D9-D10 完成，pytest 86 passed，smoke 18/18"
+    }
+  }
 }
