@@ -3,7 +3,7 @@
   "name": "quasheng-node-agent",
   "title": "准圣 PC 节点智能体（Python + Ollama）",
   "description": "自底向上第一步的子任务：实现准圣 PC 节点智能体，本地 Ollama 推理对外暴露 OpenAI 兼容服务 + /v1/health 能力端面 + 本地对话模式，遵循节点智能体统一契约 v1.0",
-  "status": "implementing",
+  "status": "completed",
   "dev_type": "feature",
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "zaze",
   "assignee": "zaze",
   "createdAt": "2026-10-14",
-  "completedAt": null,
+  "completedAt": "2026-11-07",
   "branch": null,
   "base_branch": null,
   "worktree_path": null,
@@ -113,13 +113,13 @@
     {
       "id": "Q8",
       "title": "真实 Ollama 人工验收",
-      "status": "pending",
+      "status": "done",
       "files": [],
       "acceptance": "Ollama ≥ 0.5.x 下复验启动探针、预热后 loaded=true、首请无 30s 级延迟、断连日志、health 与 /api/ps 一致，并留核对记录",
       "depends_on": ["Q1", "Q2", "Q3"],
       "parallel": false,
       "size": "M",
-      "notes": "2026-11-07 探测：ollama 二进制已安装（/usr/local/bin/ollama），但服务未启动（curl 127.0.0.1:11434/api/version 连接被拒，exit 7），且 ~/.ollama 仅 8K、无已拉取模型。需人工执行 `ollama serve` 与 `ollama pull <model>`（≥0.5.x）后复验。"
+      "notes": "2026-11-07 真实验收通过（ollama pull 被 fake-IP 拦截，改用 HuggingFace GGUF + ollama create 导入）。环境：Ollama 0.40.11；qwen2.5:0.5b（GGUF Q4_K_M，491MB，630.17M 参数）、nomic-embed-text:latest（GGUF Q4_K_M，84MB，136.73M 参数）。实测：①启动探针成功（预热日志 /api/generate 路径 1327ms）；错误端口 11499 时启动失败 exit=3，日志含“无法连接 Ollama…需要 Ollama ≥ 0.5.x”与“Application startup failed. Exiting.”。②预热后 health.models loaded=[qwen=True,nomic=False]，/api/ps=[qwen2.5:0.5b]，一致；embeddings 请求后 nomic loaded 同步为 True。③首 token：不预热冷首次 1920ms，预热后 118ms，节省约 1.8s（小模型功能验证，非性能结论）。④断连：2s 中断（已收 21010 字节），服务端日志“客户端断开，中止上游生成”×1，health queue_len=0。⑤health status=ready。⑥embeddings：nomic 200/768 维；qwen2.5:0.5b（仅声明 chat）501 capability_not_supported。⑦真实上游 /v1/models 的 owned_by 两项均为 biyou-node。临时 GGUF 已删除，导入模型保留在 ~/.ollama（约 573MB）。"
     },
     {
       "id": "Q9",
