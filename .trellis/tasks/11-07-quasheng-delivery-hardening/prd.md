@@ -18,7 +18,7 @@
 
 6. 提供 launchd（macOS）与 systemd（Linux）服务模板，含工作目录、环境变量、重启策略、日志去处。
 7. 进程守护与崩溃重启说明；节点对 Ollama 的自恢复：启动时 Ollama 未就绪要重试（有限次数、退避），而不是立即退出；运行期上游恢复后 health 能自动回到 `ready`。
-8. 优雅停机：收到 SIGTERM/SIGINT 时停止接受新请求、等待在途流结束或超时后退出。
+8. 优雅停机：收到 SIGTERM/SIGINT 后立即停止接受新连接（真实信号路径下 uvicorn 先关 listener，表现为连接被拒绝；应用内 503 `node_shutting_down` 仅用于主动停机路径），在途流继续完成，超过 `shutdown_timeout` 后退出。
 
 ### 第三段 · CLI 收尾
 

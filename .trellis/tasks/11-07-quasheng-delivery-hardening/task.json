@@ -141,7 +141,7 @@
         "nodes/quasheng/README.md",
         "nodes/quasheng/tests/test_app.py"
       ],
-      "acceptance": "SIGTERM/SIGINT 后停止接受新请求（503 node_shutting_down），等待在途请求 drain 至 shutdown_timeout 或全部结束；uvicorn graceful timeout 与控制台退出路径一致；有单测覆盖停机拒新与 drain",
+      "acceptance": "SIGTERM/SIGINT 后立即停止接受新连接（真实信号路径下 uvicorn 先关 listener，新请求表现为连接被拒绝；503 node_shutting_down 仅覆盖应用内部主动停机路径），在途请求继续完成至 drain 或 shutdown_timeout；uvicorn graceful timeout 与控制台退出路径一致；有单测覆盖应用内停机拒新与 drain",
       "depends_on": [],
       "parallel": false,
       "size": "M"

@@ -735,6 +735,11 @@ def test_on_demand_loading_then_ready_after_first_chunk():
 
 
 def test_shutting_down_rejects_new_requests_with_openai_error():
+    """503 node_shutting_down 只覆盖应用内部主动置位停机标记的路径。
+
+    真实 SIGTERM 下 uvicorn 先关闭 listener，新请求表现为连接被拒绝（实测），
+    因此信号场景不应断言 503。
+    """
     client, app = _build_client(_ok_upstream)
     app.state.shutting_down = True
 

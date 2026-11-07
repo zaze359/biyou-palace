@@ -345,7 +345,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # 优雅停机：先拒绝新请求，再等待在途请求 drain 到超时
+        # 优雅停机：标记停止接新并等待在途请求 drain 到超时。
+        # 真实 SIGTERM 下 uvicorn 已先关闭 listener，新请求表现为连接拒绝；
+        # 这里的标记只覆盖应用内部主动停机的路径（见中间件注释）。
         app.state.shutting_down = True
         drained = await app.state.gate.wait_idle(settings.shutdown_timeout)
         if drained:
@@ -379,7 +381,9 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def add_node_headers(request: Request, call_next):
-        # 优雅停机窗口：不再接受新请求（在途请求由 lifespan 等待 drain）
+        # 优雅停机窗口：应用内部主动置位 shutting_down 时返回 503。
+        # 真实 SIGTERM 路径下 uvicorn 会先关闭 listener，新请求表现为连接被拒绝，
+        # 因此实测观察不到该分支；保留它用于进程内主动停机与单测覆盖。
         if getattr(request.app.state, "shutting_down", False):
             response = openai_error(
                 "节点正在停机，暂不接受新请求",

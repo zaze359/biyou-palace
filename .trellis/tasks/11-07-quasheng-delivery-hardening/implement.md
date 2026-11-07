@@ -15,7 +15,7 @@
 
 6. D6：新增 launchd/systemd 模板 + README 运维段。
 7. D7：`_probe_with_retry` + 恢复后 ready 用例。
-8. D8：`shutting_down` 中间件 + `wait_idle` + uvicorn graceful timeout + 用例。
+8. D8：`wait_idle` + uvicorn graceful timeout + `shutting_down` 中间件（仅应用内主动停机路径）+ 用例；真实 SIGTERM 下 uvicorn 先关 listener，新请求表现为连接拒绝。
 
 验证同上。
 提交：`feat(quasheng): 新增常驻模板、启动重试与优雅停机`。
@@ -31,7 +31,7 @@
 ## 回滚点
 
 - 阶段一若 smoke 失败：先回滚 D3/D4 的 health 结构改动（`resources.active` 为附加字段，可单独撤）。
-- 阶段二 graceful 若与 uvicorn 行为冲突：保留 `wait_idle`，撤中间件 503。
+- 阶段二 graceful 实测：真实 SIGTERM 下 503 分支不可达（uvicorn 先关 listener），保留 `wait_idle`；中间件仅作应用内部主动停机的保护，不承诺信号路径返回 503。
 - 阶段三不影响服务端，可独立回滚。
 
 ## 验收命令

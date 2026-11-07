@@ -113,7 +113,7 @@ sudo systemctl stop quasheng    # SIGTERM → 优雅停机
 - **进程崩溃**：由 launchd/systemd 按策略拉起；节点自身不退出。`RestartSec` / `ThrottleInterval` 防止重启风暴。
 - **Ollama 未就绪**：启动阶段有限次数退避重试，不会立即退出。
 - **Ollama 运行期抖动**：`/v1/health` 会变 `down`，但进程不崩；上游恢复后 health 自动回到 `ready`（每次 health 都实时探测 tags/ps）。
-- **优雅停机**：`SIGTERM` / `SIGINT` 后停止接受新请求（返回 503 `node_shutting_down`），等待在途流结束，超过 `shutdown_timeout` 才强制退出。uvicorn 以 `timeout_graceful_shutdown=shutdown_timeout` 运行，避免无限等待长流。
+- **优雅停机**：收到 `SIGTERM` / `SIGINT` 后**立即停止接受新连接**（真实进程路径下 uvicorn 先关闭 listener，新请求表现为连接被拒绝），在途请求继续完成；超过 `shutdown_timeout` 才强制退出。uvicorn 以 `timeout_graceful_shutdown=shutdown_timeout` 运行，避免无限等待长流。应用内的 `503 node_shutting_down` 中间件只在应用内部主动置位 `shutting_down` 时生效（如单测直接改状态）；真实信号路径观察不到该响应。
 
 ## 可视控制面板（/ui）
 

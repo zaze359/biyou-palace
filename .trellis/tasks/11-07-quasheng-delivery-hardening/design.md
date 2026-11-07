@@ -40,7 +40,8 @@
 
 - `ConcurrencyGate.wait_idle(timeout)`：轮询 `active`，返回是否在超时内清空。
 - lifespan shutdown：置 `app.state.shutting_down=True` → `wait_idle(shutdown_timeout)` → `client.aclose()`。
-- HTTP 中间件在 `shutting_down` 时对 `/v1/*` 返回 503 `node_shutting_down`（OpenAI 错误形状）。
+- **真实信号语义（2026-11-08 实测）**：uvicorn 收到 SIGTERM 后先关闭 listener 并 shutdown 现有连接，新请求表现为连接被拒绝（`ConnectError`）；在途流继续完成，进程在 `shutdown_timeout` 内退出。
+- HTTP 中间件在 `shutting_down` 时对 `/v1/*` 返回 503 `node_shutting_down`（OpenAI 错误形状）；该响应只在应用内部主动置位标记的路径生效（如单测直接改状态），真实 SIGTERM 路径观察不到。
 - `__main__` 向 uvicorn 传 `timeout_graceful_shutdown=settings.shutdown_timeout`；SIGTERM/SIGINT 由 uvicorn 捕获，先停 accept，再按超时取消残余任务。
 
 ## 7. CLI
