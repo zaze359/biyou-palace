@@ -71,6 +71,10 @@ def _configure_logging() -> None:
     丢弃（只输出 WARNING+）。这里给 quasheng 挂独立 handler，同时保留
     向 root 的传播，方便 pytest caplog 捕获。
     """
+    # httpx 的 INFO 日志会打印完整请求 URL（含上游 base_url），
+    # 按密钥/地址零泄漏要求压到 WARNING。无条件设置，避免重复调用时被
+    # 下方的 early-return 跳过。
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     if logger.handlers:
         return
     handler = logging.StreamHandler()

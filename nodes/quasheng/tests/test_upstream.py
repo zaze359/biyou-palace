@@ -411,6 +411,8 @@ def test_secret_and_base_url_never_leak(caplog):
         assert BASE_URL not in body
 
     assert SECRET not in caplog.text
+    # httpx 的 INFO 日志会打印完整上游 URL，必须显式压掉
+    assert BASE_URL not in caplog.text
     assert SECRET not in json.dumps(logbuffer.recent(50), ensure_ascii=False)
 
 
