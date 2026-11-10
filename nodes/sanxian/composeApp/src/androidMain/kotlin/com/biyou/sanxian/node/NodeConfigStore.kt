@@ -39,37 +39,17 @@ object NodeConfigStore {
         val app = context.applicationContext
         val assets = readAssetsConfig(app)
         val prefs = app.nodeConfigDataStore.data.first()
-        val token = resolveToken(app, assets, prefs)
 
-        val chatModels = if (prefs.contains(KEY_CHAT_MODEL)) {
-            prefs[KEY_CHAT_MODEL]?.takeIf { it.isNotBlank() }?.let { listOf(it) } ?: emptyList()
-        } else {
-            assets.preloadModels
-        }
-        val embedding = if (prefs.contains(KEY_EMBEDDING_MODEL)) {
-            prefs[KEY_EMBEDDING_MODEL]?.takeIf { it.isNotBlank() }
-        } else {
-            assets.embeddingModel
-        }
-
-        // 用户选了 assets 里没登记过的模型时，补齐能力声明，否则 /v1/embeddings 会因「未声明能力」被拒。
-        val capabilities = assets.capabilitiesMap.toMutableMap()
-        chatModels.firstOrNull()?.let { name ->
-            if (capabilities[name] == null) capabilities[name] = ModelCapability(listOf("chat"))
-        }
-        embedding?.let { name ->
-            capabilities[name] = ModelCapability(listOf("embedding"), capabilities[name]?.contextLen)
-        }
-
-        return assets.copy(
-            port = prefs[KEY_PORT] ?: assets.port,
-            sharedToken = token,
-            authEnabled = prefs[KEY_AUTH] ?: assets.authEnabled,
-            maxConcurrency = prefs[KEY_CONCURRENCY] ?: assets.maxConcurrency,
-            preloadModels = chatModels,
-            embeddingModel = embedding,
-            capabilitiesMap = capabilities,
+        // 只把「用户保存过的键」作为覆盖项，其余沿用 assets；合并规则本身在 shared 层可单测。
+        val overrides = UserConfigOverrides(
+            port = prefs[KEY_PORT],
+            sharedToken = resolveToken(app, assets, prefs),
+            authEnabled = prefs[KEY_AUTH],
+            maxConcurrency = prefs[KEY_CONCURRENCY],
+            chatModel = if (prefs.contains(KEY_CHAT_MODEL)) prefs[KEY_CHAT_MODEL].orEmpty() else null,
+            embeddingModel = if (prefs.contains(KEY_EMBEDDING_MODEL)) prefs[KEY_EMBEDDING_MODEL].orEmpty() else null,
         )
+        return assets.withUserOverrides(overrides)
     }
 
     /** 同步版本，供 Service / Worker 这类无法挂起但需要立即拿配置的入口使用。 */

@@ -42,6 +42,64 @@ data class NodeConfig(
     }
 
     fun contextLenFor(model: String): Int? = capabilitiesMap[model]?.contextLen
+
+    /** 能力判定入口：未登记能力的模型按 chat-only 处理（见 [capabilityFor]）。 */
+    fun supportsCapability(model: String, capability: String): Boolean =
+        capability in capabilityFor(model)
+}
+
+/**
+ * 用户在设备端（DataStore）保存的覆盖项。
+ *
+ * 每个字段为 `null` 表示「用户没保存过该项」，沿用 assets 默认值；
+ * 模型字段另有约定：`""` 表示显式不启用，非空表示模型文件名。
+ * 该类型是纯数据，便于在 commonTest 中回归「用户配置 > assets」的合并优先级。
+ */
+data class UserConfigOverrides(
+    val port: Int? = null,
+    val sharedToken: String? = null,
+    val authEnabled: Boolean? = null,
+    val maxConcurrency: Int? = null,
+    val chatModel: String? = null,
+    val embeddingModel: String? = null,
+)
+
+/**
+ * 合并用户覆盖项：**用户配置 > assets 默认值**。
+ *
+ * 同时补齐能力声明：用户选了 assets 里没登记过的 chat 模型时补 `chat`，
+ * 选中的 embedding 模型强制声明 `embedding`（否则 /v1/embeddings 会因未声明能力被 501）。
+ */
+fun NodeConfig.withUserOverrides(overrides: UserConfigOverrides?): NodeConfig {
+    if (overrides == null) return this
+    val nextChatModels = overrides.chatModel?.let { name ->
+        if (name.isBlank()) emptyList() else listOf(name)
+    } ?: preloadModels
+    // 注意：null=未覆盖，""=显式关闭；不能用 `?.let { it.ifBlank { null } } ?: embeddingModel`，
+    // 否则显式关闭会被 assets 默认值吞掉（该回归由 commonTest 覆盖）。
+    val nextEmbedding = when {
+        overrides.embeddingModel == null -> embeddingModel
+        overrides.embeddingModel.isBlank() -> null
+        else -> overrides.embeddingModel
+    }
+
+    val capabilities = capabilitiesMap.toMutableMap()
+    nextChatModels.firstOrNull()?.let { name ->
+        if (capabilities[name] == null) capabilities[name] = ModelCapability(listOf("chat"))
+    }
+    nextEmbedding?.let { name ->
+        capabilities[name] = ModelCapability(listOf("embedding"), capabilities[name]?.contextLen)
+    }
+
+    return copy(
+        port = overrides.port ?: port,
+        sharedToken = overrides.sharedToken?.takeIf { it.isNotBlank() } ?: sharedToken,
+        authEnabled = overrides.authEnabled ?: authEnabled,
+        maxConcurrency = overrides.maxConcurrency ?: maxConcurrency,
+        preloadModels = nextChatModels,
+        embeddingModel = nextEmbedding,
+        capabilitiesMap = capabilities,
+    )
 }
 
 @Serializable

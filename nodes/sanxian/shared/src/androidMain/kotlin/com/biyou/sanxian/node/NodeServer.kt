@@ -14,7 +14,7 @@ import com.biyou.sanxian.contract.ModelEntry
 import com.biyou.sanxian.contract.ModelList
 import com.biyou.sanxian.contract.ModelRef
 import com.biyou.sanxian.contract.NodeMeta
-import com.biyou.sanxian.contract.Usage
+import com.biyou.sanxian.contract.usageOf
 import com.biyou.sanxian.llm.ChatMessage
 import com.biyou.sanxian.llm.ChatSession
 import com.biyou.sanxian.llm.GenerateStats
@@ -240,8 +240,6 @@ class NodeServer(
                 val stats = GenerateStats()
                 engine.generate(session, prompt, req.maxTokens ?: 0, stats).collect { sb.append(it) }
                 val content = sb.toString()
-                val promptTokens = stats.promptTokens
-                val completionTokens = stats.completionTokens
                 call.respondJson(
                     HttpStatusCode.OK,
                     json.encodeToString(
@@ -256,11 +254,7 @@ class NodeServer(
                                     finishReason = "stop",
                                 )
                             ),
-                            usage = Usage(
-                                promptTokens = promptTokens,
-                                completionTokens = completionTokens,
-                                totalTokens = promptTokens + completionTokens,
-                            ),
+                            usage = usageOf(stats.promptTokens, stats.completionTokens),
                         )
                     )
                 )
@@ -280,7 +274,7 @@ class NodeServer(
             is JsonArray -> e.map { it.jsonPrimitive.content }
             else -> throw badRequest("input 必须是字符串或字符串数组")
         }
-        if ("embedding" !in config.capabilityFor(req.model)) {
+        if (!config.supportsCapability(req.model, "embedding")) {
             throw capabilityNotSupported("模型 ${req.model.ifBlank { "(未指定)" }} 未声明 embedding 能力")
         }
         val eng = embeddingEngine
@@ -288,7 +282,6 @@ class NodeServer(
         gate.acquire()
         try {
             val result = withContext(Dispatchers.IO) { eng.embed(inputs) }
-            val promptTokens = result.promptTokens
             call.respondJson(
                 HttpStatusCode.OK,
                 json.encodeToString(
@@ -296,11 +289,7 @@ class NodeServer(
                     EmbeddingResponse(
                         model = req.model,
                         data = result.vectors.mapIndexed { i, v -> EmbeddingData(index = i, embedding = v) },
-                        usage = Usage(
-                            promptTokens = promptTokens,
-                            completionTokens = 0,
-                            totalTokens = promptTokens,
-                        ),
+                        usage = usageOf(result.promptTokens, 0),
                     )
                 )
             )

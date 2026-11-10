@@ -23,6 +23,10 @@ kotlin {
             implementation("io.ktor:ktor-server-status-pages:2.3.12")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
         }
+        commonTest.dependencies {
+            // KMP 通用断言；androidTarget 的单元测试在 JVM 上执行（:shared:testDebugUnitTest）
+            implementation(kotlin("test"))
+        }
         androidMain.dependencies {
             implementation(libs.kotlinx.coroutines.android)
             implementation("io.ktor:ktor-server-cio:2.3.12")

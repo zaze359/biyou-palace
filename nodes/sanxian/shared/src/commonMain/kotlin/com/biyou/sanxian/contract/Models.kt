@@ -121,6 +121,18 @@ data class Usage(
     @SerialName("total_tokens") val totalTokens: Int,
 )
 
+/**
+ * 由真实 token 统计构造 usage。
+ *
+ * [promptTokens] 必须是**裁剪后**实际送入模型的 token 数（见 `GenerateStats`），
+ * 不能回退成客户端原始输入的估算值，否则截断时 usage 会虚报。
+ */
+fun usageOf(promptTokens: Int, completionTokens: Int): Usage = Usage(
+    promptTokens = promptTokens,
+    completionTokens = completionTokens,
+    totalTokens = promptTokens + completionTokens,
+)
+
 // ----------------------------- /v1/embeddings -----------------------------
 
 @Serializable
