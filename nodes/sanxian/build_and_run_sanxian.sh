@@ -25,7 +25,8 @@ export LANG=C
 #  embeddings：/v1/embeddings 已落地真实向量化（Plan A 独立 embedding 句柄）。
 #     需在 sanxian.json 配置 embedding_model 并推送对应 GGUF（见 --push-model），
 #     否则该端点返回 503（能力已声明但后端未就绪；未声明能力时为 501）。
-#  ⚠️ 模型：sanxian.json 默认预热 /sdcard/biyou/models/Qwen3-0.6B-Q8_0.gguf，
+#  ⚠️ 模型：sanxian.json 只写文件名（如 Qwen3-0.6B-Q8_0.gguf），运行时解析到 App 私有目录
+#     /sdcard/Android/data/com.biyou.sanxian/files/models/（也可在 App「模型管理」用 SAF 导入）。
 #     需自行 adb push（见 --push-model），否则 health=loading、chat 503。
 #  ⚠️ API 级别：NodeServer 用 java.time，需 API 26+；V1 面向现代设备。
 #
@@ -128,9 +129,10 @@ if [ -n "$PUSH_MODEL" ]; then
     echo "✗ --push-model 文件不存在：$PUSH_MODEL" >&2
     exit 1
   fi
-  echo "==> push 模型到设备：/sdcard/biyou/models/$(basename "$PUSH_MODEL")"
-  "$ADB" shell mkdir -p /sdcard/biyou/models
-  "$ADB" push "$PUSH_MODEL" "/sdcard/biyou/models/$(basename "$PUSH_MODEL")"
+  MODEL_DIR="/sdcard/Android/data/com.biyou.sanxian/files/models"
+  echo "==> push 模型到设备：$MODEL_DIR/$(basename "$PUSH_MODEL")"
+  "$ADB" shell mkdir -p "$MODEL_DIR"
+  "$ADB" push "$PUSH_MODEL" "$MODEL_DIR/$(basename "$PUSH_MODEL")"
   echo "    ⚠ 若文件名不同于 sanxian.json 的 preload_models，请同步修改 assets/sanxian.json。"
 fi
 

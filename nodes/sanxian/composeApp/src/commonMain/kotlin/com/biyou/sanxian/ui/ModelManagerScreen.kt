@@ -41,6 +41,7 @@ fun ModelManagerScreen(
     onToggleDownload: (CatalogEntry) -> Unit,
     onDelete: (LocalModel) -> Unit,
     onUseInChat: (String) -> Unit,
+    onImported: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -62,6 +63,7 @@ fun ModelManagerScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item { SectionHeader("已下载模型") }
+            item { ImportModelButton(onImported = onImported) }
             if (state.localModels.isEmpty()) {
                 item {
                     Text(

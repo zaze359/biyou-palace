@@ -48,6 +48,7 @@ fun SanXianApp(darkTheme: Boolean) {
                         chatViewModel.onModelPathChange(path)
                         screen = Screen.Chat
                     },
+                    onImported = modelViewModel::refreshLocal,
                 )
             }
         }

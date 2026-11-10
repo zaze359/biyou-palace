@@ -1,5 +1,6 @@
 package com.biyou.sanxian.node
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -11,29 +12,29 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class NodeConfig(
-    val nodeId: String = "sanxian-01",
-    val nodeName: String = "散仙·01",
+    @SerialName("node_id") val nodeId: String = "sanxian-01",
+    @SerialName("node_name") val nodeName: String = "散仙·01",
     val port: Int = 4011,
     /** 可选 bearer 鉴权；非空即开启，覆盖全部端点（含 /v1/health） */
-    val sharedToken: String? = null,
-    val authEnabled: Boolean = false,
+    @SerialName("shared_token") val sharedToken: String? = null,
+    @SerialName("auth_enabled") val authEnabled: Boolean = false,
     /** 启动即预热常驻的模型（对应准圣 preload_models warmup），消除首请求阻塞 */
-    val preloadModels: List<String> = emptyList(),
+    @SerialName("preload_models") val preloadModels: List<String> = emptyList(),
     /**
      * 独立 embedding 模型路径（Plan A）。非空时节点会额外加载该模型到独立 embedding 句柄，
      * 并向集群声明该文件的 `embedding` 能力（见 [capabilitiesMap]）。为空则不承接 embedding。
      */
-    val embeddingModel: String? = null,
+    @SerialName("embedding_model") val embeddingModel: String? = null,
     /** 能力声明：未登记的模型默认只有 chat */
-    val capabilitiesMap: Map<String, ModelCapability> = emptyMap(),
+    @SerialName("capabilities_map") val capabilitiesMap: Map<String, ModelCapability> = emptyMap(),
     /** 并发上限（手机资源受限，建议 1~2），满载立即 429 */
-    val maxConcurrency: Int = 2,
-    val memWarnPct: Double = 85.0,
-    val cpuWarnPct: Double = 90.0,
+    @SerialName("max_concurrency") val maxConcurrency: Int = 2,
+    @SerialName("mem_warn_pct") val memWarnPct: Double = 85.0,
+    @SerialName("cpu_warn_pct") val cpuWarnPct: Double = 90.0,
     /** 温度预警阈值（摄氏）；超过即 degraded（thermal_state=hot） */
-    val tempWarnC: Double = 45.0,
+    @SerialName("temp_warn_c") val tempWarnC: Double = 45.0,
     /** 单次推理 / 嵌入的请求超时（毫秒） */
-    val requestTimeoutMs: Long = 300_000,
+    @SerialName("request_timeout_ms") val requestTimeoutMs: Long = 300_000,
 ) {
     fun capabilityFor(model: String): List<String> {
         val entry = capabilitiesMap[model]
@@ -46,7 +47,7 @@ data class NodeConfig(
 @Serializable
 data class ModelCapability(
     val capabilities: List<String>,
-    val contextLen: Int? = null,
+    @SerialName("context_len") val contextLen: Int? = null,
 )
 
 /** 从 JSON 资产（sanxian.json）反序列化；失败回退默认配置。 */

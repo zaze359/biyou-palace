@@ -877,12 +877,13 @@ Java_com_biyou_sanxian_llm_LlamaNative_generate(
 /**
  * 文本向量化（embeddings JNI 桥，Plan A：独立 embedding 句柄）。
  *
- * 与 generate() 走不同的 llama.cpp 入口：generate 用 llama_decode + 采样，embed 用
- * llama_encode + 取 pooled 向量。两者都写同一上下文的 KV，因此必须跑在**独立的**
- * embedding 上下文上（loadModel 时 enableEmbeddings=true 创建），与 chat 句柄隔离，
- * 否则会互相污染 KV。
+ * 入口按模型类型选择（同 examples/embedding）：模型带 encoder 时用 llama_encode，
+ * decoder-only 嵌入模型（如 Qwen3-Embedding）必须用 llama_decode——encode 构建的是
+ * encoder 图且 mctx=nullptr，qwen3 图里的 build_attn_inp_kv 会解引用空指针直接 SIGSEGV。
+ * decode 会写 KV，因此每次前清空；embedding 句柄独立于 chat（loadModel 时
+ * enableEmbeddings=true 创建），二者 KV 隔离。
  *
- * 流程：分词 → llama_batch_get_one(单序列, pos=0) → llama_encode →
+ * 流程：分词 → 清 KV → llama_batch_get_one(单序列, pos=0) → decode/encode →
  *       llama_get_embeddings_seq(ctx, 0) 取 seq 0 的 pooled 向量 → jfloatArray。
  *
  * @return n_embd 维向量；失败（未加载 / 分词空 / encode 失败 / pooling 为 NONE）返回长度 0 数组。
@@ -922,14 +923,20 @@ Java_com_biyou_sanxian_llm_LlamaNative_embed(
         toks.resize(maxTokens);
     }
 
-    // llama_batch_get_one 内部 pos=0、seq_id=0，返回的 batch 须用 llama_batch_free 释放。
+    // llama_batch_get_one 返回的是非 owning batch（token 指向 toks 内部），
+    // 只能用 llama_batch_init 分配的 batch 才可 llama_batch_free；对前者 free 会 delete[]
+    // 掉 vector 内存，触发 Scudo "invalid chunk state" 直接 abort。
+    const bool useEncoder = llama_model_has_encoder(s->model);
     llama_batch batch = llama_batch_get_one(toks.data(), static_cast<int32_t>(toks.size()));
-    if (llama_encode(s->ctx, batch) != 0) {
-        LOGE("embed llama_encode 失败");
-        llama_batch_free(batch);
+    if (!useEncoder) {
+        // decode 会写入 KV：复用 seq 0 前清空，避免旧 pos 占位导致 prepare 失败。
+        llama_memory_clear(llama_get_memory(s->ctx), true);
+    }
+    const int32_t rc = useEncoder ? llama_encode(s->ctx, batch) : llama_decode(s->ctx, batch);
+    if (rc != 0) {
+        LOGE("embed %s 失败: rc=%d", useEncoder ? "llama_encode" : "llama_decode", rc);
         return env->NewFloatArray(0);
     }
-    llama_batch_free(batch);
 
     // pooling 跟随模型元数据（cparams.pooling_type 默认 UNSPECIFIED）；仅当元数据缺失
     // 或为 NONE 时，loadModel 才重建 context 回退 LAST。此处仍兜底判空。

@@ -1,6 +1,5 @@
 package com.biyou.sanxian.ui
 
-import android.os.Environment
 import android.os.StatFs
 import com.biyou.sanxian.SanXianApplication
 import java.io.File
@@ -12,9 +11,10 @@ import java.io.File
  * 通过 [com.biyou.sanxian.SanXianApplication.appContext] 取应用私有外部存储目录，避免依赖运行时权限。
  */
 actual fun getModelsDirectory(): String {
-    val base = SanXianApplication.appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        ?: SanXianApplication.appContext.filesDir
-    return File(base, "models").apply { if (!exists()) mkdirs() }.absolutePath
+    // 统一落到应用私有外部目录 files/models（无需存储权限，scoped storage 下可读）。
+    val base = SanXianApplication.appContext.getExternalFilesDir("models")
+        ?: File(SanXianApplication.appContext.filesDir, "models")
+    return base.apply { if (!exists()) mkdirs() }.absolutePath
 }
 
 actual fun getModelsStorageInfo(): ModelsStorageInfo {
