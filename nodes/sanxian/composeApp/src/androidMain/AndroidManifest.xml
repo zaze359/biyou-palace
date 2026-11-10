@@ -9,6 +9,14 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- 熄屏存活：CPU partial wake lock + Wi-Fi lock -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 开机自启 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 引导用户加入电池优化白名单（避免 app idle 回收后台服务） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".SanXianApplication"
@@ -31,7 +39,25 @@
         <service
             android:name="com.biyou.sanxian.NodeForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync|specialUse">
+            <!--
+              Android 15+ 对 dataSync 类型有 6h 上限，且 BOOT_COMPLETED 不允许拉起 dataSync；
+              新系统上服务以 specialUse 启动（API 34+ 单独传该类型），避开这两个限制。
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="local_llm_inference_node_server" />
+        </service>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

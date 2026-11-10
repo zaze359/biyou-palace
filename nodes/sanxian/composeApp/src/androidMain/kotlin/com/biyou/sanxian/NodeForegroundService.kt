@@ -6,8 +6,11 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import com.biyou.sanxian.node.EmbeddingEngine
 import com.biyou.sanxian.node.NodeConfig
@@ -31,9 +34,14 @@ class NodeForegroundService : Service() {
 
     private var server: NodeServer? = null
 
+    /** 熄屏存活用的 CPU 锁与 Wi-Fi 锁，随服务生命周期持有/释放。 */
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
     override fun onCreate() {
         super.onCreate()
-        startForeground(NOTIF_ID, buildNotification())
+        startForegroundCompat()
+        acquireLocks()
 
         val config = loadConfig()
         val engine = LlmEngineProvider.engine
@@ -68,13 +76,65 @@ class NodeForegroundService : Service() {
         server?.start()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // START_STICKY：进程被系统回收后由系统重建服务（onCreate 会重新加载模型并重持锁）；
+        // 不返回 START_REDELIVER_INTENT，避免重复投递已处理的 Intent。
+        Log.i(TAG, "onStartCommand startId=$startId，返回 START_STICKY")
+        return START_STICKY
+    }
+
     override fun onDestroy() {
+        releaseLocks()
         server?.stop()
         server = null
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * API 34+ 以 specialUse 类型启动：Android 15 对 dataSync 前台服务有 6 小时上限，
+     * 且不允许从 BOOT_COMPLETED 拉起 dataSync；specialUse 无这两项限制。
+     * Android 12/13（本机）走两参重载，沿用 manifest 中的 dataSync，行为与之前一致。
+     */
+    private fun startForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIF_ID, buildNotification())
+        }
+    }
+
+    /**
+     * 熄屏后保持 CPU 与 Wi-Fi 活跃，保证 HTTP 服务可持续响应。
+     * 注意：锁只能防设备休眠，不能防「app idle 回收」——后者需靠电池优化白名单，
+     * 由 MainActivity 在未白名单时弹窗引导。
+     */
+    private fun acquireLocks() {
+        runCatching {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$TAG:cpu").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            // HIGH_PERF 在部分新系统上被限流，但仍是熄屏维持 Wi-Fi 收发的标准做法。
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "$TAG:wifi").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.i(TAG, "已持有 partial WakeLock + WifiLock（熄屏保持 CPU/Wi-Fi 活跃）")
+        }.onFailure { Log.e(TAG, "获取 WakeLock/WifiLock 失败", it) }
+    }
+
+    private fun releaseLocks() {
+        runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
+            .onFailure { Log.w(TAG, "释放 WakeLock 失败", it) }
+        runCatching { if (wifiLock?.isHeld == true) wifiLock?.release() }
+            .onFailure { Log.w(TAG, "释放 WifiLock 失败", it) }
+        wakeLock = null
+        wifiLock = null
+    }
 
     private var embeddingConfigured = false
 
