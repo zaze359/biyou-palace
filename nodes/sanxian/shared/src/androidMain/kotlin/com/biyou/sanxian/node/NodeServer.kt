@@ -32,6 +32,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.cio.CIO
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receiveText
+import io.ktor.server.response.ApplicationSendPipeline
 import io.ktor.server.response.respondText
 import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
@@ -45,10 +46,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
-import io.ktor.util.pipeline.PipelinePhase
-
-/** 自定义相位：在发送管线末尾追加节点契约响应头（X-Node-Id / X-Node-Role / Contract-Version）。 */
-private val ResponseHeadersPhase = PipelinePhase("ResponseHeaders")
 
 /**
  * 散仙节点 HTTP 服务（Ktor/CIO）。与准圣（FastAPI）对外行为**逐条一致**，仅推理后端不同：
@@ -111,8 +108,10 @@ class NodeServer(
             }
             proceed()
         }
-        application.sendPipeline.addPhase(ResponseHeadersPhase)
-        application.sendPipeline.intercept(ResponseHeadersPhase) {
+        // 契约响应头：必须挂在发送管线的 Before 相位。CIO 在 Engine 相位就会把
+        // headersBuilder 快照写进 HTTP 响应（含 SSE 与错误响应），此后再 append 不会生效。
+        // 挂在 Before 是唯一 choke point：JSON、SSE 首帧、StatusPages 错误、路由 404 都会经过这里。
+        application.sendPipeline.intercept(ApplicationSendPipeline.Phases.Before) {
             call.response.headers.append(Contract.HEADER_NODE_ID, config.nodeId)
             call.response.headers.append(Contract.HEADER_NODE_ROLE, Contract.ROLE)
             call.response.headers.append(Contract.HEADER_CONTRACT_VERSION, Contract.VERSION)
