@@ -7,6 +7,8 @@ androidxLifecycle = "2.8.4"
 androidxActivity = "1.9.3"
 androidxAppCompat = "1.7.0"
 work = "2.9.1"
+datastore = "1.1.1"
+zxing = "3.5.3"
 
 [libraries]
 # AndroidX
@@ -20,6 +22,10 @@ androidx-lifecycle-runtime-compose = { module = "org.jetbrains.androidx.lifecycl
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "androidxAppCompat" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+# 设备端配置：DataStore Preferences（端口/token/并发/模型等运行时可改，无需重打包）
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+# 首页访问二维码：仅本地编码，不走网络（core 为纯 Java 实现）
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 # Compose (BOM 由 composeMultiplatform 插件统一管理，这里仅声明模块)
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }

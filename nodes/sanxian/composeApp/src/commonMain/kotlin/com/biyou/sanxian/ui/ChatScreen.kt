@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,12 +41,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(
     state: ChatUiState,
+    accessRefreshKey: Int,
     onModelPathChange: (String) -> Unit,
     onLoadModel: () -> Unit,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onOpenModels: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -64,6 +67,9 @@ fun ChatScreen(
                     IconButton(onClick = onOpenModels) {
                         Icon(Icons.Filled.Folder, contentDescription = "模型管理")
                     }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "节点设置")
+                    }
                 },
             )
         },
@@ -78,6 +84,10 @@ fun ChatScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            NodeAccessCard(
+                refreshKey = accessRefreshKey,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            )
             ModelLoadBar(
                 modelPath = state.modelPath,
                 status = state.modelStatus,

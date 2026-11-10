@@ -29,6 +29,10 @@ kotlin {
             implementation("io.ktor:ktor-server-cio:2.3.12")
             // 节点看护：WorkManager 周期探活（系统下限 15 分钟），服务被系统停掉时发提醒
             implementation(libs.androidx.work.runtime.ktx)
+            // 设备端配置（DataStore Preferences）：运行时可改端口/token/并发/模型，重启服务生效
+            implementation(libs.androidx.datastore.preferences)
+            // 首页访问地址二维码（纯 Java 编码库，无网络/无新权限）
+            implementation(libs.zxing.core)
         }
         commonMain.dependencies {
             implementation(compose.runtime)

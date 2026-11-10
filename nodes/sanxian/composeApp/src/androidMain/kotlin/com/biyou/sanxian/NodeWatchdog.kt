@@ -13,7 +13,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.biyou.sanxian.node.loadNodeConfig
+import com.biyou.sanxian.node.NodeConfigStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -67,9 +67,8 @@ class NodeWatchdogWorker(
     }
 
     private fun readPort(): Int = runCatching {
-        applicationContext.assets.open("sanxian.json").bufferedReader().use {
-            loadNodeConfig(it.readText()).port
-        }
+        // 与前台服务同源：DataStore 用户配置 > assets 默认值。端口可能在设置页改过。
+        NodeConfigStore.effectiveConfigBlocking(applicationContext).port
     }.getOrDefault(DEFAULT_PORT)
 
     /** 只探本机回环，不需要网络；2s 超时，避免 Worker 被网络栈拖住。 */

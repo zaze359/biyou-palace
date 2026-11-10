@@ -9,11 +9,14 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import com.biyou.sanxian.node.EmbeddingEngine
 import com.biyou.sanxian.node.NodeConfig
+import com.biyou.sanxian.node.NodeConfigStore
 import com.biyou.sanxian.node.NodeServer
 import com.biyou.sanxian.node.loadNodeConfig
 import com.biyou.sanxian.llm.LlmConfig
@@ -158,16 +161,16 @@ class NodeForegroundService : Service() {
     private var embeddingConfigured = false
 
     /**
-     * 读取 assets 配置并把模型路径解析为绝对路径：
+     * 读取生效配置（DataStore 用户配置 > assets 默认值），并把模型路径解析为绝对路径：
      * 配置里只写文件名（如 `Qwen3-0.6B-Q8_0.gguf`），统一落到 [getModelsDirectory]（应用私有目录）。
      * 找不到时逐项打 WARN 并交由 [notifyModelMissing] 提示导入，绝不静默降级。
      */
     private fun loadConfig(): NodeConfig {
-        val raw = runCatching {
-            assets.open("sanxian.json").bufferedReader().use { loadNodeConfig(it.readText()) }
-        }.getOrElse {
-            Log.e(TAG, "读取 sanxian.json 失败，回退默认配置", it)
-            NodeConfig()
+        val raw = runCatching { NodeConfigStore.effectiveConfigBlocking(this) }.getOrElse {
+            Log.e(TAG, "读取 DataStore 配置失败，回退 assets 默认配置", it)
+            runCatching {
+                assets.open("sanxian.json").bufferedReader().use { loadNodeConfig(it.readText()) }
+            }.getOrDefault(NodeConfig())
         }
         embeddingConfigured = raw.embeddingModel != null
         return raw.copy(
@@ -223,6 +226,9 @@ class NodeForegroundService : Service() {
         const val NOTIF_ID = 1001
         private const val TAG = "NodeForegroundService"
 
+        /** 等旧实例 onDestroy（停服务、释放端口/模型）完成后再拉起新实例。 */
+        private const val RESTART_DELAY_MS = 400L
+
         /** 旧版默认模型目录：仅用于「存在但不可读」的诊断提示，不再作为加载路径。 */
         private const val LEGACY_MODELS_DIR = "/sdcard/biyou/models"
 
@@ -244,5 +250,20 @@ class NodeForegroundService : Service() {
         }.onFailure {
             Log.e(TAG, "拉起前台服务失败（Android 12+ 后台禁止启动 FGS）", it)
         }.getOrDefault(false)
+
+        /**
+         * 重启服务使新配置生效（端口 / token / 鉴权 / 并发 / 模型均在 onCreate 读取）。
+         * 先 stopService 释放旧端口与模型句柄，稍后在前台态重新拉起。
+         * 调用方须处于前台（设置页保存时），否则可能被 Android 12+ 拒绝后台启动 FGS。
+         */
+        fun restart(context: Context): Boolean {
+            val app = context.applicationContext
+            val stopped = runCatching {
+                app.stopService(Intent(app, NodeForegroundService::class.java))
+            }.onFailure { Log.e(TAG, "停止旧服务失败", it) }.getOrDefault(false)
+            Handler(Looper.getMainLooper()).postDelayed({ start(app) }, RESTART_DELAY_MS)
+            Log.i(TAG, "服务重启中（旧实例已停止=$stopped，${RESTART_DELAY_MS}ms 后重新拉起）")
+            return true
+        }
     }
 }

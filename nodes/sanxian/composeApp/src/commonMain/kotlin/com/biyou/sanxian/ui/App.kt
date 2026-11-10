@@ -11,7 +11,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.biyou.sanxian.ui.theme.DarkColorScheme
 import com.biyou.sanxian.ui.theme.LightColorScheme
 
-private enum class Screen { Chat, Models }
+private enum class Screen { Chat, Models, Settings }
 
 @Composable
 fun SanXianApp(darkTheme: Boolean) {
@@ -20,6 +20,8 @@ fun SanXianApp(darkTheme: Boolean) {
         typography = com.biyou.sanxian.ui.theme.Typography,
     ) {
         var screen by remember { mutableStateOf(Screen.Chat) }
+        // 从设置页返回后递增，触发首页访问信息卡片重新读取端口与 Wi-Fi 地址。
+        var accessRefreshKey by remember { mutableStateOf(0) }
         val chatViewModel: ChatViewModel = viewModel()
 
         when (screen) {
@@ -27,12 +29,14 @@ fun SanXianApp(darkTheme: Boolean) {
                 val uiState by chatViewModel.state.collectAsState()
                 ChatScreen(
                     state = uiState,
+                    accessRefreshKey = accessRefreshKey,
                     onModelPathChange = chatViewModel::onModelPathChange,
                     onLoadModel = chatViewModel::loadModel,
                     onInputChange = chatViewModel::onInputChange,
                     onSend = chatViewModel::onSend,
                     onStop = chatViewModel::onStop,
                     onOpenModels = { screen = Screen.Models },
+                    onOpenSettings = { screen = Screen.Settings },
                 )
             }
 
@@ -41,7 +45,10 @@ fun SanXianApp(darkTheme: Boolean) {
                 val modelsState by modelViewModel.state.collectAsState()
                 ModelManagerScreen(
                     state = modelsState,
-                    onBack = { screen = Screen.Chat },
+                    onBack = {
+                        accessRefreshKey++
+                        screen = Screen.Chat
+                    },
                     onToggleDownload = modelViewModel::toggleDownload,
                     onDelete = modelViewModel::deleteLocal,
                     onUseInChat = { path ->
@@ -49,6 +56,27 @@ fun SanXianApp(darkTheme: Boolean) {
                         screen = Screen.Chat
                     },
                     onImported = modelViewModel::refreshLocal,
+                )
+            }
+
+            Screen.Settings -> {
+                val settingsViewModel: SettingsViewModel = viewModel()
+                val settingsState by settingsViewModel.state.collectAsState()
+                SettingsScreen(
+                    state = settingsState,
+                    onBack = {
+                        accessRefreshKey++
+                        screen = Screen.Chat
+                    },
+                    onReload = settingsViewModel::reload,
+                    onPortChange = settingsViewModel::onPortChange,
+                    onTokenChange = settingsViewModel::onTokenChange,
+                    onAuthChange = settingsViewModel::onAuthChange,
+                    onConcurrencyChange = settingsViewModel::onConcurrencyChange,
+                    onChatModelChange = settingsViewModel::onChatModelChange,
+                    onEmbeddingModelChange = settingsViewModel::onEmbeddingModelChange,
+                    onRegenerateToken = settingsViewModel::regenerateToken,
+                    onSave = settingsViewModel::save,
                 )
             }
         }
