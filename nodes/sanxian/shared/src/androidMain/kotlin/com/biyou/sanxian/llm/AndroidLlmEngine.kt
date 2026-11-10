@@ -9,6 +9,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Android 平台 [LlmEngine] 实现：通过 JNI 调用 libllama_jni.so（内含 llama.cpp + ggml）。
@@ -34,6 +37,18 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
     // Plan A：与 chat 句柄隔离的独立 embedding 上下文。embed() 只走它，避免
     // llama_encode（embedding）与 llama_decode（chat）互相污染 KV。
     private var embeddingHandle: Long = 0L
+
+    /**
+     * 原生调用互斥锁：llama.cpp 的 model/context/sampler 链不是线程安全的，
+     * 同一句柄上并发跑两次 generate（或两次 embed）会破坏采样链（实测 scudo 报
+     * heap corruption 后 abort）。HTTP 层的并发闸门只负责「允许几路在途 + 429」，
+     * 真正进 native 的调用必须在这里串行化。
+     *
+     * chat 与 embedding 用两把锁：二者是不同的 model/context 句柄，彼此不共享
+     * sampler 链，串行化只会白白牺牲吞吐。
+     */
+    private val chatLock = Mutex()
+    private val embedLock = Mutex()
 
     override fun loadModel(config: LlmConfig) {
         if (config.modelPath.isBlank()) {
@@ -120,12 +135,22 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
             true
         }
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        // 本请求是否已真正进入 native：排队等 chatLock 期间不算，否则一个排队请求被取消时
+        // 会调用全局 stopGenerate，把正在跑的另一路生成误杀。
+        val inNative = AtomicBoolean(false)
         val job = scope.launch {
             try {
-                val rc = LlamaNative.generate(handle, roles, contents, config.maxTokens, sink)
-                if (rc == -3) channel.close(LlmError.Cancelled())
-                else if (rc < 0) channel.close(LlmError.GenerateFailed("native code $rc"))
-                else channel.close()
+                chatLock.withLock {
+                    inNative.set(true)
+                    try {
+                        val rc = LlamaNative.generate(handle, roles, contents, config.maxTokens, sink)
+                        if (rc == -3) channel.close(LlmError.Cancelled())
+                        else if (rc < 0) channel.close(LlmError.GenerateFailed("native code $rc"))
+                        else channel.close()
+                    } finally {
+                        inNative.set(false)
+                    }
+                }
             } catch (e: Throwable) {
                 Log.e(TAG, "native generate 异常", e)
                 channel.close(e)
@@ -138,7 +163,7 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
                     emit(piece)
                 }
             } finally {
-                LlamaNative.stopGenerate(handle)
+                if (inNative.get()) LlamaNative.stopGenerate(handle)
                 job.cancel()
             }
         }
@@ -179,9 +204,9 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
      *
      * @throws LlmError.NotLoaded 当 embedding 模型未加载（配置缺失或加载失败）
      */
-    override fun embed(texts: List<String>): List<List<Float>> {
+    override suspend fun embed(texts: List<String>): List<List<Float>> = embedLock.withLock {
         if (embeddingHandle == 0L) throw LlmError.NotLoaded()
-        return texts.map { raw ->
+        texts.map { raw ->
             val text = if (raw.isBlank()) " " else raw
             LlamaNative.embed(embeddingHandle, text).toList()
         }

@@ -10,6 +10,10 @@ package com.biyou.sanxian.node
  * 若节点未声明 embedding 能力，或后端未就绪，服务层直接 501，不调用本接口。
  */
 interface EmbeddingEngine {
-    /** 批量向量化；返回与 [texts] 等长的向量列表 */
-    fun embed(texts: List<String>): List<List<Float>>
+    /**
+     * 批量向量化；返回与 [texts] 等长的向量列表。
+     *
+     * suspend：实现方需在引擎层串行化 native 调用（同一 embedding 句柄不能并发 encode）。
+     */
+    suspend fun embed(texts: List<String>): List<List<Float>>
 }
