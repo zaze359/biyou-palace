@@ -95,6 +95,8 @@ cd nodes/sanxian
 
 ⚠️ 模型需自行 `adb push`（默认预热 `/sdcard/biyou/models/Qwen3-0.6B-Q8_0.gguf`），否则 `health=loading`、`chat=503`。
 
+⚠️ 后台存活有系统限制：请保持 App 在前台或「最近任务」、电池设为「不受限制」；重装/升级后需重新确认。稳定恢复只有「打开 App」或「重启设备」。详见 [`nodes/sanxian/README.md`](nodes/sanxian/README.md#后台存活用户侧约定android-12实测结论)。
+
 ---
 
 ## 三、配置

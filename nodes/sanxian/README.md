@@ -75,3 +75,42 @@ curl -N -X POST http://127.0.0.1:4011/v1/chat/completions \
 ```
 
 准圣的 `mock_ollama` 冒烟脚本已验证契约行为，散仙应对标准圣**逐条对照**。
+
+## 后台存活：用户侧约定（Android 12+，实测结论）
+
+节点是前台服务（FGS）常驻，但系统仍会主动停止它。实测过的两类失效：
+
+1. **应用 idle 回收**：熄屏后约 1 分 20 秒出现 `Stopping service due to app idle`，服务被停、端口失联；
+2. **后台启动 FGS 被拒**：进程重建或看护任务尝试拉起时，系统打印 `Background start not allowed: service ... startFg?=true`，服务不启动（除开机广播、高优先级 FCM 等豁免场景）。
+
+为此加了看护（[`NodeWatchdog.kt`](./composeApp/src/androidMain/kotlin/com/biyou/sanxian/NodeWatchdog.kt)：WorkManager 周期探活 + 失活通知），但**它只能提醒，不能续命**：
+
+- 周期下限 15 分钟，Doze 下还会被推迟到维护窗口，未加白名单时可能是小时级；
+- 后台启动 FGS 本身受限，看护的自愈大概率被系统拒绝；
+- 应用若处于 `RESTRICTED` 待机桶 / `RUN_ANY_IN_BACKGROUND: ignore`，WorkManager 作业**根本不会执行**，连提醒都发不出。
+
+### 使用约定（缺一不可）
+
+- **保持 App 在前台，或至少留在「最近任务」里**（不要划掉）；
+- **电池设为「不受限制」**：`设置 → 应用 → 散仙 → 电池 → 不受限制`（App 启动时若检测到被限制会弹窗引导）；
+- **长期当节点用：插电 + 屏幕常亮**最稳（`设置 → 显示 → 休眠` 设为永不，或开发者选项「不锁定屏幕」）；
+- **每次重装 / 升级 APK 后都要重新确认**：实测重装会清掉 doze 白名单条目，后台运行限制也可能回退（`RESTRICTED` + `RUN_ANY_IN_BACKGROUND: ignore`）。
+
+### 稳定恢复路径
+
+系统停掉服务后，稳定恢复只有两条：
+
+- **打开 App**：`MainActivity.onStart` 每次回前台都会重新拉起服务；
+- **重启设备**：`BootReceiver` 接 `BOOT_COMPLETED` 自动启动。
+
+看护通知只负责「告诉你节点掉了」，不要指望它自动恢复。
+
+### 现场核对命令
+
+```bash
+adb shell dumpsys deviceidle whitelist | grep sanxian     # 应有 user,com.biyou.sanxian,<uid>
+adb shell cmd appops get com.biyou.sanxian RUN_ANY_IN_BACKGROUND   # 应为 allow / default
+adb shell am get-standby-bucket com.biyou.sanxian         # 10=ACTIVE，30=RESTRICTED（受限）
+adb shell "curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4011/v1/health"
+```
+
