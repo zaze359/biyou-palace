@@ -85,6 +85,15 @@ class NodeForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 每次 startForegroundService（Activity 回前台、看护任务重试）都会新开一张
+        // 「必须很快调用 startForeground」的票据。即使服务已在前台，也必须再调一次，
+        // 否则系统抛 ForegroundServiceDidNotStartInTimeException 直接杀进程。
+        // startForeground 幂等，重复调用只是刷新通知。
+        if (!startForegroundCompat()) {
+            Log.e(TAG, "onStartCommand 中 startForeground 失败，服务退出")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // START_STICKY：进程被系统回收后由系统重建服务（onCreate 会重新加载模型并重持锁）；
         // 不返回 START_REDELIVER_INTENT，避免重复投递已处理的 Intent。
         Log.i(TAG, "onStartCommand startId=$startId，返回 START_STICKY")
