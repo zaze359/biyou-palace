@@ -40,8 +40,16 @@ class NodeForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForegroundCompat()
+        // 后台启动被系统拒绝时，onCreate 可能仍被调用但 startForeground 会抛异常；
+        // 不捕获会变成「did not call startForeground」ANR/崩溃。失败即退出，由看护任务提醒用户。
+        if (!startForegroundCompat()) {
+            Log.e(TAG, "startForeground 失败，服务退出（Android 12+ 后台启动前台服务受限）")
+            stopSelf()
+            return
+        }
         acquireLocks()
+        // 节点已恢复：撤掉看护任务此前发出的「已停止」提醒
+        NodeWatchdogWorker.clearAlert(this)
 
         val config = loadConfig()
         val engine = LlmEngineProvider.engine
@@ -97,13 +105,15 @@ class NodeForegroundService : Service() {
      * 且不允许从 BOOT_COMPLETED 拉起 dataSync；specialUse 无这两项限制。
      * Android 12/13（本机）走两参重载，沿用 manifest 中的 dataSync，行为与之前一致。
      */
-    private fun startForegroundCompat() {
+    private fun startForegroundCompat(): Boolean = runCatching {
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIF_ID, buildNotification())
         }
-    }
+    }.onFailure {
+        Log.e(TAG, "startForeground 抛异常（后台启动前台服务被拒）", it)
+    }.isSuccess
 
     /**
      * 熄屏后保持 CPU 与 Wi-Fi 活跃，保证 HTTP 服务可持续响应。
@@ -207,14 +217,23 @@ class NodeForegroundService : Service() {
         /** 旧版默认模型目录：仅用于「存在但不可读」的诊断提示，不再作为加载路径。 */
         private const val LEGACY_MODELS_DIR = "/sdcard/biyou/models"
 
-        /** 拉起前台服务（由 Application 或 UI 显式调用）。 */
-        fun start(context: Context) {
+        /**
+         * 拉起前台服务（由 Activity 前台态或开机广播调用）。
+         *
+         * @return false 表示调用侧被同步拒绝（Android 12+ 后台启动 FGS 抛
+         *   ForegroundServiceStartNotAllowedException）。注意：系统也可能只打日志、
+         *   静默拒绝而不抛异常，因此调用方必须用「端口探活」确认结果，不能只看返回值。
+         */
+        fun start(context: Context): Boolean = runCatching {
             val intent = Intent(context, NodeForegroundService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
                 context.startService(intent)
             }
-        }
+            true
+        }.onFailure {
+            Log.e(TAG, "拉起前台服务失败（Android 12+ 后台禁止启动 FGS）", it)
+        }.getOrDefault(false)
     }
 }

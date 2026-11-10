@@ -18,6 +18,9 @@ class SanXianApplication : Application() {
         LlmEngineProvider.init()
         // 散仙节点前台服务改由 MainActivity（前台态）拉起，避免 Android 12+
         // 在 Application.onCreate 后台启动前台服务被拒（ForegroundServiceStartNotAllowedException）。
+        // 服务被系统停掉后没有任何机会自救，这里注册周期探活兜底（失败只会提醒用户，
+        // 能力边界见 NodeWatchdogWorker 注释）。
+        NodeWatchdogWorker.schedule(this)
     }
 
     companion object {

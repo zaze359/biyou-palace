@@ -17,6 +17,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 引导用户加入电池优化白名单（避免 app idle 回收后台服务） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 看护任务发现节点被系统停掉时发提醒（Android 13+ 需运行时授权，MainActivity 内申请） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".SanXianApplication"

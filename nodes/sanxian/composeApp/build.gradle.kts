@@ -27,6 +27,8 @@ kotlin {
             implementation(project(":shared"))
             implementation(project(":nativelib"))
             implementation("io.ktor:ktor-server-cio:2.3.12")
+            // 节点看护：WorkManager 周期探活（系统下限 15 分钟），服务被系统停掉时发提醒
+            implementation(libs.androidx.work.runtime.ktx)
         }
         commonMain.dependencies {
             implementation(compose.runtime)
