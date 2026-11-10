@@ -64,6 +64,10 @@ struct LlmSession {
     int32_t n_batch = 512;  // 单次 eval 的批大小
     int32_t n_past = 0;     // KV Cache 中已填充的 token 数（多轮对话复用）
 
+    // 最近一次 generate 实际送入 KV 的 prompt token 数（**裁剪后**），供 usage.prompt_tokens。
+    // 同一句柄的生成由 Kotlin 侧 chatLock 串行化，读到的必是本请求自己的值。
+    int32_t lastPromptTokens = 0;
+
     // 一轮 generate 会跑多次「渲染 + 分词」探针，模板缺失的告警只打一次，免得刷屏把裁剪告警冲掉
     bool loggedTemplateFallback = false;
 
@@ -589,6 +593,13 @@ Java_com_biyou_sanxian_llm_LlamaNative_modelParamCount(JNIEnv* /*env*/, jclass /
     return (s && s->model) ? static_cast<jlong>(llama_model_n_params(s->model)) : 0;
 }
 
+/** 最近一次 generate 实际送入 KV 的 prompt token 数（裁剪后）；需在生成结束后立即读取。 */
+extern "C" JNIEXPORT jint JNICALL
+Java_com_biyou_sanxian_llm_LlamaNative_lastPromptTokens(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+    LlmSession* s = asSession(handle);
+    return s ? static_cast<jint>(s->lastPromptTokens) : 0;
+}
+
 /**
  * 只渲染不推理：用模型内嵌的 chat template 把多轮消息格式化成 prompt。
  *
@@ -738,6 +749,8 @@ Java_com_biyou_sanxian_llm_LlamaNative_generate(
     // ---- 3. KV 复用决策：增量复用 or 全量重算 ----
     //      增量：保留 LCP 长度的 KV，只对新增 token 做 llama_decode（设计见
     //      09-28-multi-turn-kv-reuse/design.md §3）。开关关闭时退回旧行为。
+    //      先记录裁剪后的真实 prompt token 数，供 /v1/chat/completions 的 usage 使用。
+    s->lastPromptTokens = static_cast<int32_t>(tokens.size());
     llama_memory_t mem = llama_get_memory(s->ctx);
 
     // D4：每轮以保存的采样参数重建采样链——seed>0 决定论，seed<=0 每次 fresh rand；
@@ -922,6 +935,9 @@ Java_com_biyou_sanxian_llm_LlamaNative_embed(
              toks.size(), maxTokens, maxTokens);
         toks.resize(maxTokens);
     }
+
+    // 记录实际参与本次 encode 的 token 数（截断后），供 /v1/embeddings 的 usage.prompt_tokens
+    s->lastPromptTokens = static_cast<int32_t>(toks.size());
 
     // llama_batch_get_one 返回的是非 owning batch（token 指向 toks 内部），
     // 只能用 llama_batch_init 分配的 batch 才可 llama_batch_free；对前者 free 会 delete[]

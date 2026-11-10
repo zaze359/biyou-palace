@@ -17,6 +17,7 @@ import com.biyou.sanxian.contract.NodeMeta
 import com.biyou.sanxian.contract.Usage
 import com.biyou.sanxian.llm.ChatMessage
 import com.biyou.sanxian.llm.ChatSession
+import com.biyou.sanxian.llm.GenerateStats
 import com.biyou.sanxian.llm.LlmEngine
 import com.biyou.sanxian.llm.LlmError
 import com.biyou.sanxian.llm.Role
@@ -44,6 +45,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
@@ -141,7 +145,13 @@ class NodeServer(
         // 注意：引擎暴露的 info.name 是 llama_model_desc（如 "Qwen3 0.6B"），并非文件名，
         // 因此这里统一用 basename 做身份，capabilities_map 按文件名声明即可精确命中。
         val loadedPath = if (engineLoaded) config.preloadModels.firstOrNull() else null
-        val loadedIds = loadedPath?.let { setOf(java.io.File(it).name) } ?: emptySet()
+        val loadedIds = buildSet {
+            loadedPath?.let { add(java.io.File(it).name) }
+            // embedding 是独立句柄：配置里声明了不代表加载成功，必须问引擎真实状态
+            if (embeddingEngine?.isLoaded == true) {
+                config.embeddingModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
+            }
+        }
         val engineOk = true // 引擎单例已构造（libllama_jni 已 load）；真正不可用由 generate→LlmError→503
         val preloadOk = NodeStatus.preloadSatisfied(
             config.preloadModels, loadedPath?.let { setOf(it) } ?: emptySet())
@@ -199,7 +209,7 @@ class NodeServer(
                 call.respondTextWriter(ContentType.Text.EventStream) {
                     val w = this // 捕获 Writer，供 launch 内部使用
                     coroutineScope {
-                        val flow = engine.generate(session, prompt)
+                        val flow = engine.generate(session, prompt, req.maxTokens ?: 0)
                         val job = launch {
                             flow.collect { piece ->
                                 try {
@@ -227,8 +237,11 @@ class NodeServer(
             gate.acquire()
             try {
                 val sb = StringBuilder()
-                engine.generate(session, prompt).collect { sb.append(it) }
+                val stats = GenerateStats()
+                engine.generate(session, prompt, req.maxTokens ?: 0, stats).collect { sb.append(it) }
                 val content = sb.toString()
+                val promptTokens = stats.promptTokens
+                val completionTokens = stats.completionTokens
                 call.respondJson(
                     HttpStatusCode.OK,
                     json.encodeToString(
@@ -244,9 +257,9 @@ class NodeServer(
                                 )
                             ),
                             usage = Usage(
-                                promptTokens = (req.messages.sumOf { it.content.length } / 4),
-                                completionTokens = (content.length / 4),
-                                totalTokens = (req.messages.sumOf { it.content.length } / 4) + (content.length / 4),
+                                promptTokens = promptTokens,
+                                completionTokens = completionTokens,
+                                totalTokens = promptTokens + completionTokens,
                             ),
                         )
                     )
@@ -261,6 +274,12 @@ class NodeServer(
 
     private suspend fun handleEmbeddings(call: ApplicationCall) {
         val req = json.decodeFromString(EmbeddingRequest.serializer(), call.receiveText())
+        // OpenAI 兼容：input 既可以是单个字符串，也可以是字符串数组
+        val inputs = when (val e = req.input) {
+            is JsonPrimitive -> listOf(e.content)
+            is JsonArray -> e.map { it.jsonPrimitive.content }
+            else -> throw badRequest("input 必须是字符串或字符串数组")
+        }
         if ("embedding" !in config.capabilityFor(req.model)) {
             throw capabilityNotSupported("模型 ${req.model.ifBlank { "(未指定)" }} 未声明 embedding 能力")
         }
@@ -268,18 +287,19 @@ class NodeServer(
             ?: throw capabilityNotSupported("该节点未启用 embedding 后端（请在 native 层实现 embed 桥）")
         gate.acquire()
         try {
-            val vectors = withContext(Dispatchers.IO) { eng.embed(req.input) }
+            val result = withContext(Dispatchers.IO) { eng.embed(inputs) }
+            val promptTokens = result.promptTokens
             call.respondJson(
                 HttpStatusCode.OK,
                 json.encodeToString(
                     EmbeddingResponse.serializer(),
                     EmbeddingResponse(
                         model = req.model,
-                        data = vectors.mapIndexed { i, v -> EmbeddingData(index = i, embedding = v) },
+                        data = result.vectors.mapIndexed { i, v -> EmbeddingData(index = i, embedding = v) },
                         usage = Usage(
-                            promptTokens = req.input.sumOf { it.length },
+                            promptTokens = promptTokens,
                             completionTokens = 0,
-                            totalTokens = req.input.sumOf { it.length },
+                            totalTokens = promptTokens,
                         ),
                     )
                 )

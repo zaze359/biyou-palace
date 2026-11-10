@@ -2,6 +2,7 @@ package com.biyou.sanxian.contract
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * 节点智能体统一契约（contract v1.0）的 Kotlin 数据模型。
@@ -125,7 +126,11 @@ data class Usage(
 @Serializable
 data class EmbeddingRequest(
     val model: String,
-    val input: List<String>,
+    /**
+     * OpenAI 兼容：既接受单个字符串，也接受字符串数组。
+     * 字符串在服务层归一化为单元素列表。
+     */
+    val input: JsonElement,
 )
 
 @Serializable

@@ -83,6 +83,13 @@ object LlamaNative {
     external fun modelParamCount(handle: Long): Long
 
     /**
+     * 最近一次 [generate] 或 [embed] 实际送入 KV/编码器的 token 数（**截断后**）。
+     *
+     * 需在调用返回后、同一句柄的下一路请求开始前读取（引擎层已用互斥锁串行化保证这一点）。
+     */
+    external fun lastPromptTokens(handle: Long): Int
+
+    /**
      * 流式生成：把多轮消息交给原生层，由原生在一次调用内完成
      * 「输入 token 预算 → 按消息裁剪 → chat template 渲染 → 分词 → eval → 采样」，
      * 每产出一个 token 回调 [TokenSink.onToken]。

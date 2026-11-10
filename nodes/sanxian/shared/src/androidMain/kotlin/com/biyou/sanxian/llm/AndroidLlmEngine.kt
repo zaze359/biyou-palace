@@ -1,7 +1,8 @@
 package com.biyou.sanxian.llm
 
-import com.biyou.sanxian.node.EmbeddingEngine
 import android.util.Log
+import com.biyou.sanxian.node.EmbeddingEngine
+import com.biyou.sanxian.node.EmbeddingResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -36,6 +37,7 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
     private var handle: Long = 0L
     // Plan A：与 chat 句柄隔离的独立 embedding 上下文。embed() 只走它，避免
     // llama_encode（embedding）与 llama_decode（chat）互相污染 KV。
+    @Volatile
     private var embeddingHandle: Long = 0L
 
     /**
@@ -118,8 +120,15 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
 
     override fun isModelLoaded(): Boolean = handle != 0L
 
-    override fun generate(session: ChatSession, prompt: String): Flow<String> {
+    override fun generate(
+        session: ChatSession,
+        prompt: String,
+        maxTokens: Int,
+        stats: GenerateStats?,
+    ): Flow<String> {
         if (handle == 0L) throw LlmError.NotLoaded()
+
+        val effectiveMax = if (maxTokens > 0) minOf(maxTokens, config.maxTokens) else config.maxTokens
 
         val messages = buildMessageList(session, prompt)
         if (messages.isEmpty()) throw LlmError.GenerateFailed("会话消息为空")
@@ -143,7 +152,13 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
                 chatLock.withLock {
                     inNative.set(true)
                     try {
-                        val rc = LlamaNative.generate(handle, roles, contents, config.maxTokens, sink)
+                        val rc = LlamaNative.generate(handle, roles, contents, effectiveMax, sink)
+                        // 真实用量：prompt 取原生裁剪后的 token 数，completion 取实际生成数。
+                        // 在锁内读取，避免下一路请求覆盖 lastPromptTokens。
+                        stats?.let {
+                            it.promptTokens = LlamaNative.lastPromptTokens(handle)
+                            it.completionTokens = if (rc > 0) rc else 0
+                        }
                         if (rc == -3) channel.close(LlmError.Cancelled())
                         else if (rc < 0) channel.close(LlmError.GenerateFailed("native code $rc"))
                         else channel.close()
@@ -195,6 +210,10 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
         }
     }
 
+    /** embedding 句柄是否已加载；health 的 models[].loaded 据此如实上报。 */
+    override val isLoaded: Boolean
+        get() = embeddingHandle != 0L
+
     /**
      * 批量向量化（实现 [EmbeddingEngine]，供 [com.biyou.sanxian.node.NodeServer] 的
      * `/v1/embeddings` 路由调用）。
@@ -204,12 +223,17 @@ class AndroidLlmEngine(private var config: LlmConfig) : LlmEngine, EmbeddingEngi
      *
      * @throws LlmError.NotLoaded 当 embedding 模型未加载（配置缺失或加载失败）
      */
-    override suspend fun embed(texts: List<String>): List<List<Float>> = embedLock.withLock {
+    override suspend fun embed(texts: List<String>): EmbeddingResult = embedLock.withLock {
         if (embeddingHandle == 0L) throw LlmError.NotLoaded()
-        texts.map { raw ->
+        var promptTokens = 0
+        val vectors = texts.map { raw ->
             val text = if (raw.isBlank()) " " else raw
-            LlamaNative.embed(embeddingHandle, text).toList()
+            val v = LlamaNative.embed(embeddingHandle, text).toList()
+            // 原生在截断（n_ubatch）后记录真实 token 数；锁内读取，避免下一批覆盖
+            promptTokens += LlamaNative.lastPromptTokens(embeddingHandle)
+            v
         }
+        EmbeddingResult(vectors = vectors, promptTokens = promptTokens)
     }
 
     /**
