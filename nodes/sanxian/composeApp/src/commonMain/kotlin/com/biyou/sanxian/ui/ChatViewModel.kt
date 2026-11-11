@@ -2,13 +2,10 @@ package com.biyou.sanxian.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.biyou.sanxian.contract.ChatMessage as ContractChatMessage
 import com.biyou.sanxian.llm.ChatMessage
-import com.biyou.sanxian.llm.ChatSession
-import com.biyou.sanxian.llm.LlmConfig
-import com.biyou.sanxian.llm.LlmEngine
-import com.biyou.sanxian.llm.LlmEngineProvider
-import com.biyou.sanxian.llm.LlmError
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,51 +13,66 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * 对话界面 ViewModel（MVI 雏形）。
- * Task #3 起由 Android JNI 引擎驱动真实本地推理：用户先指定 GGUF 模型路径并加载，
- * 之后输入消息即可看到逐字流式回复。
+ * 对话界面 ViewModel。
+ *
+ * 聊天**只走节点自身的 HTTP 端点**（`http://127.0.0.1:<端口>/v1/chat/completions`，契约原则 2），
+ * 不再直连进程内引擎单例——因此聊天页无法、也不允许切换正在对外服务的模型：
+ * 模型状态只从 `/v1/health` 只读获取，切换模型需到「节点设置」保存并由前台服务重启加载。
  */
-enum class ModelStatus { Idle, Loading, Loaded, Error }
-
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val inputText: String = "",
     val isGenerating: Boolean = false,
-    val modelPath: String = "",
-    val modelStatus: ModelStatus = ModelStatus.Idle,
-    val modelInfo: String? = null,
-    val modelError: String? = null,
+    val checkingNode: Boolean = true,
+    /** 节点当前已加载的 chat 模型（来自 /v1/health）；null 表示无可用模型 */
+    val nodeModel: String? = null,
+    val nodeStatus: String? = null,
+    /** 本机端点，如 `http://127.0.0.1:4011/v1`，仅用于展示 */
+    val endpoint: String = "",
+    val nodeError: String? = null,
 )
 
-class ChatViewModel : ViewModel() {
+class ChatViewModel(
+    private val client: NodeChatClient = KtorNodeChatClient(),
+    private val endpointProvider: suspend () -> NodeChatEndpoint = { loadNodeChatEndpoint() },
+) : ViewModel() {
 
-    private val engine: LlmEngine = LlmEngineProvider.engine
     private val _state = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
+    private var generationJob: Job? = null
     private var generatingIndex = -1
 
-    fun onModelPathChange(text: String) {
-        _state.update { it.copy(modelPath = text) }
+    init {
+        refreshNodeStatus()
     }
 
-    /** 加载指定路径的 GGUF 模型（在 IO 线程同步执行，完成后切回主线程更新状态）。 */
-    fun loadModel() {
-        val path = _state.value.modelPath.trim()
-        if (path.isEmpty() || _state.value.modelStatus == ModelStatus.Loading) return
-        _state.update { it.copy(modelStatus = ModelStatus.Loading, modelError = null) }
-        viewModelScope.launch(Dispatchers.IO) {
+    /** 重新读取节点端点与已加载模型（从设置/模型管理返回时调用）。 */
+    fun refreshNodeStatus() {
+        viewModelScope.launch {
+            _state.update { it.copy(checkingNode = true, nodeError = null) }
             try {
-                engine.loadModel(LlmConfig(modelPath = path))
-                val info = engine.getModelInfo()
+                val endpoint = endpointProvider()
+                val status = client.fetchModelStatus(endpoint)
                 _state.update {
                     it.copy(
-                        modelStatus = ModelStatus.Loaded,
-                        modelInfo = info?.let { i -> "${i.name} · ${i.backend}" },
+                        checkingNode = false,
+                        endpoint = endpoint.baseUrl,
+                        nodeModel = status.model,
+                        nodeStatus = status.nodeStatus,
+                        nodeError = status.error,
                     )
                 }
-            } catch (e: LlmError) {
-                _state.update { it.copy(modelStatus = ModelStatus.Error, modelError = e.message) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _state.update {
+                    it.copy(
+                        checkingNode = false,
+                        nodeModel = null,
+                        nodeError = "无法连接本机节点服务：${e.message ?: e::class.simpleName}",
+                    )
+                }
             }
         }
     }
@@ -72,8 +84,9 @@ class ChatViewModel : ViewModel() {
     fun onSend() {
         val text = _state.value.inputText.trim()
         if (text.isEmpty() || _state.value.isGenerating) return
-        if (_state.value.modelStatus != ModelStatus.Loaded) {
-            appendError("请先在上方加载 GGUF 模型")
+        val model = _state.value.nodeModel
+        if (model == null) {
+            appendError("节点没有已加载的 chat 模型，请到「节点设置」选择模型并保存")
             return
         }
 
@@ -83,14 +96,19 @@ class ChatViewModel : ViewModel() {
         generatingIndex = list.lastIndex
         _state.update { it.copy(messages = list, inputText = "", isGenerating = true) }
 
-        viewModelScope.launch {
-            val history = _state.value.messages.dropLast(1)
-            val session = ChatSession(
-                messages = history,
-                systemPrompt = "你是一个运行在手机上的本地离线 AI 助手，回答简洁准确。",
-            )
+        // 请求体 = 系统提示 + 历史（含本条用户消息）；最后一条空的 assistant 占位不发送。
+        val payload = buildList {
+            add(ContractChatMessage(role = "system", content = SYSTEM_PROMPT))
+            list.dropLast(1).forEach {
+                add(ContractChatMessage(role = it.role.name.lowercase(), content = it.content))
+            }
+        }
+
+        generationJob = viewModelScope.launch {
             try {
-                engine.generate(session, text).collect { chunk ->
+                val endpoint = endpointProvider()
+                _state.update { it.copy(endpoint = endpoint.baseUrl) }
+                client.streamChat(endpoint, model, payload) { chunk ->
                     _state.update { s ->
                         val msgs = s.messages.toMutableList()
                         if (generatingIndex in msgs.indices) {
@@ -100,19 +118,34 @@ class ChatViewModel : ViewModel() {
                         s.copy(messages = msgs)
                     }
                 }
-            } catch (e: LlmError) {
-                appendError(e.message ?: "unknown error")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: NodeChatException) {
+                appendError(describe(e))
+            } catch (e: Throwable) {
+                appendError("请求本机节点失败：${e.message ?: e::class.simpleName}")
             } finally {
                 _state.update { it.copy(isGenerating = false) }
                 generatingIndex = -1
+                generationJob = null
             }
         }
     }
 
+    /** 停止生成：直接取消 HTTP 请求（服务端会因客户端断开停止推理），不触碰引擎单例。 */
     fun onStop() {
-        engine.stopGeneration()
+        generationJob?.cancel()
+        generationJob = null
         _state.update { it.copy(isGenerating = false) }
         generatingIndex = -1
+    }
+
+    private fun describe(e: NodeChatException): String = when (e.status) {
+        401 -> "节点鉴权失败（401）：请到「节点设置」确认 token，并保存后重启服务"
+        429 -> "节点并发已满（429）：请稍后重试"
+        501 -> "节点不支持该能力（501）：${e.message}"
+        503 -> "节点模型不可用（503）：${e.message}"
+        else -> "节点返回错误（${e.status}）：${e.message}"
     }
 
     private fun appendError(msg: String) {
@@ -130,7 +163,11 @@ class ChatViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        // 引擎为进程级单例（LlmEngineProvider），不随 ViewModel 销毁；
-        // 模型卸载由显式入口调用 engine.close()，避免误释放共享模型。
+        generationJob?.cancel()
+        client.close()
+    }
+
+    private companion object {
+        const val SYSTEM_PROMPT = "你是一个运行在手机上的本地离线 AI 助手，回答简洁准确。"
     }
 }

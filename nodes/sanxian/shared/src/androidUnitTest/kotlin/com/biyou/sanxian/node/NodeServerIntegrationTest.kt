@@ -46,7 +46,13 @@ class NodeServerIntegrationTest {
         private val chunks: List<String> = listOf("你", "好"),
         private val loaded: Boolean = true,
     ) : LlmEngine {
-        override fun loadModel(config: LlmConfig) = Unit
+        /** 聊天链路不得触碰引擎：加载/释放次数用于回归断言。 */
+        var loadCalls = 0
+        var closeCalls = 0
+
+        override fun loadModel(config: LlmConfig) {
+            loadCalls++
+        }
         override fun isModelLoaded(): Boolean = loaded
         override fun generate(
             session: ChatSession,
@@ -65,7 +71,9 @@ class NodeServerIntegrationTest {
         override fun getModelInfo(): ModelInfo? =
             if (loaded) ModelInfo(name = "Qwen3 0.6B", contextSize = 4096, backend = "llama.cpp") else null
 
-        override fun close() = Unit
+        override fun close() {
+            closeCalls++
+        }
     }
 
     /** 假健康采集：固定返回正常资源，避免触碰 Android API。 */
@@ -246,6 +254,29 @@ class NodeServerIntegrationTest {
         val events = text.split("\n\n").filter { it.isNotBlank() }
         assertEquals(5, events.size, "应为 role + 2×content + stop + DONE 共 5 帧，实际：$events")
         assertTrue(events.all { it.startsWith("data: ") })
+    }
+
+    @Test
+    fun `聊天请求不触发引擎 load 与 close，节点服务持续可用`() = testApplication {
+        val engine = FakeLlmEngine()
+        installTestApi(
+            config = baseConfig.copy(preloadModels = listOf("/data/models/qwen.gguf")),
+            engine = engine,
+        )
+
+        repeat(2) { i ->
+            val res = client.post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"第${i}次"}],"stream":false}""")
+            }
+            assertEquals(HttpStatusCode.OK, res.status)
+        }
+        assertEquals(0, engine.loadCalls, "聊天请求不得触发 loadModel")
+        assertEquals(0, engine.closeCalls, "聊天请求不得 close 引擎句柄")
+
+        val health = json.parseToJsonElement(client.get("/v1/health").bodyAsText()).jsonObject
+        assertEquals("ready", health["status"]!!.jsonPrimitive.content)
+        assertTrue(health["models"]!!.jsonArray.single().jsonObject["loaded"]!!.jsonPrimitive.content.toBoolean())
     }
 
     // ----------------------------- embeddings -----------------------------

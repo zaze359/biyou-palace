@@ -41,6 +41,8 @@ data class ModelManagerUiState(
     val localModels: List<LocalModel> = emptyList(),
     val storage: ModelsStorageInfo = ModelsStorageInfo(freeBytes = 0, totalBytes = 0),
     val modelsDir: String = "",
+    val switching: Boolean = false,
+    val statusMessage: String? = null,
 )
 
 class ModelManagerViewModel : ViewModel() {
@@ -91,6 +93,36 @@ class ModelManagerViewModel : ViewModel() {
     fun deleteLocal(model: LocalModel) {
         deleteModelFile(model.path)
         refreshLocal()
+    }
+
+    /**
+     * 受控切换节点 chat 模型：写 DataStore 并重启前台服务（由服务重新加载模型），
+     * 不直接操作引擎句柄，因此不会出现「聊天里换模型把对外服务的模型关掉」。
+     */
+    fun useAsNodeModel(fileName: String) {
+        if (_state.value.switching) return
+        _state.update {
+            it.copy(switching = true, statusMessage = "正在切换节点模型：$fileName…")
+        }
+        viewModelScope.launch {
+            try {
+                val restarted = activateNodeChatModel(fileName)
+                _state.update {
+                    it.copy(
+                        switching = false,
+                        statusMessage = if (restarted) {
+                            "已设为节点 chat 模型，服务正在重启（模型加载需数秒）"
+                        } else {
+                            "已保存模型配置，但服务重启请求被系统拒绝；请回到首页重试"
+                        },
+                    )
+                }
+            } catch (e: Throwable) {
+                _state.update {
+                    it.copy(switching = false, statusMessage = "切换失败：${e.message}")
+                }
+            }
+        }
     }
 
     /** 扫描模型目录：已下载列表（忽略 .part）+ 存储占用。 */

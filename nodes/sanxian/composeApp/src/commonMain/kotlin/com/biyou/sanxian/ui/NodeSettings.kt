@@ -60,3 +60,16 @@ expect fun restartNodeService(): Boolean
 
 /** 探活本机 `/v1/health`，用于保存配置后确认服务已恢复。 */
 expect suspend fun probeNodeHealth(port: Int): Boolean
+
+/**
+ * 读取本机聊天端点（`http://127.0.0.1:<端口>/v1` + token）。
+ * 聊天改走节点 HTTP 接口后，端口与 token 必须与设备配置保持一致。
+ */
+expect suspend fun loadNodeChatEndpoint(): NodeChatEndpoint
+
+/**
+ * 受控切换节点 chat 模型：写入 DataStore 并重启前台服务，由服务在 onCreate 里重新加载模型。
+ * **不直接操作进程内引擎句柄**，避免聊天侧切换模型把对外服务的模型关掉。
+ * @return false 表示保存成功但服务重启请求被系统拒绝
+ */
+expect suspend fun activateNodeChatModel(fileName: String): Boolean

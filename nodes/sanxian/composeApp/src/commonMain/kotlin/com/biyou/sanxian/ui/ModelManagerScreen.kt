@@ -64,6 +64,15 @@ fun ModelManagerScreen(
         ) {
             item { SectionHeader("已下载模型") }
             item { ImportModelButton(onImported = onImported) }
+            state.statusMessage?.let { message ->
+                item {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             if (state.localModels.isEmpty()) {
                 item {
                     Text(
@@ -76,7 +85,8 @@ fun ModelManagerScreen(
                 items(state.localModels, key = { it.path }) { model ->
                     LocalModelRow(
                         model = model,
-                        onUseInChat = { onUseInChat(model.path) },
+                        switching = state.switching,
+                        onUseInChat = { onUseInChat(model.fileName) },
                         onDelete = { onDelete(model) },
                     )
                 }
@@ -109,6 +119,7 @@ private fun SectionHeader(title: String) {
 @Composable
 private fun LocalModelRow(
     model: LocalModel,
+    switching: Boolean,
     onUseInChat: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -121,9 +132,9 @@ private fun LocalModelRow(
                 Text(model.fileName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(formatBytes(model.sizeBytes), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             }
-            Button(onClick = onUseInChat) {
+            Button(onClick = onUseInChat, enabled = !switching) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                Text("在对话中使用")
+                Text("设为节点模型")
             }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)

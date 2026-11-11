@@ -17,8 +17,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.biyou.sanxian.ui.components.MessageBubble
 import kotlinx.coroutines.launch
@@ -42,8 +42,6 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     state: ChatUiState,
     accessRefreshKey: Int,
-    onModelPathChange: (String) -> Unit,
-    onLoadModel: () -> Unit,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -88,18 +86,14 @@ fun ChatScreen(
                 refreshKey = accessRefreshKey,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
             )
-            ModelLoadBar(
-                modelPath = state.modelPath,
-                status = state.modelStatus,
-                modelInfo = state.modelInfo,
-                modelError = state.modelError,
-                onPathChange = onModelPathChange,
-                onLoad = onLoadModel,
+            NodeModelBar(
+                state = state,
+                onOpenSettings = onOpenSettings,
             )
             if (state.messages.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "加载模型后，即可开始离线对话",
+                        text = "消息经由本机节点服务生成",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.outline,
                     )
@@ -118,14 +112,16 @@ fun ChatScreen(
     }
 }
 
+/**
+ * 节点模型状态条（只读）。
+ *
+ * 聊天已改走节点 HTTP 端点，页面不再提供「加载/切换模型」入口：
+ * 换模型必须到「节点设置」保存并重启前台服务，避免关掉正在对外服务的引擎句柄。
+ */
 @Composable
-private fun ModelLoadBar(
-    modelPath: String,
-    status: ModelStatus,
-    modelInfo: String?,
-    modelError: String?,
-    onPathChange: (String) -> Unit,
-    onLoad: () -> Unit,
+private fun NodeModelBar(
+    state: ChatUiState,
+    onOpenSettings: () -> Unit,
 ) {
     Surface(tonalElevation = 2.dp) {
         Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
@@ -133,33 +129,38 @@ private fun ModelLoadBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                BasicTextField(
-                    value = modelPath,
-                    onValueChange = onPathChange,
-                    modifier = Modifier.weight(1f).padding(12.dp),
-                    decorationBox = { inner ->
-                        if (modelPath.isEmpty()) {
-                            Text("GGUF 模型文件路径，如 /sdcard/Download/qwen2.5-1.5b.gguf", color = MaterialTheme.colorScheme.outline)
+                Column(modifier = Modifier.weight(1f).padding(start = 12.dp, top = 4.dp, bottom = 4.dp)) {
+                    Text(
+                        text = when {
+                            state.checkingNode -> "正在读取节点模型状态…"
+                            state.nodeModel != null -> "节点模型：${state.nodeModel}"
+                            else -> "节点模型：未加载"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (state.nodeModel != null) {
+                            MaterialTheme.colorScheme.primary
                         } else {
-                            inner()
-                        }
-                    },
-                )
-                Button(
-                    onClick = onLoad,
-                    enabled = modelPath.isNotBlank() && status != ModelStatus.Loading,
-                ) {
-                    if (status == ModelStatus.Loading) {
-                        CircularProgressIndicator(modifier = Modifier.padding(end = 6.dp))
-                    }
-                    Text(if (status == ModelStatus.Loaded) "重载" else "加载")
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                    Text(
+                        text = if (state.endpoint.isBlank()) "本机节点端点" else state.endpoint,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+                TextButton(onClick = onOpenSettings) {
+                    Text(if (state.nodeModel == null) "去设置" else "切换模型")
                 }
             }
-            when {
-                status == ModelStatus.Loaded && modelInfo != null ->
-                    Text("已加载：$modelInfo", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
-                status == ModelStatus.Error && modelError != null ->
-                    Text("加载失败：$modelError", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
+            state.nodeError?.takeIf { !state.checkingNode }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
+                )
             }
         }
     }

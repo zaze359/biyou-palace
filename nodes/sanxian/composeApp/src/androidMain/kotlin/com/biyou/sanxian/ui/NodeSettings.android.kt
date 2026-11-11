@@ -118,3 +118,17 @@ actual suspend fun probeNodeHealth(port: Int): Boolean = withContext(Dispatchers
         }
     }.getOrDefault(false)
 }
+
+actual suspend fun loadNodeChatEndpoint(): NodeChatEndpoint {
+    val config = NodeConfigStore.effectiveConfig(SanXianApplication.appContext)
+    return NodeChatEndpoint(
+        baseUrl = "http://127.0.0.1:${config.port}/v1",
+        token = config.sharedToken,
+    )
+}
+
+actual suspend fun activateNodeChatModel(fileName: String): Boolean {
+    val current = loadNodeSettings().values
+    saveNodeSettings(current.copy(chatModel = fileName))
+    return restartNodeService()
+}

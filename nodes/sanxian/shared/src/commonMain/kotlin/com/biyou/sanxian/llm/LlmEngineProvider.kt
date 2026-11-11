@@ -22,7 +22,15 @@ object LlmEngineProvider {
      * `System.loadLibrary`），真正的模型加载由 [LlmEngine.loadModel] 显式触发。
      * `by lazy` 默认 SYNCHRONIZED，线程安全。
      */
-    val engine: LlmEngine by lazy { createLlmEngine(LlmConfig()) }
+    private val engineDelegate = lazy { createLlmEngine(LlmConfig()) }
+
+    val engine: LlmEngine by engineDelegate
+
+    /**
+     * 单例是否已被访问（即是否已创建引擎）。
+     * 供回归测试断言「聊天层只走节点 HTTP，不触碰引擎单例」。
+     */
+    val isInitialized: Boolean get() = engineDelegate.isInitialized()
 
     /** 幂等触发单例创建；供 Application 完成 DI 初始化。 */
     fun init(): LlmEngine = engine

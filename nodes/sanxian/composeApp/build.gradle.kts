@@ -47,9 +47,19 @@ kotlin {
             implementation(libs.androidx.lifecycle.viewmodel.compose)
             implementation(libs.androidx.lifecycle.runtime.compose)
             implementation(libs.kotlinx.coroutines.core)
+            // 聊天改走本机节点 HTTP（契约原则 2），不再直连 LlmEngineProvider
+            implementation("io.ktor:ktor-client-core:2.3.12")
+            implementation("io.ktor:ktor-client-cio:2.3.12")
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
             // shared 是跨平台模块，放到 commonMain 使其对所有 target（含 iOS）可见；
             // nativelib 仅 Android，保留在 androidMain。
             implementation(project(":shared"))
+        }
+        androidUnitTest.dependencies {
+            implementation(kotlin("test"))
+            // 聊天客户端单测：MockEngine 在 JVM 内模拟节点 SSE 响应，不启动真实服务
+            implementation("io.ktor:ktor-client-mock:2.3.12")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
         }
     }
 }

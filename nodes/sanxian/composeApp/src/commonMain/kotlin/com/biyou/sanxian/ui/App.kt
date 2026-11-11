@@ -30,8 +30,6 @@ fun SanXianApp(darkTheme: Boolean) {
                 ChatScreen(
                     state = uiState,
                     accessRefreshKey = accessRefreshKey,
-                    onModelPathChange = chatViewModel::onModelPathChange,
-                    onLoadModel = chatViewModel::loadModel,
                     onInputChange = chatViewModel::onInputChange,
                     onSend = chatViewModel::onSend,
                     onStop = chatViewModel::onStop,
@@ -47,14 +45,12 @@ fun SanXianApp(darkTheme: Boolean) {
                     state = modelsState,
                     onBack = {
                         accessRefreshKey++
+                        chatViewModel.refreshNodeStatus()
                         screen = Screen.Chat
                     },
                     onToggleDownload = modelViewModel::toggleDownload,
                     onDelete = modelViewModel::deleteLocal,
-                    onUseInChat = { path ->
-                        chatViewModel.onModelPathChange(path)
-                        screen = Screen.Chat
-                    },
+                    onUseInChat = modelViewModel::useAsNodeModel,
                     onImported = modelViewModel::refreshLocal,
                 )
             }
@@ -66,6 +62,7 @@ fun SanXianApp(darkTheme: Boolean) {
                     state = settingsState,
                     onBack = {
                         accessRefreshKey++
+                        chatViewModel.refreshNodeStatus()
                         screen = Screen.Chat
                     },
                     onReload = settingsViewModel::reload,
