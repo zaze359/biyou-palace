@@ -62,6 +62,8 @@ internal fun Application.installNodeApi(
     gate: ConcurrencyGate,
     health: suspend (queueLen: Int) -> NodeHealthCollector.CollectedHealth,
 ) {
+    // 日志脱敏需要一个稳定的 token 值：节点安装路由时登记，避免启动早于 /v1/logs 的事件漏脱敏。
+    NodeLogBuffer.configure(config.sharedToken)
     NodeApi(config, engine, embeddingEngine, gate, health).configure(this)
 }
 
@@ -82,16 +84,21 @@ private class NodeApi(
                 call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
             }
             exception<LlmError> { call, e ->
+                NodeLogBuffer.record("ERROR", "upstream", "推理引擎错误：${e.message}")
                 val (status, body) = upstreamUnavailable("推理引擎错误：${e.message}").toOpenAIError()
                 call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
             }
             exception<NodeException> { call, e ->
                 val (status, body) = e.toOpenAIError()
-                if (status == 429) call.response.headers.append("Retry-After", "1")
+                if (status == 429) {
+                    NodeLogBuffer.record("WARNING", "concurrency", e.message ?: "并发已达上限")
+                    call.response.headers.append("Retry-After", "1")
+                }
                 call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
             }
             exception<Throwable> { call, e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                NodeLogBuffer.record("ERROR", "exception", "内部错误：${e.message}")
                 val (_, body) =
                     NodeException("内部错误：${e.message}", 500, "server_error", "internal_error").toOpenAIError()
                 call.respondText(body, ContentType.Application.Json, HttpStatusCode.InternalServerError)
@@ -106,6 +113,8 @@ private class NodeApi(
                     (if (it.size == 2) it[0] else "") to (if (it.size == 2) it[1] else "")
                 }
                 if (!(scheme.equals("Bearer", ignoreCase = true) && token == config.sharedToken)) {
+                    // 只记录失败事实，不记录调用方提供的 token 值
+                    NodeLogBuffer.record("WARNING", "auth", "鉴权失败：缺少或无效的 bearer token")
                     throw unauthorized("缺少或无效的 bearer token")
                 }
             }
@@ -135,6 +144,7 @@ private class NodeApi(
             }
             post("/v1/chat/completions") { handleChat(call) }
             post("/v1/embeddings") { handleEmbeddings(call) }
+            get("/v1/logs") { handleLogs(call) }
         }
     }
 
@@ -223,6 +233,7 @@ private class NodeApi(
                                     w.write(Sse.emit(Sse.contentBlock(id, req.model, piece)))
                                     w.flush()
                                 } catch (_: java.io.IOException) {
+                                    NodeLogBuffer.record("INFO", "disconnect", "客户端断开连接，已停止生成")
                                     cancel() // 客户端断开：取消收集 → 触发 engine finally 调 stopGeneration
                                     return@collect
                                 }
@@ -269,6 +280,19 @@ private class NodeApi(
                 gate.release()
             }
         }
+    }
+
+    // ----------------------------- /v1/logs -----------------------------
+
+    /** 最近的运行事件（白名单环形缓冲，已脱敏）。limit 默认 50，夹到 1..200。 */
+    private suspend fun handleLogs(call: ApplicationCall) {
+        val raw = call.request.queryParameters["limit"] ?: "50"
+        val limit = raw.toIntOrNull()
+            ?: throw badRequest("limit 必须为整数，实际：$raw")
+        call.respondJson(
+            HttpStatusCode.OK,
+            json.encodeToString(LogsResponse.serializer(), NodeLogBuffer.recent(limit)),
+        )
     }
 
     // ----------------------------- /v1/embeddings -----------------------------

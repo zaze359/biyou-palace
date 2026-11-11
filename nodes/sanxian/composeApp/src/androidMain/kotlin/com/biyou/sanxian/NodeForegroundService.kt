@@ -17,6 +17,7 @@ import android.util.Log
 import com.biyou.sanxian.node.EmbeddingEngine
 import com.biyou.sanxian.node.NodeConfig
 import com.biyou.sanxian.node.NodeConfigStore
+import com.biyou.sanxian.node.NodeLogBuffer
 import com.biyou.sanxian.node.NodeServer
 import com.biyou.sanxian.node.loadNodeConfig
 import com.biyou.sanxian.llm.LlmConfig
@@ -56,6 +57,13 @@ class NodeForegroundService : Service() {
 
         val config = loadConfig()
         val engine = LlmEngineProvider.engine
+        // 先登记 token，保证此后写入 /v1/logs 的消息都被脱敏
+        NodeLogBuffer.configure(config.sharedToken)
+        NodeLogBuffer.record(
+            "INFO",
+            "startup",
+            "节点服务启动：port=${config.port}，chat=${config.preloadModels.firstOrNull()?.let { File(it).name } ?: "无"}",
+        )
 
         // 预热：chat 模型（preload 首项）+ 独立 embedding 模型（若配置）。
         // 两者路径均已解析为应用私有目录下的绝对路径；embedding 模型经 LlmConfig.embeddingModelPath
@@ -72,13 +80,25 @@ class NodeForegroundService : Service() {
             }
             if (result.isSuccess) {
                 Log.i(TAG, "预热完成：chat=$chatPath，embedding=${config.embeddingModel ?: "未配置"}")
+                NodeLogBuffer.record(
+                    "INFO",
+                    "warmup",
+                    "预热完成：chat=${File(chatPath).name}，embedding=${config.embeddingModel?.let { File(it).name } ?: "未配置"}",
+                )
                 if (embeddingConfigured && config.embeddingModel == null) notifyModelMissing("embedding 模型未就绪，请导入 GGUF")
             } else {
-                Log.e(TAG, "预热失败：$chatPath", result.exceptionOrNull())
+                val error = result.exceptionOrNull()
+                Log.e(TAG, "预热失败：$chatPath", error)
+                NodeLogBuffer.record(
+                    "ERROR",
+                    "warmup",
+                    "预热失败：chat=${File(chatPath).name}，原因=${error?.message ?: error?.javaClass?.simpleName}",
+                )
                 notifyModelMissing("模型加载失败，请在 App「模型管理」中重新导入")
             }
         } else {
             Log.w(TAG, "未找到可预热的 chat 模型，节点以无模型状态启动")
+            NodeLogBuffer.record("WARNING", "warmup", "未找到可预热的 chat 模型，节点以无模型状态启动")
             notifyModelMissing("模型未就绪：请在 App「模型管理」中导入 GGUF")
         }
 
