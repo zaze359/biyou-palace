@@ -28,6 +28,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -322,6 +323,83 @@ class NodeServerIntegrationTest {
         val error = json.parseToJsonElement(res.bodyAsText()).jsonObject.errorBody()
         assertEquals("invalid_parameter", error["code"]!!.jsonPrimitive.content)
         assertEquals("invalid_request_error", error["type"]!!.jsonPrimitive.content)
+    }
+
+    // ----------------------------- /v1/logs -----------------------------
+
+    @Test
+    fun `logs 端点受 bearer 鉴权并返回契约结构`() = testApplication {
+        NodeLogBuffer.clear()
+        installTestApi(config = baseConfig.copy(authEnabled = true, sharedToken = "logs-token"))
+
+        val denied = client.get("/v1/logs")
+        assertEquals(HttpStatusCode.Unauthorized, denied.status)
+        assertEquals(
+            "invalid_api_key",
+            json.parseToJsonElement(denied.bodyAsText()).jsonObject.errorBody()["code"]!!.jsonPrimitive.content,
+        )
+
+        val allowed = client.get("/v1/logs") {
+            header(HttpHeaders.Authorization, "Bearer logs-token")
+        }
+        assertEquals(HttpStatusCode.OK, allowed.status)
+        assertContractHeaders(allowed)
+
+        val body = json.parseToJsonElement(allowed.bodyAsText()).jsonObject
+        assertEquals(200, body.int("capacity"))
+        assertEquals(50, body.int("limit"))
+        assertEquals(1, body.int("total"))
+        val line = body["lines"]!!.jsonArray.single().jsonObject
+        assertEquals(setOf("time", "level", "event", "message"), line.keys)
+        assertEquals("auth", line["event"]!!.jsonPrimitive.content)
+        // 401 事件不得泄漏调用方 token
+        assertFalse(line["message"]!!.jsonPrimitive.content.contains("logs-token"))
+    }
+
+    @Test
+    fun `logs limit 夹取且非法参数返回 400`() = testApplication {
+        NodeLogBuffer.clear()
+        repeat(5) { NodeLogBuffer.record("INFO", "startup", "e$it") }
+        installTestApi()
+
+        suspend fun logs(query: String): JsonObject =
+            json.parseToJsonElement(client.get("/v1/logs$query").bodyAsText()).jsonObject
+
+        val two = logs("?limit=2")
+        assertEquals(2, two.int("limit"))
+        assertEquals(
+            listOf("e3", "e4"),
+            two["lines"]!!.jsonArray.map { it.jsonObject["message"]!!.jsonPrimitive.content },
+        )
+        assertEquals(1, logs("?limit=0").int("limit"))
+        assertEquals(200, logs("?limit=9999").int("limit"))
+
+        val bad = client.get("/v1/logs?limit=abc")
+        assertEquals(HttpStatusCode.BadRequest, bad.status)
+        assertEquals(
+            "invalid_parameter",
+            json.parseToJsonElement(bad.bodyAsText()).jsonObject.errorBody()["code"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `logs 写入前脱敏 token 与绝对路径`() = testApplication {
+        NodeLogBuffer.clear()
+        installTestApi(config = baseConfig.copy(sharedToken = "secret-token-value"))
+        // 先发一次请求让路由装载（installNodeApi 会登记 token），再写入待脱敏事件
+        client.get("/v1/health")
+        NodeLogBuffer.record(
+            "ERROR",
+            "exception",
+            "boom at /storage/emulated/0/Android/data/app/models/a.gguf token=secret-token-value",
+        )
+
+        val body = json.parseToJsonElement(client.get("/v1/logs?limit=1").bodyAsText()).jsonObject
+        val message = body["lines"]!!.jsonArray.single().jsonObject["message"]!!.jsonPrimitive.content
+        assertFalse(message.contains("secret-token-value"))
+        assertFalse(message.contains("/storage"))
+        assertTrue(message.contains("***"))
+        assertTrue(message.contains("<path>"))
     }
 
     // ----------------------------- 并发闸门 -----------------------------
