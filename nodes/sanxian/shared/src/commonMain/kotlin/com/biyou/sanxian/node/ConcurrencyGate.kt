@@ -24,11 +24,11 @@ class ConcurrencyGate(val limit: Int) {
 
     val active: Int get() = current.get()
 
-    fun acquire() {
+    fun acquire(max: Int = limit) {
         while (true) {
             val n = current.get()
-            if (n >= limit) {
-                throw concurrencyLimitExceeded("并发已满（上限 $limit），请稍后重试")
+            if (n >= max) {
+                throw concurrencyLimitExceeded("并发已满（上限 $max），请稍后重试")
             }
             if (current.compareAndSet(n, n + 1)) return
         }

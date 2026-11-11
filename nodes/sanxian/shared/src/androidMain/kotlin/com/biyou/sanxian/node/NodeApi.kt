@@ -61,10 +61,12 @@ internal fun Application.installNodeApi(
     embeddingEngine: EmbeddingEngine?,
     gate: ConcurrencyGate,
     health: suspend (queueLen: Int) -> NodeHealthCollector.CollectedHealth,
+    governor: ThermalGovernor = ThermalGovernor(config),
+    thermalProbe: () -> ThermalSignal = { ThermalSignal() },
 ) {
     // 日志脱敏需要一个稳定的 token 值：节点安装路由时登记，避免启动早于 /v1/logs 的事件漏脱敏。
     NodeLogBuffer.configure(config.sharedToken)
-    NodeApi(config, engine, embeddingEngine, gate, health).configure(this)
+    NodeApi(config, engine, embeddingEngine, gate, health, governor, thermalProbe).configure(this)
 }
 
 /** 端点实现。行为与抽取前逐条一致；能力/鉴权/响应头语义见各类注释。 */
@@ -74,6 +76,8 @@ private class NodeApi(
     private val embeddingEngine: EmbeddingEngine?,
     private val gate: ConcurrencyGate,
     private val health: suspend (queueLen: Int) -> NodeHealthCollector.CollectedHealth,
+    private val governor: ThermalGovernor,
+    private val thermalProbe: () -> ThermalSignal,
 ) {
     private val json = Json { encodeDefaults = true }
 
@@ -94,6 +98,10 @@ private class NodeApi(
                     NodeLogBuffer.record("WARNING", "concurrency", e.message ?: "并发已达上限")
                     call.response.headers.append("Retry-After", "1")
                 }
+                if (status == 503 && e.code == "thermal_shedding") {
+                    NodeLogBuffer.record("WARNING", "concurrency", "发热降载：拒绝新请求（${e.message}）")
+                }
+                e.retryAfterSeconds?.let { call.response.headers.append("Retry-After", it.toString()) }
                 call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
             }
             exception<Throwable> { call, e ->
@@ -151,7 +159,16 @@ private class NodeApi(
     // ----------------------------- /v1/health -----------------------------
 
     private suspend fun buildHealth(): HealthResponse {
-        val (resources, memPct, cpuPct, tempC) = health(gate.active)
+        val collected = health(gate.active)
+        // health 采集到的是同源热信号，顺手刷新降载状态，保证面板与准入判断一致
+        governor.update(ThermalSignal(collected.thermalStatusLevel, collected.tempC))
+        val resources = collected.resources.copy(
+            thermalShedding = governor.isShedding,
+            shedReason = governor.shedReason,
+        )
+        val memPct = collected.memPct
+        val cpuPct = collected.cpuPct
+        val tempC = collected.tempC
         val info = runCatching { engine.getModelInfo() }.getOrNull()
         val engineLoaded = engine.isModelLoaded() && info != null
         // 单句柄引擎：已加载的必是 preload 首项。以「路径 basename」作为模型标识，
@@ -193,7 +210,11 @@ private class NodeApi(
             status = status,
             models = models,
             resources = resources,
-            limits = Limits(maxConcurrency = gate.limit, maxContextLen = knownContext.maxOrNull()),
+            limits = Limits(
+                maxConcurrency = gate.limit,
+                maxContextLen = knownContext.maxOrNull(),
+                effectiveMaxConcurrency = governor.effectiveLimit,
+            ),
             updatedAt = OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         )
     }
@@ -217,8 +238,9 @@ private class NodeApi(
         val session = buildSession(req)
         val prompt = lastUserContent(req)
 
+        admitInference()
         if (req.stream) {
-            gate.acquire() // 满载立即 429（在进入流式前抢占名额）
+            gate.acquire(governor.effectiveLimit) // 满载立即 429（在进入流式前抢占名额）
             try {
                 call.respondTextWriter(ContentType.Text.EventStream) {
                     val w = this // 捕获 Writer，供 launch 内部使用
@@ -252,7 +274,7 @@ private class NodeApi(
                 gate.release()
             }
         } else {
-            gate.acquire()
+            gate.acquire(governor.effectiveLimit)
             try {
                 val sb = StringBuilder()
                 val stats = GenerateStats()
@@ -310,7 +332,8 @@ private class NodeApi(
         }
         val eng = embeddingEngine
             ?: throw capabilityNotSupported("该节点未启用 embedding 后端（请在 native 层实现 embed 桥）")
-        gate.acquire()
+        admitInference()
+        gate.acquire(governor.effectiveLimit)
         try {
             val result = withContext(Dispatchers.IO) { eng.embed(inputs) }
             call.respondJson(
@@ -330,6 +353,12 @@ private class NodeApi(
     }
 
     // ----------------------------- 请求 → 引擎会话 映射 -----------------------------
+
+    /** 刷新热信号并做准入：降载期间新请求 503 + Retry-After，在途请求不受影响。 */
+    private fun admitInference() {
+        governor.update(thermalProbe())
+        governor.admit()
+    }
 
     private fun buildSession(req: ChatRequest): ChatSession {
         val system = req.messages.firstOrNull { it.role == "system" }?.content

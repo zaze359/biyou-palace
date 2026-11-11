@@ -15,6 +15,8 @@ class NodeException(
     val status: Int,
     val type: String = "invalid_request_error",
     val code: String,
+    /** 仅 429 / 降载 503 等需要提示重试时设置；StatusPages 据此写 Retry-After。 */
+    val retryAfterSeconds: Int? = null,
 ) : Exception(message)
 
 /** 上游不可用（引擎层异常 / 模型未加载）→ 503 */
@@ -36,6 +38,19 @@ fun badRequest(message: String) =
 /** 鉴权失败 → 401 */
 fun unauthorized(message: String) =
     NodeException(message, status = 401, type = "invalid_request_error", code = "invalid_api_key")
+
+/**
+ * 发热降载 → 503。code 固定为 `thermal_shedding`，响应头带 `Retry-After`。
+ * 与 429（并发已满）区分：降载是设备保护，需要比单纯限流更长的退避时间。
+ */
+fun thermalShedding(message: String, retryAfterSeconds: Int) =
+    NodeException(
+        message,
+        status = 503,
+        type = "server_error",
+        code = "thermal_shedding",
+        retryAfterSeconds = retryAfterSeconds,
+    )
 
 private val json = Json { encodeDefaults = true }
 

@@ -28,10 +28,14 @@ class NodeServer(
     private val embeddingEngine: EmbeddingEngine?,
 ) {
     private val gate = ConcurrencyGate(config.maxConcurrency)
+    private val governor = ThermalGovernor(config)
     private val server = embeddedServer(CIO, port = config.port, host = "0.0.0.0") {
-        installNodeApi(config, engine, embeddingEngine, gate) { queueLen ->
-            NodeHealthCollector.collect(context, queueLen)
-        }
+        installNodeApi(
+            config, engine, embeddingEngine, gate,
+            health = { queueLen -> NodeHealthCollector.collect(context, queueLen) },
+            governor = governor,
+            thermalProbe = { NodeHealthCollector.readThermalSignal(context) },
+        )
     }
 
     fun start(wait: Boolean = false) = server.start(wait)

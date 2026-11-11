@@ -33,6 +33,17 @@ data class NodeConfig(
     @SerialName("cpu_warn_pct") val cpuWarnPct: Double = 90.0,
     /** 温度预警阈值（摄氏）；超过即 degraded（thermal_state=hot） */
     @SerialName("temp_warn_c") val tempWarnC: Double = 45.0,
+    /**
+     * 发热降载：PowerManager 热状态等级 >= 该值即触发（1=light 2=moderate 3=severe
+     * 4=critical 5=emergency 6=shutdown）；<=0 表示不按热状态触发。
+     */
+    @SerialName("thermal_shed_status") val thermalShedStatus: Int = 3,
+    /** 发热降载：温度 >= 该值即触发（℃） */
+    @SerialName("thermal_shed_c") val thermalShedC: Double = 48.0,
+    /** 降载恢复阈值（℃）：必须 <= thermal_shed_c - 0.1，否则自动收敛以免阈值附近抖动 */
+    @SerialName("thermal_resume_c") val thermalResumeC: Double = 45.0,
+    /** 降载期间拒绝新请求的 Retry-After 秒数 */
+    @SerialName("thermal_retry_after_s") val thermalRetryAfterS: Int = 10,
     /** 单次推理 / 嵌入的请求超时（毫秒） */
     @SerialName("request_timeout_ms") val requestTimeoutMs: Long = 300_000,
 ) {
@@ -156,6 +167,10 @@ fun NodeConfig.Companion.fromMap(raw: Map<String, Any?>): NodeConfig {
         memWarnPct = dbl("mem_warn_pct") ?: 85.0,
         cpuWarnPct = dbl("cpu_warn_pct") ?: 90.0,
         tempWarnC = dbl("temp_warn_c") ?: 45.0,
+        thermalShedStatus = int("thermal_shed_status") ?: 3,
+        thermalShedC = dbl("thermal_shed_c") ?: 48.0,
+        thermalResumeC = dbl("thermal_resume_c") ?: 45.0,
+        thermalRetryAfterS = int("thermal_retry_after_s") ?: 10,
         requestTimeoutMs = (int("request_timeout_ms") ?: 300_000).toLong(),
     )
 }

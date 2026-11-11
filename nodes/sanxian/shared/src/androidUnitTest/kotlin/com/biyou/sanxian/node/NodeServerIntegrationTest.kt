@@ -18,6 +18,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
@@ -108,9 +111,12 @@ class NodeServerIntegrationTest {
         engine: LlmEngine = FakeLlmEngine(),
         embedding: EmbeddingEngine? = null,
         gate: ConcurrencyGate = ConcurrencyGate(config.maxConcurrency),
+        health: suspend (Int) -> NodeHealthCollector.CollectedHealth = fakeHealth,
+        governor: ThermalGovernor = ThermalGovernor(config),
+        thermalProbe: () -> ThermalSignal = { ThermalSignal() },
     ) {
         application {
-            installNodeApi(config, engine, embedding, gate, fakeHealth)
+            installNodeApi(config, engine, embedding, gate, health, governor, thermalProbe)
         }
     }
 
@@ -400,6 +406,133 @@ class NodeServerIntegrationTest {
         assertFalse(message.contains("/storage"))
         assertTrue(message.contains("***"))
         assertTrue(message.contains("<path>"))
+    }
+
+    // ----------------------------- 发热降载 -----------------------------
+
+    /** 慢引擎：用来验证降载不会中断已在途的流式请求。 */
+    private class SlowLlmEngine(private val delayMs: Long = 150) : LlmEngine {
+        override fun loadModel(config: LlmConfig) = Unit
+        override fun isModelLoaded(): Boolean = true
+        override fun generate(
+            session: ChatSession,
+            prompt: String,
+            maxTokens: Int,
+            stats: GenerateStats?,
+        ): Flow<String> = flow {
+            listOf("你", "好", "呀").forEach {
+                delay(delayMs)
+                emit(it)
+            }
+            stats?.apply {
+                promptTokens = 12
+                completionTokens = 3
+            }
+        }
+
+        override fun stopGeneration() = Unit
+        override fun getModelInfo(): ModelInfo = ModelInfo("Qwen3 0.6B", 4096, "llama.cpp")
+        override fun close() = Unit
+    }
+
+    /** 健康采集跟随注入的热信号，保证 /v1/health 与准入判断同源。 */
+    private fun thermalHealth(
+        signal: () -> ThermalSignal,
+    ): suspend (Int) -> NodeHealthCollector.CollectedHealth = { queueLen ->
+        val s = signal()
+        NodeHealthCollector.CollectedHealth(
+            resources = Resources(
+                cpuPct = 10.0,
+                memUsedMb = 1024,
+                memTotalMb = 4096,
+                diskFreeMb = 8192,
+                queueLen = queueLen,
+                batteryPct = 88.0,
+                temperatureC = s.tempC,
+                thermalState = if ((s.statusLevel ?: 0) >= 3) "warn" else "nominal",
+            ),
+            memPct = 25.0,
+            cpuPct = 10.0,
+            tempC = s.tempC,
+            thermalStatusLevel = s.statusLevel,
+        )
+    }
+
+    @Test
+    fun `过热时新请求 503 且健康暴露降载，恢复后自动放行`() = testApplication {
+        var signal = ThermalSignal(statusLevel = 3, tempC = 50.0)
+        installTestApi(health = thermalHealth { signal }, thermalProbe = { signal })
+
+        suspend fun chat(): HttpResponse = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"hi"}]}""")
+        }
+
+        val hot = chat()
+        assertEquals(HttpStatusCode.ServiceUnavailable, hot.status)
+        assertEquals(
+            "thermal_shedding",
+            json.parseToJsonElement(hot.bodyAsText()).jsonObject.errorBody()["code"]!!.jsonPrimitive.content,
+        )
+        assertEquals("10", hot.headers["Retry-After"])
+        assertContractHeaders(hot)
+
+        val health = json.parseToJsonElement(client.get("/v1/health").bodyAsText()).jsonObject
+        val resources = health["resources"]!!.jsonObject
+        assertEquals("true", resources["thermal_shedding"]!!.jsonPrimitive.content)
+        assertTrue(resources["shed_reason"]!!.jsonPrimitive.content.contains("thermal_status=3"))
+        // 既有字段语义不变，新增字段反映有效并发
+        assertEquals("2", health["limits"]!!.jsonObject["max_concurrency"]!!.jsonPrimitive.content)
+        assertEquals("1", health["limits"]!!.jsonObject["effective_max_concurrency"]!!.jsonPrimitive.content)
+
+        // 迟滞：46℃ 仍高于恢复阈值 45℃
+        signal = ThermalSignal(statusLevel = 2, tempC = 46.0)
+        assertEquals(HttpStatusCode.ServiceUnavailable, chat().status)
+
+        signal = ThermalSignal(statusLevel = 2, tempC = 44.0)
+        assertEquals(HttpStatusCode.OK, chat().status)
+        val recovered = json.parseToJsonElement(client.get("/v1/health").bodyAsText()).jsonObject
+        assertEquals("false", recovered["resources"]!!.jsonObject["thermal_shedding"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `热信号不可用时正常服务且不误判过热`() = testApplication {
+        installTestApi(thermalProbe = { ThermalSignal() })
+
+        val response = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"hi"}]}""")
+        }
+        assertEquals(HttpStatusCode.OK, response.status)
+    }
+
+    @Test
+    fun `降载不中断已在途的流式请求`() = testApplication {
+        var signal = ThermalSignal(statusLevel = 1, tempC = 30.0)
+        installTestApi(engine = SlowLlmEngine(), thermalProbe = { signal })
+
+        coroutineScope {
+            val first = async {
+                client.post("/v1/chat/completions") {
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"hi"}],"stream":true}""")
+                }
+            }
+            delay(200) // 让首个请求进入流式生成
+            signal = ThermalSignal(statusLevel = 3, tempC = 50.0)
+
+            val second = client.post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.ServiceUnavailable, second.status)
+
+            val firstResponse = first.await()
+            assertEquals(HttpStatusCode.OK, firstResponse.status)
+            val text = firstResponse.bodyAsText()
+            assertTrue(text.contains("你"))
+            assertTrue(text.contains("[DONE]"))
+        }
     }
 
     // ----------------------------- 并发闸门 -----------------------------

@@ -42,7 +42,9 @@ nodes/sanxian/
 | 并发闸门 429 + Retry-After | ✅ | `ConcurrencyGate` |
 | 可选 bearer 鉴权（覆盖全端点） | ✅ | `NodeServer` 鉴权中间件 |
 | 客户端断连即 `stopGeneration` | ✅ | Flow 取消 → `AndroidLlmEngine.finally` |
-| 本地聊天 UI 走 localhost 同端点 | ⚠️ 未实现（UI 仍直连 `LlmEngineProvider`，非 HTTP） | 待改；契约要求见 `implement.md` §2.5 |
+| 本地聊天 UI 走 localhost 同端点 | ✅ | `NodeChatClient` 请求 `/v1/chat/completions`；聊天页不再直连引擎 |
+| `/v1/logs` 事件环形缓冲（200 条，脱敏） | ✅ | `LogBuffer` + `NodeApi.handleLogs` |
+| 发热/降频联动降载（503 + Retry-After，自动恢复） | ✅ | `ThermalGovernor` + `NodeApi.admitInference` |
 
 ## 构建与验证（需真机 / CI）
 
@@ -75,6 +77,51 @@ curl -N -X POST http://127.0.0.1:4011/v1/chat/completions \
 ```
 
 准圣的 `mock_ollama` 冒烟脚本已验证契约行为，散仙应对标准圣**逐条对照**。
+
+## 发热降载（thermal shedding）
+
+触发信号（任一满足即降载）：
+
+- `PowerManager.currentThermalStatus >= thermal_shed_status`（默认 3 = severe，覆盖系统降频/限频）；
+- 电池温度 `>= thermal_shed_c`（默认 48℃）。
+
+降载期间行为：
+
+- 有效并发压到 **1**；**新请求立即返回 503**，OpenAI 错误体：
+  `{"error":{"code":"thermal_shedding","type":"server_error","message":"设备温度过高，节点已降载（…），请稍后重试"}}`，
+  并带 `Retry-After: 10`（秒，可配）；
+- **已在途请求不中断**，正常产出到 `[DONE]`；
+- 恢复需带迟滞：温度 `<= thermal_resume_c`（默认 45℃）且热状态回落到触发等级以下；`thermal_resume_c` 配到高于 `thermal_shed_c` 时自动收敛为 `thermal_shed_c - 0.1`，避免抖动；
+- 热信号读不到（老系统/设备不支持，`null`）**不会误判过热**，维持正常服务。
+
+`/v1/health` 新增（原字段语义不变）：
+
+| 字段 | 含义 |
+|---|---|
+| `resources.thermal_shedding` | 当前是否降载 |
+| `resources.shed_reason` | 触发原因（如 `thermal_status=3`、`temperature=50.0℃ ≥ 48.0℃`） |
+| `limits.effective_max_concurrency` | 当前生效并发上限（降载为 1） |
+
+配置项（assets / DataStore 同风格）：
+
+```json
+{
+  "thermal_shed_status": 3,
+  "thermal_shed_c": 48.0,
+  "thermal_resume_c": 45.0,
+  "thermal_retry_after_s": 10
+}
+```
+
+真机验证（用系统热状态注入，必要时还原）：
+
+```bash
+adb shell cmd thermalservice override-status 3   # 模拟 severe 降频
+curl http://127.0.0.1:4011/v1/health             # thermal_shedding=true, effective_max_concurrency=1
+curl -X POST http://127.0.0.1:4011/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"<loaded>","messages":[{"role":"user","content":"hi"}]}'   # 503 + Retry-After + thermal_shedding
+adb shell cmd thermalservice reset               # 恢复真实热状态
+```
 
 ## 后台存活：用户侧约定（Android 12+，实测结论）
 

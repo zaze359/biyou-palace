@@ -58,12 +58,18 @@ data class Resources(
     @SerialName("battery_pct") val batteryPct: Double? = null,
     @SerialName("temperature_c") val temperatureC: Double? = null,
     @SerialName("thermal_state") val thermalState: String? = null,
+    /** 是否处于发热降载（散仙专属；准圣恒为 null） */
+    @SerialName("thermal_shedding") val thermalShedding: Boolean? = null,
+    /** 降载触发原因（未降载为 null） */
+    @SerialName("shed_reason") val shedReason: String? = null,
 )
 
 @Serializable
 data class Limits(
     @SerialName("max_concurrency") val maxConcurrency: Int,
     @SerialName("max_context_len") val maxContextLen: Int?,
+    /** 当前实际生效的并发上限：降载期间为 1（附加字段，max_concurrency 语义不变） */
+    @SerialName("effective_max_concurrency") val effectiveMaxConcurrency: Int? = null,
 )
 
 // ----------------------------- /v1/models -----------------------------

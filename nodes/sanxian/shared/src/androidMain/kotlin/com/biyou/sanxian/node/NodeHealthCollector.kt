@@ -25,12 +25,15 @@ object NodeHealthCollector {
         val memPct: Double?,
         val cpuPct: Double?,
         val tempC: Double?,
+        /** PowerManager 热状态等级（0=none … 6=shutdown）；平台不支持时为 null */
+        val thermalStatusLevel: Int? = null,
     )
 
     suspend fun collect(context: Context, queueLen: Int): CollectedHealth {
         val batteryPct = readBatteryPct(context)
         val tempC = readTemperatureC(context)
-        val thermalState = readThermalState(context, tempC, null)
+        val statusLevel = readThermalStatusLevel(context)
+        val thermalState = mapThermalStatus(statusLevel)
         val (memUsedMb, memTotalMb, memPct) = readMemory(context)
         val cpuPct = readCpuPct()
         val diskFreeMb = readDiskFreeMb(context)
@@ -44,8 +47,15 @@ object NodeHealthCollector {
             temperatureC = tempC,
             thermalState = thermalState,
         )
-        return CollectedHealth(resources, memPct, cpuPct, tempC)
+        return CollectedHealth(resources, memPct, cpuPct, tempC, statusLevel)
     }
+
+    /**
+     * 请求路径用的轻量热信号（不做 CPU/内存采样）：供发热降载闸门判断。
+     * 任一读取失败都为 null，绝不抛异常，也绝不把 null 当成过热。
+     */
+    fun readThermalSignal(context: Context): ThermalSignal =
+        ThermalSignal(statusLevel = readThermalStatusLevel(context), tempC = readTemperatureC(context))
 
     private fun readBatteryPct(context: Context): Double? = runCatching {
         val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
@@ -64,32 +74,26 @@ object NodeHealthCollector {
         if (t <= 0) null else t / 10.0
     }.getOrNull()
 
-    /** 热状态：优先 API 29+ PowerManager 真实状态；否则按温度阈值推断；皆不可得 → null。 */
-    private fun readThermalState(context: Context, tempC: Double?, tempWarnC: Double?): String? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            runCatching {
-                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                val status = pm?.currentThermalStatus ?: return@runCatching null
-                return mapThermalStatus(status)
-            }.getOrNull()?.let { return it }
-        }
-        return deriveThermalState(tempC, tempWarnC)
+    /**
+     * 热状态：API 29+ 读 PowerManager 真实等级；老系统/读取失败 → null。
+     * 注意：平台不支持时常见返回 `THERMAL_STATUS_NONE(0)`，那只表示「不热」，不是过热。
+     */
+    private fun readThermalStatusLevel(context: Context): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.currentThermalStatus
+        }.getOrNull()
     }
 
-    private fun mapThermalStatus(status: Int): String = when (status) {
-        PowerManager.THERMAL_STATUS_NONE,
-        PowerManager.THERMAL_STATUS_LIGHT,
-        PowerManager.THERMAL_STATUS_MODERATE -> "nominal"
-        PowerManager.THERMAL_STATUS_SEVERE -> "warn"
-        else -> "hot" // CRITICAL / SHUTDOWN / EMERGENCY
-    }
-
-    private fun deriveThermalState(tempC: Double?, tempWarnC: Double?): String? {
-        if (tempC == null || tempWarnC == null) return null
-        return when {
-            tempC < tempWarnC * 0.9 -> "nominal"
-            tempC < tempWarnC -> "warn"
-            else -> "hot"
+    private fun mapThermalStatus(status: Int?): String? {
+        if (status == null) return null
+        return when (status) {
+            PowerManager.THERMAL_STATUS_NONE,
+            PowerManager.THERMAL_STATUS_LIGHT,
+            PowerManager.THERMAL_STATUS_MODERATE -> "nominal"
+            PowerManager.THERMAL_STATUS_SEVERE -> "warn"
+            else -> "hot" // CRITICAL / SHUTDOWN / EMERGENCY
         }
     }
 
