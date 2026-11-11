@@ -31,6 +31,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.android)
             implementation("io.ktor:ktor-server-cio:2.3.12")
         }
+        androidUnitTest.dependencies {
+            // 端点级集成测试：Ktor testApplication 在 JVM 内跑完整路由，不需要真机/真实模型
+            implementation("io.ktor:ktor-server-test-host:2.3.12")
+        }
     }
 }
 
