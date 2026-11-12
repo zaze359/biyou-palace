@@ -1,0 +1,90 @@
+{
+  "id": "quasheng-model-lifecycle",
+  "name": "quasheng-model-lifecycle",
+  "title": "准圣 P1 模型生命周期管理（CLI/脚本层）",
+  "description": "在不新增 HTTP 管理端点的前提下，为 quasheng CLI 增加 list/pull/import/delete/unload 模型生命周期命令，含磁盘与内存预检、失败可读原因、非零退出码，并补齐离线 GGUF 导入文档与 mock 测试。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "nodes/quasheng",
+  "package": null,
+  "priority": "P2",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-12",
+  "completedAt": "2026-11-12",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "M1",
+      "title": "命令清单与参数风格定稿",
+      "status": "done",
+      "files": [],
+      "acceptance": "list/pull/import/delete/unload 五条命令；管理命令用 --ollama，对话参数沿用 --base/--token/--model/--once；不新增 HTTP 端点",
+      "depends_on": [],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "M2",
+      "title": "实现模型管理客户端与磁盘/内存预检",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/model_ops.py",
+        "nodes/quasheng/cli.py"
+      ],
+      "acceptance": "直连 Ollama /api/*；pull/import 预检磁盘（体积+512MB）与内存（体积×1.1）；失败消息含步骤+模型+原因；删除默认确认，非交互必须 --yes",
+      "depends_on": [
+        "M1"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "M3",
+      "title": "mock 测试覆盖与全量回归",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/tests/test_model_ops.py"
+      ],
+      "acceptance": "覆盖 list/pull/import/delete/unload 成功与失败路径、空间不足、上游报错、删除确认；全量 pytest 144 passed；smoke 18/18",
+      "depends_on": [
+        "M2"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "M4",
+      "title": "README 模型管理与离线 GGUF 导入文档",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/README.md"
+      ],
+      "acceptance": "命令表、预检规则、GGUF 来源/Modelfile 写法/ollama create/导入后验证完整可照做",
+      "depends_on": [
+        "M2"
+      ],
+      "parallel": false,
+      "size": "S"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-quasheng-node-agent",
+  "relatedFiles": [
+    "nodes/quasheng/cli.py",
+    "nodes/quasheng/model_ops.py",
+    "nodes/quasheng/tests/test_model_ops.py",
+    "nodes/quasheng/README.md"
+  ],
+  "notes": "只做 CLI/脚本层，未新增任何 HTTP 管理端点；未提交（用户未要求）。",
+  "meta": {
+    "tests": "144 passed",
+    "smoke": "18/18",
+    "realChecks": "本机 Ollama 0.40.11：list 成功、unload 成功、unload 不存在模型 404 非零、delete 非交互拒绝非零；pull 因沙箱网络拒绝 registry 重定向而退出 1（错误可读，非 CLI 缺陷）"
+  }
+}
+}

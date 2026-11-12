@@ -152,7 +152,8 @@
     }
   ],
   "children": [
-    "11-08-quasheng-delivery-hardening"
+    "11-08-quasheng-delivery-hardening",
+    "11-12-quasheng-model-lifecycle"
   ],
   "parent": "10-13-biyou-v1-blueprint",
   "relatedFiles": [

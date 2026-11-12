@@ -216,6 +216,81 @@ REPL 命令：
 
 交互模式会把 `user` / `assistant` 历史逐轮带上，因此支持真正的多轮对话；失败轮次会回滚用户消息，避免污染上下文。非 2xx 响应会打印 `HTTP <status> · <error.code> · <error.message>`，`--once` 失败时以非零码退出，不会静默输出空行。
 
+## 模型生命周期管理（CLI）
+
+契约第五章明确节点**不提供模型 / 权重管理 API**，因此模型管理全部在命令行完成，直连本机 Ollama 原生 `/api/*`，不经过节点、不需要 `--token`。
+
+```bash
+OLLAMA=http://127.0.0.1:11434   # 默认读 QUASHENG_OLLAMA_BASE，再回退到此值
+
+python -m nodes.quasheng.cli list
+python -m nodes.quasheng.cli pull qwen2.5:7b-instruct-q4_K_M
+python -m nodes.quasheng.cli import ~/models/qwen2.5-7b-instruct-q4_K_M.gguf --name qwen2.5:7b-instruct-q4_K_M
+python -m nodes.quasheng.cli delete qwen2.5:7b-instruct-q4_K_M          # 交互确认
+python -m nodes.quasheng.cli delete qwen2.5:7b-instruct-q4_K_M --yes    # 非交互环境必须显式 --yes
+python -m nodes.quasheng.cli unload qwen2.5:7b-instruct-q4_K_M          # keep_alive=0
+```
+
+| 命令 | 行为 |
+|---|---|
+| `list` | `/api/tags` 列出已安装模型，并用 `/api/ps` 标出「已加载 / 未加载」，附大小与参数量 |
+| `pull <model>` | 先查 registry manifest 估算体积做预检，再流式输出拉取进度 |
+| `import <gguf> [--name] [--system] [--template]` | 校验文件与空间后调用 `/api/create`，并打印等价 Modelfile |
+| `delete <model> [--yes]` | 默认要求确认；非交互终端且没有 `--yes` 时直接拒绝 |
+| `unload <model>` | 以 `keep_alive=0` 调用 `/api/generate`，释放模型占用的内存 |
+
+通用参数：`--ollama <url>` 指定本机 Ollama（缺省 `QUASHENG_OLLAMA_BASE`，再缺省 `http://127.0.0.1:11434`）。管理命令使用 `trust_env=False`，本机流量不会被 `HTTP(S)_PROXY` 改写。
+
+**预检规则**：`pull` / `import` 在写入前检查磁盘与内存，不足时拒绝并给出差额。
+
+- 磁盘：需要「模型体积 + 512 MB 预留」，与 `OLLAMA_MODELS`（默认 `~/.ollama/models`）所在分区可用空间比较。
+- 内存：需要「模型体积 × 1.1」与当前可用物理内存比较（加载时还有 KV cache 与运行时开销）。
+- `pull` 无法从 registry 取得体积（私有模型、离线、manifest 格式未知）时，打印提示并跳过预检，不阻断拉取。
+
+失败一律返回非零退出码，错误信息格式为「步骤 + 模型 + 原因」，例如：
+`拉取模型 qwen2.5:7b 失败：磁盘空间不足，需要 5.5 GB（模型 5.0 GB + 预留 512.0 MB），可用 1.0 GB，还差 4.5 GB`。
+
+### 离线 GGUF 导入流程
+
+适用于目标机器不能直连 Ollama registry、或只有 GGUF 权重的场景。
+
+1. **准备 GGUF**：从模型发布页下载对应量化文件（如 `Q4_K_M`），放到本机任意目录，例如 `~/models/qwen2.5-7b-instruct-q4_K_M.gguf`。若只有 Hugging Face 原始权重，可用 llama.cpp 的 `convert_hf_to_gguf.py` 先转换再量化。
+2. **确认 Modelfile 内容**（可选，`import` 会自动生成并打印）：
+
+   ```text
+   FROM /Users/you/models/qwen2.5-7b-instruct-q4_K_M.gguf
+   SYSTEM """你是准圣节点上的本地助手。"""
+   TEMPLATE """{{ if .System }}<|im_start|>system
+   {{ .System }}<|im_end|>
+   {{ end }}{{ if .Prompt }}<|im_start|>user
+   {{ .Prompt }}<|im_end|>
+   {{ end }}<|im_start|>assistant
+   """
+   ```
+
+   最小可用版本只需要 `FROM <绝对路径>`；`TEMPLATE` 必须与模型族匹配，否则回答格式会异常。CLI 支持 `--system` / `--template` 直接写入。
+3. **创建模型**：
+
+   ```bash
+   python -m nodes.quasheng.cli import ~/models/qwen2.5-7b-instruct-q4_K_M.gguf \
+     --name qwen2.5:7b-instruct-q4_K_M
+   ```
+
+   等价手工命令：`ollama create qwen2.5:7b-instruct-q4_K_M -f ./Modelfile`。CLI 底层调用 `POST /api/create`，请求体包含 `model`、`from`（GGUF 绝对路径）以及可选的 `system` / `template`。
+4. **验证**：
+
+   ```bash
+   python -m nodes.quasheng.cli list                 # 应出现新模型，状态为「未加载」
+   ollama run qwen2.5:7b-instruct-q4_K_M "你好"       # 直接验证推理
+   curl http://127.0.0.1:4010/v1/models              # 节点列表应包含该模型
+   ```
+
+   节点对未登记模型默认只声明 `chat` 能力；若要用于 `/v1/embeddings`，需在 `capabilities_map` 中显式声明 `embedding`。
+5. **内存管理**：导入只把权重写入 `OLLAMA_MODELS`，不会立即加载。首次推理会加载模型；不用时执行 `unload` 释放内存。
+
+> 注意：`delete` 只删 Ollama 中的模型条目与 blob，不会删除原始 GGUF 文件；确认无误后再自行清理源文件。
+
+
 ## 冒烟验证
 
 ```bash
