@@ -212,3 +212,35 @@ def test_local_model_prefix_conflict_is_rejected():
     with pytest.raises(ConfigError) as excinfo:
         check_local_model_conflicts(settings, ["relay-a/local-name", "llama3:8b"])
     assert "relay-a/local-name" in str(excinfo.value)
+
+
+_DISCOVER_YAML = """
+upstreams:
+  - id: relay-a
+    base_url: https://relay.example.com/v1
+    enabled: true
+    api_key_env: TEST_RELAY_KEY
+    discover: true
+"""
+
+
+def test_discover_allows_empty_whitelist_and_default_interval(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, _DISCOVER_YAML)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+
+    settings = load_settings()
+    upstream = settings.upstreams[0]
+    assert upstream.discover is True
+    assert upstream.discover_interval_s == 300.0
+    assert upstream.models == []
+
+
+def test_discover_interval_below_floor_is_rejected(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, _DISCOVER_YAML + "    discover_interval_s: 10\n")
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "下限" in str(excinfo.value)

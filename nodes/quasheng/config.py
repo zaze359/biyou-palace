@@ -25,6 +25,9 @@ MODEL_OWNER = "biyou-node"
 # 上游 provider id：同时作为远程模型 id 前缀
 _PROVIDER_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _VISIBILITIES = ("local", "cluster", "both")
+# 动态发现频率下限：避免把上游 /v1/models 打成压力源
+MIN_DISCOVER_INTERVAL_S = 60.0
+DEFAULT_DISCOVER_INTERVAL_S = 300.0
 
 
 def _normalize_caps(raw: dict | None) -> dict[str, dict]:
@@ -115,6 +118,9 @@ class UpstreamSettings:
     data_leaves_lan: bool = True
     # 设计稿默认 false：显式 enabled: true 才参与探活、列表与路由
     enabled: bool = False
+    # 动态发现：开启后以上游 /v1/models 与 models[] 的交集为准（models[] 可为空）
+    discover: bool = False
+    discover_interval_s: float = DEFAULT_DISCOVER_INTERVAL_S
     models: list[UpstreamModel] = field(default_factory=list)
 
     def model_for(self, model_id: str) -> UpstreamModel | None:
@@ -147,10 +153,12 @@ def _validate_base_url(provider: str, raw: Any) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
-def _parse_models(provider: str, raw: Any) -> list[UpstreamModel]:
-    if not isinstance(raw, list) or not raw:
+def _parse_models(provider: str, raw: Any, *, allow_empty: bool = False) -> list[UpstreamModel]:
+    if raw is None and allow_empty:
+        return []
+    if not isinstance(raw, list) or (not raw and not allow_empty):
         raise ConfigError(
-            f"上游 {provider} 必须配置静态 models 清单（P0 不支持动态发现）"
+            f"上游 {provider} 必须配置静态 models 清单，或设置 discover: true 开启动态发现"
         )
     out: list[UpstreamModel] = []
     for item in raw:
@@ -203,6 +211,18 @@ def _parse_upstreams(raw: Any) -> list[UpstreamSettings]:
                 f"{' / '.join(_VISIBILITIES)}"
             )
         enabled = bool(item.get("enabled", False))
+        discover = bool(item.get("discover", False))
+        try:
+            discover_interval = float(
+                item.get("discover_interval_s", DEFAULT_DISCOVER_INTERVAL_S)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"上游 {provider} 的 discover_interval_s 必须是数字") from exc
+        if discover and discover_interval < MIN_DISCOVER_INTERVAL_S:
+            raise ConfigError(
+                f"上游 {provider} 的 discover_interval_s={discover_interval:g} "
+                f"低于下限 {MIN_DISCOVER_INTERVAL_S:g} 秒：动态发现频率过低会持续给上游施压"
+            )
 
         api_key_env = str(item.get("api_key_env") or "").strip() or None
         api_key: Secret | None = None
@@ -243,7 +263,13 @@ def _parse_upstreams(raw: Any) -> list[UpstreamSettings]:
                 visibility=visibility,
                 data_leaves_lan=bool(item.get("data_leaves_lan", True)),
                 enabled=enabled,
-                models=_parse_models(provider, item.get("models")),
+                discover=discover,
+                discover_interval_s=discover_interval,
+                models=(
+                    _parse_models(provider, item.get("models"), allow_empty=True)
+                    if discover
+                    else _parse_models(provider, item.get("models"))
+                ),
             )
         )
 

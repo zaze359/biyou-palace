@@ -228,20 +228,24 @@ def _source_is_loopback(request: Request) -> bool:
 
 
 def _resolve_remote(
-    settings: Settings, model: str
-) -> tuple[UpstreamSettings | None, UpstreamModel | None]:
-    """解析 `<provider>/<model>`：返回 (上游配置, 静态清单项)。
+    request: Request, settings: Settings, model: str
+) -> tuple[UpstreamSettings | None, UpstreamModel | None, UpstreamRuntime | None]:
+    """解析 `<provider>/<model>`：返回 (上游配置, 当前快照中的模型, 运行时)。
 
-    - 不认识的 provider / 不带斜杠的裸名 → (None, None)，维持原本地路径。
-    - 已知 provider 但模型未在清单 → (cfg, None)，由调用方统一 404。
+    - 不认识的 provider / 不带斜杠的裸名 → (None, None, None)，维持原本地路径。
+    - 已知 provider 但模型不在快照（静态清单或最近一次发现结果）→
+      (cfg, None, runtime)，由调用方统一 404。
     """
     if "/" not in model:
-        return None, None
+        return None, None, None
     provider, _, rest = model.partition("/")
     for cfg in settings.upstreams:
         if cfg.enabled and cfg.id == provider:
-            return cfg, cfg.model_for(rest)
-    return None, None
+            runtime = _runtime_for(request, cfg)
+            if runtime is None:
+                return cfg, None, None
+            return cfg, runtime.model_for(rest), runtime
+    return None, None, None
 
 
 def _runtime_for(request: Request, cfg: UpstreamSettings) -> UpstreamRuntime | None:
@@ -302,7 +306,7 @@ def _remote_health_models(runtime: UpstreamRuntime) -> list[dict[str, Any]]:
             "upstream_status": status,
             "data_leaves_lan": cfg.data_leaves_lan,
         }
-        for model in cfg.models
+        for model in runtime.models
     ]
 
 
@@ -318,7 +322,7 @@ def _remote_list_entries(runtime: UpstreamRuntime) -> list[dict[str, Any]]:
             "source": "upstream",
             "available": status == "ready",
         }
-        for model in cfg.models
+        for model in runtime.models
     ]
 
 
@@ -571,6 +575,21 @@ async def _probe_with_retry(
     raise last
 
 
+async def _discover_forever(runtime: UpstreamRuntime) -> None:
+    """后台动态发现循环：纯 asyncio，不引入新调度依赖。
+
+    首轮由 lifespan 在启动阶段执行；这里只负责后续周期刷新。
+    """
+    while True:
+        await asyncio.sleep(runtime.cfg.discover_interval_s)
+        try:
+            await runtime.discover()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 后台任务异常不得杀死进程
+            logger.exception("上游 %s 模型发现循环异常", runtime.cfg.id)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logbuffer.configure(None)  # 先建缓冲，配置错误也要能记录
@@ -611,6 +630,28 @@ async def lifespan(app: FastAPI):
                 "upstream",
                 f"上游 {cfg.id} 会把 prompt 送出局域网（visibility={cfg.visibility}）",
             )
+        if cfg.discover:
+            logger.info(
+                "上游 %s 已开启动态发现（间隔 %.0fs，白名单 %d 项）",
+                cfg.id,
+                cfg.discover_interval_s,
+                len(cfg.models),
+            )
+            logbuffer.record(
+                "INFO",
+                "upstream",
+                f"上游 {cfg.id} 已开启动态发现（间隔 {cfg.discover_interval_s:.0f}s，白名单 {len(cfg.models)} 项）",
+            )
+            if not cfg.models:
+                logger.warning(
+                    "上游 %s discover=true 且未配置 models 白名单：将暴露上游返回的全部模型",
+                    cfg.id,
+                )
+                logbuffer.record(
+                    "WARNING",
+                    "upstream",
+                    f"上游 {cfg.id} discover=true 且未配置白名单：将暴露上游返回的全部模型",
+                )
 
     try:
         await _probe_with_retry(client)
@@ -651,6 +692,18 @@ async def lifespan(app: FastAPI):
 
     await _warmup(client, settings, app.state.loading, app.state.warmup_failed)
 
+    # 动态发现：首轮并发执行且各带超时，失败只记录、不阻塞启动；
+    # 之后每个上游一个后台任务，间隔不低于配置校验过的下限（60s）。
+    discovering = [runtime for runtime in app.state.upstreams if runtime.cfg.discover]
+    if discovering:
+        await asyncio.gather(
+            *(runtime.discover() for runtime in discovering), return_exceptions=True
+        )
+    app.state.discovery_tasks = [
+        asyncio.create_task(_discover_forever(runtime), name=f"discover-{runtime.cfg.id}")
+        for runtime in discovering
+    ]
+
     try:
         yield
     finally:
@@ -658,6 +711,13 @@ async def lifespan(app: FastAPI):
         # 真实 SIGTERM 下 uvicorn 已先关闭 listener，新请求表现为连接拒绝；
         # 这里的标记只覆盖应用内部主动停机的路径（见中间件注释）。
         app.state.shutting_down = True
+        for task in getattr(app.state, "discovery_tasks", []):
+            task.cancel()
+        for task in getattr(app.state, "discovery_tasks", []):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         drained = await app.state.gate.wait_idle(settings.shutdown_timeout)
         if drained:
             logger.info("在途请求已清空，节点退出")
@@ -768,17 +828,21 @@ def create_app() -> FastAPI:
             upstream_states = []
             for runtime in runtimes:
                 status = await runtime.refresh_status()
-                upstream_states.append(
-                    {
-                        "id": runtime.cfg.id,
-                        "status": status,
-                        "active": runtime.active,
-                        "max_concurrency": runtime.max_concurrency,
-                        "visibility": runtime.cfg.visibility,
-                        "data_leaves_lan": runtime.cfg.data_leaves_lan,
-                        "last_error": runtime.last_error,
-                    }
-                )
+                state: dict[str, Any] = {
+                    "id": runtime.cfg.id,
+                    "status": status,
+                    "active": runtime.active,
+                    "max_concurrency": runtime.max_concurrency,
+                    "visibility": runtime.cfg.visibility,
+                    "data_leaves_lan": runtime.cfg.data_leaves_lan,
+                    "last_error": runtime.last_error,
+                }
+                if runtime.cfg.discover:
+                    # 可选字段：仅 discover=true 时出现，关闭发现时 health 与现状一致
+                    state["discover"] = True
+                    state["last_discovery_at"] = runtime.last_discovery_at
+                    state["discovery_error"] = runtime.discovery_error
+                upstream_states.append(state)
                 if loopback or runtime.cfg.cluster_visible():
                     remote_models.extend(_remote_health_models(runtime))
         return await build_health(
@@ -814,7 +878,7 @@ def create_app() -> FastAPI:
 
         model = str(payload.get("model") or "")
 
-        provider_cfg, remote_model = _resolve_remote(settings, model)
+        provider_cfg, remote_model, runtime = _resolve_remote(request, settings, model)
         if provider_cfg is not None:
             # 未知模型 / 未授权来源统一 404，不做模糊匹配、不泄漏存在性
             if remote_model is None or not _remote_visible(request, provider_cfg):
@@ -826,7 +890,6 @@ def create_app() -> FastAPI:
                     code="capability_not_supported",
                     type_="invalid_request_error",
                 )
-            runtime = _runtime_for(request, provider_cfg)
             if runtime is None:
                 raise _model_not_found(model)
             return await _handle_upstream_chat(request, payload, runtime, gate, remote_model)
@@ -888,7 +951,7 @@ def create_app() -> FastAPI:
         model = str(payload.get("model") or "")
 
         # P0 明确不桥接上游 embeddings；远程模型一律按不可用处理
-        if _resolve_remote(settings, model)[0] is not None:
+        if _resolve_remote(request, settings, model)[0] is not None:
             raise _model_not_found(model)
 
         _require_capability(settings, model, "embedding")

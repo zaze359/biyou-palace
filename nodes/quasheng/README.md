@@ -66,7 +66,7 @@ set -a && source .env && set +a     # 进程不会自动读取 .env，需手动�
 
 优先级：**环境变量 > config.yaml > 默认值**。其中 `QUASHENG_CONFIG` 只决定 YAML 路径（默认 `./config.yaml`），不属于字段覆盖；`QUASHENG_SHARED_TOKEN` 留空等同未设置。降级阈值 `mem_warn_pct` / `cpu_warn_pct` 暂无环境变量覆盖，只能写在 YAML。
 
-### 外部上游（可选，P0 最小桥接）
+### 外部上游（可选：静态清单 + 动态发现）
 
 节点可以额外接入一个或多个**静态配置**的 OpenAI 兼容上游（中转站 / 其他推理服务），用于「本机自用外部模型」。不配置 `upstreams` 时，`/v1/chat/completions`、`/v1/models`、`/v1/health` 与未接入前逐字段一致。
 
@@ -96,7 +96,31 @@ upstreams:
 - **密钥安全**：密钥只经 `api_key_env` 读取；缺失时启动直接失败并提示变量名（不会静默降级）。密钥与 `base_url` 不进入日志、`/v1/models`、`/v1/health`、错误体或响应头；节点使用自持密钥访问上游，**不转发调用方的 `Authorization`**。
 - **健康**：上游不可达时单个上游标记 `down`，节点整体最多降为 `degraded`（本地正常时不判 `down`；本地不可用但远程可用时也判 `degraded`）。上游不影响全局 `max_concurrency` 与 `queue_len` 默认值。
 - **出网提示**：`data_leaves_lan: true` 会在启动日志与 health 中明示「prompt 会送出局域网」；集群可见（`visibility != local`）时为警告级。请确认上游可信、链路加密（公网建议 `https`），并注意企业代理：**本地 Ollama 仍强制直连（`trust_env=False`），上游请求则遵循 `HTTP(S)_PROXY` 环境变量**。
-- **P0 边界**：不做多上游聚合、动态发现、跨上游回退、用量计费；`/v1/embeddings` 不桥接到上游（远程模型一律按不可用处理）。
+- **P1 边界**：不做多上游聚合、跨上游回退、用量计费；`/v1/embeddings` 不桥接到上游（远程模型一律按不可用处理）。动态发现只做「上游清单 ∩ 白名单」，不做模型能力自动探测，也不订阅上游变更通知。
+
+#### 动态发现（`discover: true`，P1）
+
+静态清单适合模型固定的场景；中转站模型经常增减时，可以开启按上游 `/v1/models` 的动态发现。
+
+```yaml
+upstreams:
+  - id: relay-a
+    base_url: https://relay.example.com/v1
+    enabled: true
+    api_key_env: QUASHENG_UPSTREAM_RELAY_A_KEY
+    discover: true
+    discover_interval_s: 300     # 默认 300 秒，下限 60 秒（低于则拒绝启动）
+    models:                      # 可选：留空表示不设白名单
+      - gpt-4o-mini
+```
+
+- **白名单交集**：配置了 `models[]` 时，只暴露「上游 `/v1/models` 返回 ∩ 白名单」；能力与 `context_len` 沿用白名单项。白名单里但上游未返回的模型会从快照中移除，调用返回 `404 model_not_found`。
+- **未配置白名单**：`discover: true` 且 `models` 为空时，暴露上游返回的全部模型，能力默认 `chat`、`context_len` 为 `null`，启动日志会以 WARNING 明示。这是「开启动态发现」的最小惊讶语义；不确定上游模型范围时应显式配置白名单。
+- **失败不阻塞、不清空**：启动首轮发现失败只记录，不影响节点启动；后续失败沿用上一次成功快照。首次成功前若配置了白名单则暂按白名单暴露，未配置白名单则暂时为空。失败只体现在日志与 health 可选字段，不改变 `visibility`、命名、鉴权与路由开关。
+- **空列表**：上游 `200` + `data: []` 视为合法快照（上游当前没有模型），会替换旧快照并打 WARNING。
+- **频率下限**：`discover_interval_s` 默认 300 秒、最小 60 秒；后台只有一个 `asyncio` 循环，不引入新的调度依赖。
+- **health 可选字段**：仅对 `discover: true` 的上游追加 `discover: true`、`last_discovery_at`（最近一次成功快照时间，ISO）与 `discovery_error`（最近一次失败原因，成功后清空）。`discover: false` 时 health 与 P0 逐字段一致。
+- **边界不变**：不新增任何管理端点；发现是节点自身对上游的只读 `GET /v1/models`，密钥仍只从 `api_key_env` 指定的环境变量读取。
 
 ## 运行
 

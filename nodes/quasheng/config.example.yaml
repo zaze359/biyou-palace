@@ -46,13 +46,14 @@ request_timeout: 300
 shutdown_timeout: 10
 
 # ---------------------------------------------------------------------------
-# 外部上游（可选，P0 最小桥接；默认整段注释掉 = 行为与未接入时完全一致）
+# 外部上游（可选：静态清单 + 动态发现；默认整段注释掉 = 行为与未接入时完全一致）
 #
 # 远程模型对外 id 为 <provider>/<model>；本地模型 id 不变。
 # 密钥只从 api_key_env 指向的环境变量读取（缺失时节点拒绝启动并提示变量名）。
 # 出网提示：data_leaves_lan=true 会在启动日志与 health 中明示 prompt 会离开局域网；
 # 上游请求遵循 HTTP(S)_PROXY，本地 Ollama 仍强制直连。
-# P0 不做：多上游聚合、动态发现、跨上游回退、用量计费、上游 embeddings。
+# P1 边界：不做多上游聚合、跨上游回退、用量计费、上游 embeddings；
+# 动态发现只做「上游 /v1/models ∩ 白名单」，不做能力探测。
 # ---------------------------------------------------------------------------
 # upstreams:
 #   - id: relay-a                 # provider id，同时是远程模型 id 前缀
@@ -64,7 +65,9 @@ shutdown_timeout: 10
 #     max_concurrency: 4          # 单上游独立名额，满载立即 429（不排队）
 #     visibility: local           # local | cluster | both
 #     data_leaves_lan: true
-#     models:
+#     discover: false             # true 时按上游 /v1/models 动态发现
+#     discover_interval_s: 300    # 发现间隔，下限 60 秒
+#     models:                     # discover=true 时可留空 = 不设白名单（暴露全部）
 #       - id: gpt-4o-mini
 #         capabilities: [chat]
 #         context_len: 128000

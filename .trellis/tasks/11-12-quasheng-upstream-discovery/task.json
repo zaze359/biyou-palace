@@ -1,0 +1,95 @@
+{
+  "id": "quasheng-upstream-discovery",
+  "name": "quasheng-upstream-discovery",
+  "title": "准圣 P1 上游模型动态发现",
+  "description": "为上游桥接增加可选 discover=true：周期拉取上游 /v1/models 与配置白名单取交集；失败保留上次成功快照并在日志与 health 可选字段体现；频率下限 60s；不新增管理端点，不改变 visibility/命名/鉴权/密钥规则。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "nodes/quasheng",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-12",
+  "completedAt": "2026-11-12",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "U1",
+      "title": "配置与校验：discover / discover_interval_s / 空白名单",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/config.py"
+      ],
+      "acceptance": "discover 默认 false；discover=true 允许 models 为空；间隔默认 300s、下限 60s 否则拒绝启动",
+      "depends_on": [],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "U2",
+      "title": "运行时快照、交集与失败保留",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/upstream.py"
+      ],
+      "acceptance": "UpstreamRuntime.discover 拉取 /v1/models；成功替换快照并记录时间；失败保留旧快照并记录脱敏错误码；空列表视为成功",
+      "depends_on": [
+        "U1"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U3",
+      "title": "启动首轮发现、后台循环与 health 可选字段",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py"
+      ],
+      "acceptance": "首轮发现并发执行且不阻塞启动；每上游一个 asyncio 周期任务并在停机时取消；health 仅在 discover=true 时追加 discover/last_discovery_at/discovery_error；路由只认快照",
+      "depends_on": [
+        "U2"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "U4",
+      "title": "mock 测试、文档与回归",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/tests/test_discovery.py",
+        "nodes/quasheng/tests/test_config.py",
+        "nodes/quasheng/README.md",
+        "nodes/quasheng/config.example.yaml"
+      ],
+      "acceptance": "覆盖首轮成功/4xx/5xx/空列表/交集/旧快照/未开启 discover；README 写清无白名单语义；pytest 159 passed；smoke 18/18",
+      "depends_on": [
+        "U3"
+      ],
+      "parallel": false,
+      "size": "M"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-quasheng-node-agent",
+  "relatedFiles": [
+    "nodes/quasheng/config.py",
+    "nodes/quasheng/upstream.py",
+    "nodes/quasheng/app.py",
+    "nodes/quasheng/tests/test_discovery.py",
+    "nodes/quasheng/README.md"
+  ],
+  "notes": "未新增 HTTP 端点；未提交（用户未要求）。",
+  "meta": {
+    "tests": "159 passed",
+    "smoke": "18/18",
+    "realChecks": "真实 NewAPI：白名单 2 项 ∩ 上游 2 个模型 → 对外 1 个；health 暴露 discover/last_discovery_at/discovery_error；死端口场景启动不阻塞、快照保留白名单、错误 upstream_unavailable；日志与响应无 key/base_url"
+  }
+}
+}
