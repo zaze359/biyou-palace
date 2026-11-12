@@ -94,7 +94,7 @@ upstreams:
 - **直通**：流式与非流式 chat 原样转发（仅把 `model` 换回上游原生 id，其余字段不解析、不改写）；上游错误按原状态码 + OpenAI 错误体返回；流开始后上游中断会发一帧 SSE `error`（`upstream_stream_aborted`）并关闭，**不补 `data: [DONE]`**。
 - **可见性**：`visibility: local` 时只允许回环来源调用；非回环来源访问该模型返回 404。`/v1/models` 只列出 `cluster` / `both` 的远程模型；`/v1/health` 对回环来源额外展示 `local` 模型的可用性。
 - **密钥安全**：密钥只经 `api_key_env` 读取；缺失时启动直接失败并提示变量名（不会静默降级）。密钥与 `base_url` 不进入日志、`/v1/models`、`/v1/health`、错误体或响应头；节点使用自持密钥访问上游，**不转发调用方的 `Authorization`**。
-- **健康**：上游不可达时单个上游标记 `down`，节点整体最多降为 `degraded`（本地正常时不判 `down`；本地不可用但远程可用时也判 `degraded`）。上游不影响全局 `max_concurrency` 与 `queue_len` 默认值。
+- **健康**：上游（阵图/中转站）只是节点间感知通道，与本地能力解耦。本地正常时节点整体状态仍为 `ready`，上游不可达只体现在 `upstreams[]`（`status=down`）与远程模型的 `available=false`，不会把本地模型标成不可用，也不会让编排层把节点判成 `down`。本地不可用但远程仍可用时为 `degraded`。上游不影响全局 `max_concurrency` 与 `queue_len` 默认值。
 - **出网提示**：`data_leaves_lan: true` 会在启动日志与 health 中明示「prompt 会送出局域网」；集群可见（`visibility != local`）时为警告级。请确认上游可信、链路加密（公网建议 `https`），并注意企业代理：**本地 Ollama 仍强制直连（`trust_env=False`），上游请求则遵循 `HTTP(S)_PROXY` 环境变量**。
 - **P1 边界**：不做多上游聚合、跨上游回退、用量计费；`/v1/embeddings` 不桥接到上游（远程模型一律按不可用处理）。动态发现只做「上游清单 ∩ 白名单」，不做模型能力自动探测，也不订阅上游变更通知。
 
@@ -116,11 +116,35 @@ upstreams:
 
 - **白名单交集**：配置了 `models[]` 时，只暴露「上游 `/v1/models` 返回 ∩ 白名单」；能力与 `context_len` 沿用白名单项。白名单里但上游未返回的模型会从快照中移除，调用返回 `404 model_not_found`。
 - **未配置白名单**：`discover: true` 且 `models` 为空时，暴露上游返回的全部模型，能力默认 `chat`、`context_len` 为 `null`，启动日志会以 WARNING 明示。这是「开启动态发现」的最小惊讶语义；不确定上游模型范围时应显式配置白名单。
-- **失败不阻塞、不清空**：启动首轮发现失败只记录，不影响节点启动；后续失败沿用上一次成功快照。首次成功前若配置了白名单则暂按白名单暴露，未配置白名单则暂时为空。失败只体现在日志与 health 可选字段，不改变 `visibility`、命名、鉴权与路由开关。
+- **失败不阻塞、不清空**：首轮发现也在后台任务中执行，启动流程不等待任何上游请求，因此发现失败既不阻断启动、也不拉长启动耗时；后续失败沿用上一次成功快照。首次成功前若配置了白名单则暂按白名单暴露，未配置白名单则暂时为空。失败只体现在日志与 health 可选字段，不改变 `visibility`、命名、鉴权与路由开关，也不触碰本地能力与已加载状态。
 - **空列表**：上游 `200` + `data: []` 视为合法快照（上游当前没有模型），会替换旧快照并打 WARNING。
 - **频率下限**：`discover_interval_s` 默认 300 秒、最小 60 秒；后台只有一个 `asyncio` 循环，不引入新的调度依赖。
 - **health 可选字段**：仅对 `discover: true` 的上游追加 `discover: true`、`last_discovery_at`（最近一次成功快照时间，ISO）与 `discovery_error`（最近一次失败原因，成功后清空）。`discover: false` 时 health 与 P0 逐字段一致。
 - **边界不变**：不新增任何管理端点；发现是节点自身对上游的只读 `GET /v1/models`，密钥仍只从 `api_key_env` 指定的环境变量读取。
+
+### 回退策略（`fallback_mode`，P1）
+
+上游偶发不可用时，可以配置显式回退链条，把请求交给下一个可用模型。回退只发生在 `/v1/chat/completions`。
+
+```yaml
+fallback_mode: auto            # manual（默认）| auto
+fallback_chain:
+  - newapi/qwen2.5:0.5b        # 远程：<provider>/<model>
+  - local/qwen2.5:0.5b         # 本地：local/<model>（local 为保留前缀）
+```
+
+| 模式 | 行为 |
+|---|---|
+| `manual`（默认） | **不切换**。上游错误原样返回，仅在可回退类失败的 OpenAI 错误体里追加 `error.fallback_candidates`（调用方可见的候选 id），不包含 base_url 与密钥。 |
+| `auto` | 首次尝试失败且属于可回退类错误时，按 `fallback_chain` 顺序逐个尝试；每个候选最多一次。成功时响应头 `X-Node-Fallback-Source: <实际条目>` 标记实际服务来源，并在 `/v1/logs` 记一条 `fallback` 事件。 |
+
+- **只兜首字节前的失败**：连接失败、超时、5xx。**4xx 一律不兜**，尤其是 `401/403`（凭据/权限配置错误必须暴露，不能掩盖）；`429` 同样不兜。
+- **流式**：首字节之后上游中断，保持原行为——发一帧 SSE `error`（`upstream_stream_aborted`）并关闭，**不补 `[DONE]`**，也不回退。
+- **不重复目标**：请求原模型若也在链条里，会被跳过；同一目标只尝试一次。不可见（`visibility=local` 且来源非回环）的远程候选直接跳过，且不会出现在候选提示里。
+- **耗尽错误**：链条走完仍失败时返回最后一次失败的状态码，`error.code=fallback_exhausted`，`error.fallback_attempts` 按顺序列出试过的模型与原因，`error.fallback_candidates` 列出候选；消息中同样包含这些信息。原因均为脱敏短码（如 `http_502`、`upstream_unavailable`、`upstream_timeout`）。
+- **启动校验**：`local/<model>` 是硬校验——需存在于 `/api/tags` 且声明 chat，否则拒绝启动并指出条目。`<provider>/<model>` 只做可用性提示：不在静态清单/发现快照、或首次发现尚未完成时，记录 WARNING（标记为「未校验」），**不拦截启动**；阵图不可达只意味着该远程候选暂时不可用，节点自身照常提供服务。
+- **未配置链条**：`fallback_mode` 保持默认、`fallback_chain` 为空时，行为与接入回退前逐字段一致。
+- **后续方向**：跨节点（跨仙徒）的回退需要按能力查询候选，留待阵图提供接口；当前只在单节点内按显式链条回退。
 
 ## 运行
 

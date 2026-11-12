@@ -1,0 +1,94 @@
+{
+  "id": "quasheng-fallback",
+  "name": "quasheng-fallback",
+  "title": "准圣 P1 回退策略",
+  "description": "新增 fallback_mode=manual|auto 与 fallback_chain：manual 仅提示候选，auto 仅对首字节前连接失败/超时/5xx 按链条尝试；4xx 与 401/403 不兜；成功标记 X-Node-Fallback-Source 并写 /v1/logs；启动期校验链条引用可用。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "nodes/quasheng",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-13",
+  "completedAt": "2026-11-12",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "F1",
+      "title": "配置与校验：fallback_mode / fallback_chain / local 保留前缀",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/config.py"
+      ],
+      "acceptance": "默认 manual；auto/manual 枚举校验；条目格式与启用状态校验；静态上游链模型必须存在；上游 id 不得为 local",
+      "depends_on": [],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "F2",
+      "title": "manual 候选提示与 auto 链条执行",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py"
+      ],
+      "acceptance": "仅首字节前连接失败/超时/5xx 可回退；4xx/401/403/429 不兜；候选去重且跳过原模型/不可见；成功打 X-Node-Fallback-Source 并写 /v1/logs；耗尽返回 fallback_exhausted 与 attempts",
+      "depends_on": [
+        "F1"
+      ],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "F3",
+      "title": "启动期链条可用性校验",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/app.py"
+      ],
+      "acceptance": "本地条目校验 /api/tags 与 chat 能力；远程条目校验静态清单/发现快照与 chat 能力；不可用则拒绝启动并点名；发现失败无法校验时 WARNING 放行",
+      "depends_on": [
+        "F2"
+      ],
+      "parallel": false,
+      "size": "S"
+    },
+    {
+      "id": "F4",
+      "title": "mock 测试、文档与回归",
+      "status": "done",
+      "files": [
+        "nodes/quasheng/tests/test_fallback.py",
+        "nodes/quasheng/tests/test_config.py",
+        "nodes/quasheng/README.md",
+        "nodes/quasheng/config.example.yaml"
+      ],
+      "acceptance": "覆盖 manual 提示、auto 5xx 成功、4xx/401 不兜、首字节后中断、链条耗尽、启动校验、无链条不变；pytest 170 passed；smoke 18/18",
+      "depends_on": [
+        "F3"
+      ],
+      "parallel": false,
+      "size": "M"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-quasheng-node-agent",
+  "relatedFiles": [
+    "nodes/quasheng/config.py",
+    "nodes/quasheng/app.py",
+    "nodes/quasheng/tests/test_fallback.py",
+    "nodes/quasheng/README.md"
+  ],
+  "notes": "未新增 HTTP 端点；未提交（用户未要求）。",
+  "meta": {
+    "tests": "170 passed",
+    "smoke": "18/18",
+    "realChecks": "真实本机 Ollama：auto 下 dead 上游连接失败 → local/qwen2.5:0.5b 返回 200，X-Node-Fallback-Source 正确，/v1/logs 有 fallback 事件；manual 下同场景 503 + fallback_candidates=['local/qwen2.5:0.5b']；链条引用 local/not-installed 启动退出 3 并点名；日志/响应无上游 base_url"
+  }
+}
+}

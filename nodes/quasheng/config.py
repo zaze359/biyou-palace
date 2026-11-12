@@ -28,6 +28,9 @@ _VISIBILITIES = ("local", "cluster", "both")
 # 动态发现频率下限：避免把上游 /v1/models 打成压力源
 MIN_DISCOVER_INTERVAL_S = 60.0
 DEFAULT_DISCOVER_INTERVAL_S = 300.0
+# fallback_chain 中本地模型的保留前缀
+LOCAL_PROVIDER = "local"
+FALLBACK_MODES = ("manual", "auto")
 
 
 def _normalize_caps(raw: dict | None) -> dict[str, dict]:
@@ -210,6 +213,10 @@ def _parse_upstreams(raw: Any) -> list[UpstreamSettings]:
                 f"上游 {provider} 的 visibility={visibility!r} 非法，只能是 "
                 f"{' / '.join(_VISIBILITIES)}"
             )
+        if provider == LOCAL_PROVIDER:
+            raise ConfigError(
+                f"上游 id 不能为 {LOCAL_PROVIDER!r}：该前缀保留给 fallback_chain 的本地模型引用"
+            )
         enabled = bool(item.get("enabled", False))
         discover = bool(item.get("discover", False))
         try:
@@ -286,6 +293,54 @@ def _parse_upstreams(raw: Any) -> list[UpstreamSettings]:
     return parsed
 
 
+def _parse_fallback_mode(raw: Any) -> str:
+    mode = str(raw or "manual").strip().lower()
+    if mode not in FALLBACK_MODES:
+        raise ConfigError(
+            f"fallback_mode={raw!r} 无效，只能是 {' / '.join(FALLBACK_MODES)}"
+        )
+    return mode
+
+
+def _parse_fallback_chain(raw: Any, upstreams: list[UpstreamSettings]) -> list[str]:
+    """校验 fallback_chain 的**结构**：<provider>/<model> 或 local/<model>。
+
+    远程模型是否存在属于可用性问题，留到启动期校验并只降级告警：
+    阵图不可达不能让节点启动失败。本地条目由启动期硬校验。
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError("fallback_chain 必须是字符串列表")
+    by_id = {upstream.id: upstream for upstream in upstreams}
+    seen: set[str] = set()
+    chain: list[str] = []
+    for index, item in enumerate(raw):
+        entry = str(item or "").strip()
+        if not entry or "/" not in entry:
+            raise ConfigError(
+                f"fallback_chain[{index}]={item!r} 格式错误，应为 <provider>/<model> 或 local/<model>"
+            )
+        provider, _, model_id = entry.partition("/")
+        if not provider or not model_id:
+            raise ConfigError(
+                f"fallback_chain[{index}]={entry!r} 缺少 provider 或模型名"
+            )
+        if entry in seen:
+            raise ConfigError(f"fallback_chain 存在重复条目：{entry}")
+        seen.add(entry)
+        if provider == LOCAL_PROVIDER:
+            chain.append(entry)
+            continue
+        upstream = by_id.get(provider)
+        if upstream is None:
+            raise ConfigError(f"fallback_chain 条目 {entry} 引用了未配置的上游 {provider}")
+        if not upstream.enabled:
+            raise ConfigError(f"fallback_chain 条目 {entry} 引用了未启用的上游 {provider}")
+        chain.append(entry)
+    return chain
+
+
 def check_local_model_conflicts(settings: Settings, local_model_ids: list[str]) -> None:
     """启动期校验：本地模型首段不得与任何已启用上游 id 相同。
 
@@ -335,6 +390,9 @@ class Settings:
     shutdown_timeout: float = 10.0
     # 外部 OpenAI 兼容上游（默认空：行为与未接入时完全一致）
     upstreams: list[UpstreamSettings] = field(default_factory=list)
+    # 回退策略：manual 只提示候选；auto 按 fallback_chain 顺序尝试
+    fallback_mode: str = "manual"
+    fallback_chain: list[str] = field(default_factory=list)
 
     def capability_for(self, model: str) -> list[str]:
         """未登记的模型默认只有 chat 能力——能力必须由配置显式声明。"""
@@ -368,10 +426,16 @@ def load_settings(path: str | Path | None = None) -> Settings:
 
     known = {f.name for f in fields(Settings)}
     settings = Settings(
-        **{k: v for k, v in raw.items() if k in known and k != "upstreams"}
+        **{
+            k: v
+            for k, v in raw.items()
+            if k in known and k not in ("upstreams", "fallback_mode", "fallback_chain")
+        }
     )
     settings.capabilities_map = _normalize_caps(raw.get("capabilities_map"))
     settings.upstreams = _parse_upstreams(raw.get("upstreams"))
+    settings.fallback_mode = _parse_fallback_mode(raw.get("fallback_mode"))
+    settings.fallback_chain = _parse_fallback_chain(raw.get("fallback_chain"), settings.upstreams)
 
     for env_key, (attr, cast) in _ENV_OVERRIDES.items():
         val = os.environ.get(env_key)

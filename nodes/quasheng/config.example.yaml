@@ -71,3 +71,11 @@ shutdown_timeout: 10
 #       - id: gpt-4o-mini
 #         capabilities: [chat]
 #         context_len: 128000
+#
+# 回退策略（可选；不配置时行为与未接入时完全一致）
+# manual：不切换，仅在可回退类错误体里追加候选提示；
+# auto：按链顺序尝试，仅兜连接失败/超时/5xx，4xx 与 401/403 不兜。
+# fallback_mode: manual
+# fallback_chain:
+#   - newapi/qwen2.5:0.5b        # 远程：<provider>/<model>
+#   - local/qwen2.5:0.5b         # 本地：local/<model>（local 为保留前缀）

@@ -350,13 +350,16 @@ def test_local_visibility_model_is_hidden_from_models_but_visible_in_health():
     assert remote["available"] is True
 
 
-def test_health_degrades_when_upstream_unreachable_but_local_stays_up():
+def test_health_keeps_ready_when_upstream_unreachable_but_local_stays_up():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("boom", request=request)
 
     client, _app, _runtime = _make_app(handler)
     health = client.get("/v1/health").json()
-    assert health["status"] == "degraded"
+    # 阵图不可达只体现在 upstreams[]，不改变本地能力与节点整体状态
+    assert health["status"] == "ready"
+    local = [m for m in health["models"] if m.get("source") == "local"]
+    assert local and all(m["available"] is True for m in local)
     remote = [m for m in health["models"] if m.get("source") == "upstream"][0]
     assert remote["available"] is False
     upstream = health["upstreams"][0]

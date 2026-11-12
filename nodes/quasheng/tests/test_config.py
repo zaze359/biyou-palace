@@ -244,3 +244,50 @@ def test_discover_interval_below_floor_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(ConfigError) as excinfo:
         load_settings()
     assert "下限" in str(excinfo.value)
+
+
+_FALLBACK_YAML = """
+fallback_mode: auto
+fallback_chain:
+  - relay-a/gpt-4o-mini
+  - local/qwen2.5:0.5b
+upstreams:
+  - id: relay-a
+    base_url: https://relay.example.com/v1
+    enabled: true
+    api_key_env: TEST_RELAY_KEY
+    models:
+      - id: gpt-4o-mini
+"""
+
+
+def test_fallback_chain_is_parsed(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, _FALLBACK_YAML)
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+
+    settings = load_settings()
+    assert settings.fallback_mode == "auto"
+    assert settings.fallback_chain == ["relay-a/gpt-4o-mini", "local/qwen2.5:0.5b"]
+
+
+def test_fallback_invalid_mode_is_rejected(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, "fallback_mode: sometimes\n")
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "fallback_mode" in str(excinfo.value)
+
+
+def test_fallback_static_remote_model_is_deferred_to_startup(tmp_path, monkeypatch):
+    """远程候选是否存在属可用性问题，解析阶段只记结构，不阻断启动。"""
+    path = _write_config(
+        tmp_path,
+        _FALLBACK_YAML.replace("relay-a/gpt-4o-mini", "relay-a/not-there"),
+    )
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("TEST_RELAY_KEY", "sk-live-value")
+
+    settings = load_settings()
+    assert settings.fallback_chain == ["relay-a/not-there", "local/qwen2.5:0.5b"]

@@ -81,9 +81,10 @@ def determine_status(
     `loading` 覆盖两类窗口：预热白名单未就绪，以及按需加载中的模型
     （`on_demand_loading`，由 LoadingTracker 提供）。
 
-    上游只降级、不判 down：本地不可用但远程仍可用时节点仍是 degraded，
-    否则网关会把还能服务远程模型的节点整体剔除。未配置上游时
-    （`upstream_statuses` 为空/None）判定与现状完全一致。
+    上游（阵图/中转站）只是节点间感知通道，与本地能力解耦：
+    - 本地正常时，节点状态只由本地预热/加载与资源压力决定，上游不可达
+      不影响节点整体状态（单独体现在 `upstreams[]`）；
+    - 本地不可用但远程仍可用时，节点是 degraded 而不是 down。
     """
     statuses = upstream_statuses or []
     if not ollama_ok:
@@ -91,8 +92,6 @@ def determine_status(
         return "degraded" if any(s == "ready" for s in statuses) else "down"
     if not preload_loaded or on_demand_loading:
         return "loading"
-    if any(s != "ready" for s in statuses):
-        return "degraded"
     if (mem_pct is not None and mem_pct >= settings.mem_warn_pct) or (
         cpu_pct is not None and cpu_pct >= settings.cpu_warn_pct
     ):

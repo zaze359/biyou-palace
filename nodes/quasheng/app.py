@@ -12,6 +12,7 @@ import logging
 import sys
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import logbuffer
 from .config import (
     CONTRACT_VERSION,
+    LOCAL_PROVIDER,
     MODEL_OWNER,
     NODE_ROLE,
     ConfigError,
@@ -48,7 +50,6 @@ from .ollama_client import OllamaClient
 from .upstream import (
     UpstreamRuntime,
     read_upstream_error,
-    scrub_payload,
     scrub_text,
     stream_error_frame,
 )
@@ -277,18 +278,6 @@ def _error_code(body: Any) -> str:
     return "upstream_error"
 
 
-def _upstream_error_response(
-    status: int,
-    body: dict[str, Any],
-    cfg: UpstreamSettings,
-    *,
-    retry_after: str | None = None,
-) -> JSONResponse:
-    headers = {"Retry-After": retry_after} if retry_after else None
-    _record_upstream_error(status, body, cfg.id)
-    return JSONResponse(status_code=status, content=body, headers=headers)
-
-
 def _remote_health_models(runtime: UpstreamRuntime) -> list[dict[str, Any]]:
     cfg = runtime.cfg
     status = runtime.status
@@ -357,13 +346,283 @@ async def _stream_upstream_body(
         await gate.release()
 
 
+# ---------------------------------------------------------------- 回退策略
+
+
+@dataclass
+class _ChatTarget:
+    """一次 chat 尝试的目标：本地模型或某个上游的远程模型。"""
+
+    entry: str  # 对外 id（请求原 id 或 fallback_chain 条目）
+    kind: str  # local | remote
+    native_model: str  # 真正发给后端的模型名
+    runtime: UpstreamRuntime | None = None
+    upstream_model: UpstreamModel | None = None
+
+
+@dataclass
+class _ChatFailure:
+    """首字节前失败：可决定是否进入下一个回退候选。"""
+
+    status: int
+    body: dict[str, Any]
+    retryable: bool
+    reason: str
+    headers: dict[str, str] | None = None
+
+
+def _failure_from_node_error(exc: NodeError) -> _ChatFailure:
+    return _ChatFailure(
+        status=exc.status,
+        body=openai_error_payload(exc.message, type_=exc.type_, code=exc.code),
+        retryable=exc.status >= 500,
+        reason=exc.code,
+    )
+
+
+def _local_error_body(resp) -> dict[str, Any]:
+    try:
+        body = resp.json()
+    except ValueError:
+        return normalize_upstream_error(resp.status_code, resp.content)
+    return body if isinstance(body, dict) else normalize_upstream_error(
+        resp.status_code, resp.content
+    )
+
+
+async def _handle_local_chat(
+    request: Request,
+    payload: dict[str, Any],
+    client: OllamaClient,
+    gate: ConcurrencyGate,
+    loading: LoadingTracker | None,
+    model: str,
+) -> Any | _ChatFailure:
+    """本地路径的单次尝试；与原有分支逐字段一致，只把失败转成可回退对象。"""
+    forward = {**payload, "model": model}
+    if bool(payload.get("stream")):
+        # 先抢占名额（满了立刻 429），名额**由流结束时**释放
+        await gate.acquire()
+        if loading is not None:
+            loading.note_request(model)
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(
+                client.stream_post("/v1/chat/completions", forward)
+            )
+        except NodeError as exc:
+            if loading is not None:
+                loading.mark_failed(model)
+            await stack.aclose()
+            await gate.release()
+            return _failure_from_node_error(exc)
+        except BaseException:
+            if loading is not None:
+                loading.mark_failed(model)
+            await stack.aclose()
+            await gate.release()
+            raise
+
+        if upstream.status_code >= 400:
+            body = await _read_upstream_error(upstream)
+            _record_upstream_error(upstream.status_code, body)
+            if loading is not None:
+                loading.mark_failed(model)
+            await stack.aclose()
+            await gate.release()
+            return _ChatFailure(
+                status=upstream.status_code,
+                body=body,
+                retryable=upstream.status_code >= 500,
+                reason=_error_code(body),
+            )
+
+        return StreamingResponse(
+            _stream_body(request, upstream, stack, gate, loading=loading, model=model),
+            media_type="text/event-stream",
+        )
+
+    async with gate.slot():
+        if loading is not None:
+            loading.note_request(model)
+        try:
+            resp = await client.post("/v1/chat/completions", forward)
+        except NodeError as exc:
+            if loading is not None:
+                loading.mark_failed(model)
+            return _failure_from_node_error(exc)
+
+        if loading is not None:
+            if resp.status_code < 400:
+                loading.mark_loaded(model)
+            else:
+                loading.mark_failed(model)
+        if resp.status_code >= 400:
+            body = _local_error_body(resp)
+            _record_upstream_error(resp.status_code, body)
+            return _ChatFailure(
+                status=resp.status_code,
+                body=body,
+                retryable=resp.status_code >= 500,
+                reason=_error_code(body),
+            )
+        return _passthrough(resp)
+
+
+async def _execute_chat_target(
+    request: Request,
+    payload: dict[str, Any],
+    target: _ChatTarget,
+    client: OllamaClient,
+    gate: ConcurrencyGate,
+    loading: LoadingTracker | None,
+) -> Any | _ChatFailure:
+    if target.kind == "remote":
+        assert target.runtime is not None and target.upstream_model is not None
+        return await _handle_upstream_chat(
+            request, payload, target.runtime, gate, target.upstream_model
+        )
+    return await _handle_local_chat(request, payload, client, gate, loading, target.native_model)
+
+
+def _resolve_chain_target(
+    request: Request, settings: Settings, entry: str
+) -> _ChatTarget | None:
+    """把 fallback_chain 条目解析成当前可尝试的目标；不可见/不存在返回 None。"""
+    provider, _, native = entry.partition("/")
+    if provider == LOCAL_PROVIDER:
+        if "chat" not in settings.capability_for(native):
+            return None
+        return _ChatTarget(entry=entry, kind="local", native_model=native)
+    for runtime in _upstream_runtimes(request):
+        if runtime.cfg.id != provider:
+            continue
+        model = runtime.model_for(native)
+        if model is None or "chat" not in model.capabilities:
+            return None
+        if not _remote_visible(request, runtime.cfg):
+            return None
+        return _ChatTarget(
+            entry=entry,
+            kind="remote",
+            native_model=native,
+            runtime=runtime,
+            upstream_model=model,
+        )
+    return None
+
+
+def _manual_candidates(
+    request: Request, settings: Settings, first: _ChatTarget
+) -> list[str]:
+    """manual 模式的候选提示：只列调用方可见、且与首个目标不同的条目。"""
+    first_key = (first.kind, first.native_model)
+    candidates: list[str] = []
+    for entry in settings.fallback_chain:
+        target = _resolve_chain_target(request, settings, entry)
+        if target is None or (target.kind, target.native_model) == first_key:
+            continue
+        candidates.append(entry)
+    return candidates
+
+
+def _attach_candidates(body: dict[str, Any], candidates: list[str]) -> dict[str, Any]:
+    if not candidates:
+        return body
+    if isinstance(body.get("error"), dict):
+        body["error"].setdefault("fallback_candidates", candidates)
+    else:
+        body.setdefault("fallback_candidates", candidates)
+    return body
+
+
+def _failure_response(failure: _ChatFailure) -> JSONResponse:
+    return JSONResponse(
+        status_code=failure.status, content=failure.body, headers=failure.headers
+    )
+
+
+def _fallback_candidates(
+    request: Request, settings: Settings, first: _ChatTarget
+) -> list[_ChatTarget]:
+    """按链条顺序得到去重后的候选目标（不含首个目标）。"""
+    seen = {(first.kind, first.native_model)}
+    targets: list[_ChatTarget] = []
+    for entry in settings.fallback_chain:
+        target = _resolve_chain_target(request, settings, entry)
+        if target is None:
+            continue
+        key = (target.kind, target.native_model)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(target)
+    return targets
+
+
+async def _run_auto_fallback(
+    request: Request,
+    settings: Settings,
+    payload: dict[str, Any],
+    first: _ChatTarget,
+    client: OllamaClient,
+    gate: ConcurrencyGate,
+    loading: LoadingTracker | None,
+) -> Any:
+    candidates = _fallback_candidates(request, settings, first)
+    attempted: list[dict[str, Any]] = []
+
+    for index, target in enumerate([first, *candidates]):
+        result = await _execute_chat_target(request, payload, target, client, gate, loading)
+        if not isinstance(result, _ChatFailure):
+            if index:
+                # 回退成功：响应头标记实际服务来源，并写一条可审计日志
+                result.headers["X-Node-Fallback-Source"] = target.entry
+                reason = attempted[0]["reason"] if attempted else "unknown"
+                logger.warning("模型 %s 失败（%s），已回退到 %s", first.entry, reason, target.entry)
+                logbuffer.record(
+                    "WARNING",
+                    "fallback",
+                    f"模型 {first.entry} 失败（{reason}），已回退到 {target.entry}",
+                )
+            return result
+
+        attempted.append(
+            {"model": target.entry, "reason": result.reason, "status": result.status}
+        )
+        if not result.retryable:
+            # 4xx（含 401/403/429）：配置/权限问题必须暴露，不继续兜
+            return _failure_response(result)
+
+    status = attempted[-1]["status"] if attempted and attempted[-1]["status"] >= 500 else 502
+    detail = "；".join(f"{item['model']}（{item['reason']}）" for item in attempted)
+    message = f"模型 {first.entry} 及回退候选均失败：{detail}"
+    logger.error(message)
+    logbuffer.record("ERROR", "fallback", message)
+    return JSONResponse(
+        status_code=status,
+        content={
+            "error": {
+                "message": message,
+                "type": "server_error",
+                "param": None,
+                "code": "fallback_exhausted",
+                "fallback_attempts": [
+                    {"model": item["model"], "reason": item["reason"]} for item in attempted
+                ],
+                "fallback_candidates": [target.entry for target in candidates],
+            }
+        },
+    )
+
+
 async def _handle_upstream_chat(
     request: Request,
     payload: dict[str, Any],
     runtime: UpstreamRuntime,
     gate: ConcurrencyGate,
     remote_model: UpstreamModel,
-) -> Any:
+) -> Any | "_ChatFailure":
     cfg = runtime.cfg
     # 只把 model 换成上游原生 id；其余字段（messages/stream/参数）原样透传
     forward = {**payload, "model": remote_model.id}
@@ -391,9 +650,13 @@ async def _handle_upstream_chat(
         stack = AsyncExitStack()
         try:
             upstream = await stack.enter_async_context(runtime.client.stream_chat(forward))
-        except BaseException as exc:
-            if isinstance(exc, NodeError):
-                runtime.note_result(False, code=exc.code)
+        except NodeError as exc:
+            runtime.note_result(False, code=exc.code)
+            runtime.release()
+            await stack.aclose()
+            await gate.release()
+            return _failure_from_node_error(exc)
+        except BaseException:
             runtime.release()
             await stack.aclose()
             await gate.release()
@@ -402,15 +665,22 @@ async def _handle_upstream_chat(
         # 上游 4xx/5xx 必须按原状态码返回 JSON 错误，不能包装成 200 + SSE
         if upstream.status_code >= 400:
             body = await read_upstream_error(upstream, cfg)
-            runtime.note_result(False, code=_error_code(body))
+            code = _error_code(body)
+            runtime.note_result(False, code=code)
             await stack.aclose()
             runtime.release()
             await gate.release()
-            return _upstream_error_response(
-                upstream.status_code,
-                body,
-                cfg,
-                retry_after=upstream.headers.get("retry-after") if upstream.status_code == 429 else None,
+            _record_upstream_error(upstream.status_code, body, cfg.id)
+            return _ChatFailure(
+                status=upstream.status_code,
+                body=body,
+                retryable=upstream.status_code >= 500,
+                reason=code,
+                headers=(
+                    {"Retry-After": upstream.headers.get("retry-after") or "1"}
+                    if upstream.status_code == 429
+                    else None
+                ),
             )
 
         runtime.note_result(True)
@@ -426,18 +696,29 @@ async def _handle_upstream_chat(
             resp = await runtime.client.post_chat(forward)
         except NodeError as exc:
             runtime.note_result(False, code=exc.code)
+            runtime.release()
+            return _failure_from_node_error(exc)
+        except BaseException:
+            runtime.release()
             raise
-        finally:
+        else:
             runtime.release()
 
         if resp.status_code >= 400:
             body = await read_upstream_error(resp, cfg)
-            runtime.note_result(False, code=_error_code(body))
-            return _upstream_error_response(
-                resp.status_code,
-                body,
-                cfg,
-                retry_after=resp.headers.get("retry-after") if resp.status_code == 429 else None,
+            code = _error_code(body)
+            runtime.note_result(False, code=code)
+            _record_upstream_error(resp.status_code, body, cfg.id)
+            return _ChatFailure(
+                status=resp.status_code,
+                body=body,
+                retryable=resp.status_code >= 500,
+                reason=code,
+                headers=(
+                    {"Retry-After": resp.headers.get("retry-after") or "1"}
+                    if resp.status_code == 429
+                    else None
+                ),
             )
 
         runtime.note_result(True)
@@ -575,19 +856,66 @@ async def _probe_with_retry(
     raise last
 
 
+def _validate_fallback_targets(
+    settings: Settings,
+    runtimes: list[UpstreamRuntime],
+    local_model_ids: list[str] | None,
+) -> None:
+    """启动期校验 fallback_chain：本地硬拒，远程只降级告警。
+
+    阵图（中转站）只是节点间感知通道，不可达不得拦截启动，也不能影响
+    本地能力；远程条目异常只意味着该候选「未校验/不可用」，节点照常启动。
+    """
+    if not settings.fallback_chain:
+        return
+    by_id = {runtime.cfg.id: runtime for runtime in runtimes}
+    local_problems: list[str] = []
+    remote_warnings: list[str] = []
+    for entry in settings.fallback_chain:
+        provider, _, native = entry.partition("/")
+        if provider == LOCAL_PROVIDER:
+            if local_model_ids is None:
+                local_problems.append(f"{entry}（无法读取本地模型清单）")
+            elif native not in local_model_ids:
+                local_problems.append(f"{entry}（本地未安装）")
+            elif "chat" not in settings.capability_for(native):
+                local_problems.append(f"{entry}（未声明 chat 能力）")
+            continue
+
+        runtime = by_id.get(provider)
+        if runtime is None:
+            remote_warnings.append(f"{entry}（上游未启用，未校验）")
+            continue
+        model = runtime.model_for(native)
+        if model is None:
+            if runtime.cfg.discover and runtime.last_discovery_at is None:
+                remote_warnings.append(f"{entry}（首次发现未完成，未校验）")
+            else:
+                remote_warnings.append(f"{entry}（不在静态清单或发现快照中）")
+        elif "chat" not in model.capabilities:
+            remote_warnings.append(f"{entry}（未声明 chat 能力）")
+
+    if local_problems:
+        raise ConfigError("fallback_chain 引用了不可用的本地模型：" + "；".join(local_problems))
+    if remote_warnings:
+        message = "fallback_chain 远程候选未通过校验（不阻断启动）：" + "；".join(remote_warnings)
+        logger.warning(message)
+        logbuffer.record("WARNING", "fallback", message)
+
+
 async def _discover_forever(runtime: UpstreamRuntime) -> None:
     """后台动态发现循环：纯 asyncio，不引入新调度依赖。
 
     首轮由 lifespan 在启动阶段执行；这里只负责后续周期刷新。
     """
     while True:
-        await asyncio.sleep(runtime.cfg.discover_interval_s)
         try:
             await runtime.discover()
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - 后台任务异常不得杀死进程
             logger.exception("上游 %s 模型发现循环异常", runtime.cfg.id)
+        await asyncio.sleep(runtime.cfg.discover_interval_s)
 
 
 @asynccontextmanager
@@ -661,21 +989,23 @@ async def lifespan(app: FastAPI):
         raise
 
     # 启动期 id 唯一性校验：本地模型首段不得占用已启用的 provider 前缀。
-    # 读 /api/tags 失败不阻断启动（探针已确认 Ollama 可用），只跳过该校验。
-    if any(cfg.enabled for cfg in settings.upstreams):
+    # 读 /api/tags 失败不阻断启动（探针已确认 Ollama 可用），只跳过该校验；
+    # 但 fallback_chain 引用了本地模型时必须拿到清单，否则交由下方校验拒绝。
+    local_model_ids: list[str] | None = None
+    if settings.upstreams or settings.fallback_chain:
         try:
             tags = await client.tags()
         except Exception:  # noqa: BLE001
             logger.warning("无法读取本地模型清单，跳过启动期模型 id 冲突校验")
         else:
-            try:
-                check_local_model_conflicts(
-                    settings, [str(t.get("name") or t.get("model") or "") for t in tags]
-                )
-            except ConfigError as exc:
-                logger.error("启动失败：%s", exc)
-                logbuffer.record("ERROR", "startup", f"启动失败：{exc}")
-                raise
+            local_model_ids = [str(t.get("name") or t.get("model") or "") for t in tags]
+            if settings.upstreams:
+                try:
+                    check_local_model_conflicts(settings, local_model_ids)
+                except ConfigError as exc:
+                    logger.error("启动失败：%s", exc)
+                    logbuffer.record("ERROR", "startup", f"启动失败：{exc}")
+                    raise
     logger.info(
         "准圣节点启动：%s（%s）→ Ollama %s", settings.node_id, settings.node_name, settings.ollama_base
     )
@@ -692,13 +1022,29 @@ async def lifespan(app: FastAPI):
 
     await _warmup(client, settings, app.state.loading, app.state.warmup_failed)
 
-    # 动态发现：首轮并发执行且各带超时，失败只记录、不阻塞启动；
-    # 之后每个上游一个后台任务，间隔不低于配置校验过的下限（60s）。
+    # 动态发现完全后台化：首轮也在后台任务里立即执行，启动流程不 await 任何
+    # 上游请求。阵图不可达只会让远程视图为空/陈旧，不影响本地能力与启动耗时。
     discovering = [runtime for runtime in app.state.upstreams if runtime.cfg.discover]
-    if discovering:
-        await asyncio.gather(
-            *(runtime.discover() for runtime in discovering), return_exceptions=True
+
+    # 回退链条：本地条目硬校验；远程条目只告警，不阻断启动
+    if settings.fallback_chain:
+        try:
+            _validate_fallback_targets(settings, app.state.upstreams, local_model_ids)
+        except ConfigError as exc:
+            logger.error("启动失败：%s", exc)
+            logbuffer.record("ERROR", "startup", f"启动失败：{exc}")
+            raise
+        logger.info(
+            "回退策略：%s，链条 %s",
+            settings.fallback_mode,
+            " → ".join(settings.fallback_chain),
         )
+        logbuffer.record(
+            "INFO",
+            "fallback",
+            f"回退策略：{settings.fallback_mode}，链条 {' → '.join(settings.fallback_chain)}",
+        )
+
     app.state.discovery_tasks = [
         asyncio.create_task(_discover_forever(runtime), name=f"discover-{runtime.cfg.id}")
         for runtime in discovering
@@ -892,54 +1238,31 @@ def create_app() -> FastAPI:
                 )
             if runtime is None:
                 raise _model_not_found(model)
-            return await _handle_upstream_chat(request, payload, runtime, gate, remote_model)
+            first = _ChatTarget(
+                entry=model,
+                kind="remote",
+                native_model=remote_model.id,
+                runtime=runtime,
+                upstream_model=remote_model,
+            )
+        else:
+            _require_capability(settings, model, "chat")
+            first = _ChatTarget(entry=model, kind="local", native_model=model)
 
-        _require_capability(settings, model, "chat")
-
-        if bool(payload.get("stream")):
-            # 先抢占名额（满了立刻 429），名额**由流结束时**释放——
-            # 不能套 async with，否则返回 StreamingResponse 就释放了。
-            await gate.acquire()
-            if loading is not None:
-                loading.note_request(model)
-            stack = AsyncExitStack()
-            try:
-                upstream = await stack.enter_async_context(
-                    client.stream_post("/v1/chat/completions", payload)
-                )
-            except BaseException:
-                if loading is not None:
-                    loading.mark_failed(model)
-                await stack.aclose()
-                await gate.release()
-                raise
-
-            # 必须先拿到上游响应头再决定回什么：上游 4xx/5xx 时不能包装成
-            # 200 + SSE 正文（那样调用方会以为流已开始，错误体被当成 chunk）。
-            if upstream.status_code >= 400:
-                body = await _read_upstream_error(upstream)
-                _record_upstream_error(upstream.status_code, body)
-                if loading is not None:
-                    loading.mark_failed(model)
-                await stack.aclose()
-                await gate.release()
-                return JSONResponse(status_code=upstream.status_code, content=body)
-
-            return StreamingResponse(
-                _stream_body(request, upstream, stack, gate, loading=loading, model=model),
-                media_type="text/event-stream",
+        # auto + 非空链条：按顺序尝试；其余情况只做单次尝试，行为与现状一致
+        if settings.fallback_mode == "auto" and settings.fallback_chain:
+            return await _run_auto_fallback(
+                request, settings, payload, first, client, gate, loading
             )
 
-        async with gate.slot():
-            if loading is not None:
-                loading.note_request(model)
-            resp = await client.post("/v1/chat/completions", payload)
-            if loading is not None:
-                if resp.status_code < 400:
-                    loading.mark_loaded(model)
-                else:
-                    loading.mark_failed(model)
-            return _passthrough(resp)
+        result = await _execute_chat_target(request, payload, first, client, gate, loading)
+        if not isinstance(result, _ChatFailure):
+            return result
+
+        body = result.body
+        if settings.fallback_mode == "manual" and result.retryable:
+            body = _attach_candidates(body, _manual_candidates(request, settings, first))
+        return JSONResponse(status_code=result.status, content=body, headers=result.headers)
 
     @app.post("/v1/embeddings")
     async def embeddings(request: Request, payload: dict[str, Any]):
