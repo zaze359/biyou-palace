@@ -393,6 +393,10 @@ class Settings:
     # 回退策略：manual 只提示候选；auto 按 fallback_chain 顺序尝试
     fallback_mode: str = "manual"
     fallback_chain: list[str] = field(default_factory=list)
+    # 结构化事件落盘（可选）：为空时只保留内存环形缓冲
+    log_file: str = ""
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backup_count: int = 3
 
     def capability_for(self, model: str) -> list[str]:
         """未登记的模型默认只有 chat 能力——能力必须由配置显式声明。"""
@@ -436,6 +440,18 @@ def load_settings(path: str | Path | None = None) -> Settings:
     settings.upstreams = _parse_upstreams(raw.get("upstreams"))
     settings.fallback_mode = _parse_fallback_mode(raw.get("fallback_mode"))
     settings.fallback_chain = _parse_fallback_chain(raw.get("fallback_chain"), settings.upstreams)
+    settings.log_file = str(raw.get("log_file") or "").strip()
+    try:
+        settings.log_max_bytes = int(raw.get("log_max_bytes") or settings.log_max_bytes)
+        settings.log_backup_count = int(
+            raw.get("log_backup_count") if raw.get("log_backup_count") is not None else settings.log_backup_count
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("log_max_bytes / log_backup_count 必须是整数") from exc
+    if settings.log_max_bytes < 1024:
+        raise ConfigError("log_max_bytes 不能小于 1024")
+    if settings.log_backup_count < 0:
+        raise ConfigError("log_backup_count 不能为负数")
 
     for env_key, (attr, cast) in _ENV_OVERRIDES.items():
         val = os.environ.get(env_key)

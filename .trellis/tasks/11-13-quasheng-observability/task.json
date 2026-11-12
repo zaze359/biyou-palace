@@ -1,0 +1,62 @@
+{
+  "id": "quasheng-observability",
+  "name": "quasheng-observability",
+  "title": "准圣可观测性收口",
+  "description": "Prometheus 指标端点与结构化日志落盘：请求/模型/状态码、首字节与整体耗时、并发与排队、发现、回退、上游状态；JSONL 按大小轮转；采集与写盘失败均不影响业务。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "nodes/quasheng",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-13",
+  "completedAt": "2026-11-13",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "O1",
+      "title": "Prometheus 指标注册表与 /metrics 端点",
+      "status": "done",
+      "files": ["nodes/quasheng/metrics.py", "nodes/quasheng/app.py"],
+      "acceptance": "请求/模型/上游/状态码计数、首字节与整体耗时直方图、在途/闸门队列、发现、回退、上游可用状态；渲染与采集异常不影响业务",
+      "depends_on": [],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "O2",
+      "title": "结构化日志落盘与轮转",
+      "status": "done",
+      "files": ["nodes/quasheng/logbuffer.py", "nodes/quasheng/config.py"],
+      "acceptance": "JSONL、按大小轮转、保留份数可配、沿用脱敏；写盘失败降级为内存并写 WARNING；/v1/logs 语义不变",
+      "depends_on": [],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "O3",
+      "title": "测试、文档与真实进程验证",
+      "status": "done",
+      "files": ["nodes/quasheng/tests/test_observability.py", "nodes/quasheng/README.md", "nodes/quasheng/config.example.yaml"],
+      "acceptance": "pytest 180 passed；smoke 18/18；真实进程下指标、日志、轮转配置、零密钥泄漏",
+      "depends_on": ["O1", "O2"],
+      "parallel": false,
+      "size": "S"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-quasheng-node-agent",
+  "relatedFiles": ["nodes/quasheng/metrics.py", "nodes/quasheng/logbuffer.py", "nodes/quasheng/app.py"],
+  "notes": "未新增第三方依赖；未提交（用户未要求）。",
+  "meta": {
+    "tests": "180 passed",
+    "smoke": "18/18",
+    "realChecks": "本地 chat/流式/embeddings 后 /metrics 200，包含 model/duration/first_byte/gate/upstream 指标；events.jsonl 正常落盘；key 与上游地址在指标和日志中命中 0"
+  }
+}
+}

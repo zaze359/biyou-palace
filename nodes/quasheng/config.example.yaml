@@ -79,3 +79,8 @@ shutdown_timeout: 10
 # fallback_chain:
 #   - newapi/qwen2.5:0.5b        # 远程：<provider>/<model>
 #   - local/qwen2.5:0.5b         # 本地：local/<model>（local 为保留前缀）
+#
+# 可观测性（可选）：结构化事件落盘；留空则只保留内存环形缓冲（/v1/logs）
+# log_file: "/var/log/quasheng/events.jsonl"
+# log_max_bytes: 10485760       # 单文件上限，默认 10 MiB
+# log_backup_count: 3           # 轮转保留份数，0 表示不保留

@@ -18,11 +18,11 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import logbuffer
+from . import logbuffer, metrics
 from .config import (
     CONTRACT_VERSION,
     LOCAL_PROVIDER,
@@ -578,6 +578,7 @@ async def _run_auto_fallback(
             if index:
                 # 回退成功：响应头标记实际服务来源，并写一条可审计日志
                 result.headers["X-Node-Fallback-Source"] = target.entry
+                metrics.fallback_result(first.entry, target.entry)
                 reason = attempted[0]["reason"] if attempted else "unknown"
                 logger.warning("模型 %s 失败（%s），已回退到 %s", first.entry, reason, target.entry)
                 logbuffer.record(
@@ -599,6 +600,7 @@ async def _run_auto_fallback(
     message = f"模型 {first.entry} 及回退候选均失败：{detail}"
     logger.error(message)
     logbuffer.record("ERROR", "fallback", message)
+    metrics.fallback_result(first.entry, None)
     return JSONResponse(
         status_code=status,
         content={
@@ -911,9 +913,11 @@ async def _discover_forever(runtime: UpstreamRuntime) -> None:
     while True:
         try:
             await runtime.discover()
+            metrics.discovery_result(runtime.cfg.id, runtime.discovery_error is None)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - 后台任务异常不得杀死进程
+            metrics.discovery_result(runtime.cfg.id, False)
             logger.exception("上游 %s 模型发现循环异常", runtime.cfg.id)
         await asyncio.sleep(runtime.cfg.discover_interval_s)
 
@@ -935,7 +939,13 @@ async def lifespan(app: FastAPI):
     app.state.warmup_failed = set()
     app.state.shutting_down = False
     app.state.upstreams = [UpstreamRuntime(cfg) for cfg in settings.upstreams if cfg.enabled]
-    logbuffer.configure(settings.shared_token)  # 脱敏用的 token，仅内存
+    logbuffer.configure(
+        settings.shared_token,  # 脱敏用的 token，仅内存
+        file_path=settings.log_file or None,
+        max_bytes=settings.log_max_bytes,
+        backup_count=settings.log_backup_count,
+    )
+    metrics.reset()
 
     for cfg in settings.upstreams:
         if not cfg.enabled:
@@ -1101,18 +1111,24 @@ def create_app() -> FastAPI:
         # 优雅停机窗口：应用内部主动置位 shutting_down 时返回 503。
         # 真实 SIGTERM 路径下 uvicorn 会先关闭 listener，新请求表现为连接被拒绝，
         # 因此实测观察不到该分支；保留它用于进程内主动停机与单测覆盖。
-        if getattr(request.app.state, "shutting_down", False):
-            response = openai_error(
-                "节点正在停机，暂不接受新请求",
-                status=503,
-                type_="server_error",
-                code="node_shutting_down",
-            )
+        metrics.inflight_add(1)
+        try:
+            if getattr(request.app.state, "shutting_down", False):
+                response = openai_error(
+                    "节点正在停机，暂不接受新请求",
+                    status=503,
+                    type_="server_error",
+                    code="node_shutting_down",
+                )
+                response.headers.update(_node_headers(request))
+                metrics.observe_http(request.url.path, request.method, 503)
+                return response
+            response = await call_next(request)
             response.headers.update(_node_headers(request))
+            metrics.observe_http(request.url.path, request.method, response.status_code)
             return response
-        response = await call_next(request)
-        response.headers.update(_node_headers(request))
-        return response
+        finally:
+            metrics.inflight_add(-1)
 
     @app.exception_handler(NodeError)
     async def handle_node_error(request: Request, exc: NodeError):
@@ -1250,19 +1266,38 @@ def create_app() -> FastAPI:
             first = _ChatTarget(entry=model, kind="local", native_model=model)
 
         # auto + 非空链条：按顺序尝试；其余情况只做单次尝试，行为与现状一致
-        if settings.fallback_mode == "auto" and settings.fallback_chain:
-            return await _run_auto_fallback(
-                request, settings, payload, first, client, gate, loading
+        ctx = metrics.begin_chat(
+            model,
+            first.runtime.cfg.id if first.kind == "remote" and first.runtime else "local",
+            bool(payload.get("stream")),
+        )
+        try:
+            if settings.fallback_mode == "auto" and settings.fallback_chain:
+                return metrics.wrap_response(
+                    await _run_auto_fallback(
+                        request, settings, payload, first, client, gate, loading
+                    ),
+                    ctx,
+                )
+
+            result = await _execute_chat_target(request, payload, first, client, gate, loading)
+            if not isinstance(result, _ChatFailure):
+                return metrics.wrap_response(result, ctx)
+
+            body = result.body
+            if settings.fallback_mode == "manual" and result.retryable:
+                body = _attach_candidates(
+                    body, _manual_candidates(request, settings, first)
+                )
+            return metrics.wrap_response(
+                JSONResponse(
+                    status_code=result.status, content=body, headers=result.headers
+                ),
+                ctx,
             )
-
-        result = await _execute_chat_target(request, payload, first, client, gate, loading)
-        if not isinstance(result, _ChatFailure):
-            return result
-
-        body = result.body
-        if settings.fallback_mode == "manual" and result.retryable:
-            body = _attach_candidates(body, _manual_candidates(request, settings, first))
-        return JSONResponse(status_code=result.status, content=body, headers=result.headers)
+        except Exception as exc:  # noqa: BLE001 - 记录后原样抛出
+            metrics.finish_chat(ctx, int(getattr(exc, "status", 500) or 500))
+            raise
 
     @app.post("/v1/embeddings")
     async def embeddings(request: Request, payload: dict[str, Any]):
@@ -1279,16 +1314,35 @@ def create_app() -> FastAPI:
 
         _require_capability(settings, model, "embedding")
 
-        async with gate.slot():
-            if loading is not None:
-                loading.note_request(model)
-            resp = await client.post("/v1/embeddings", payload)
-            if loading is not None:
-                if resp.status_code < 400:
-                    loading.mark_loaded(model)
-                else:
-                    loading.mark_failed(model)
-            return _passthrough(resp)
+        ctx = metrics.begin_chat(model, "local", False)
+        try:
+            async with gate.slot():
+                if loading is not None:
+                    loading.note_request(model)
+                resp = await client.post("/v1/embeddings", payload)
+                if loading is not None:
+                    if resp.status_code < 400:
+                        loading.mark_loaded(model)
+                    else:
+                        loading.mark_failed(model)
+                return metrics.wrap_response(_passthrough(resp), ctx)
+        except Exception as exc:  # noqa: BLE001 - 记录后原样抛出
+            metrics.finish_chat(ctx, int(getattr(exc, "status", 500) or 500))
+            raise
+
+    @app.get("/metrics")
+    async def prometheus_metrics(request: Request):
+        """Prometheus 文本指标；只读运行时状态，不触发上游探活。"""
+        dynamic: dict[str, float] = {}
+        gate: ConcurrencyGate | None = getattr(request.app.state, "gate", None)
+        if gate is not None:
+            dynamic["quasheng_gate_active"] = float(gate.active)
+            dynamic["quasheng_gate_queue_len"] = float(gate.waiting)
+        for runtime in _upstream_runtimes(request):
+            dynamic[f'quasheng_upstream_up{{upstream="{runtime.cfg.id}"}}'] = (
+                1.0 if runtime.status == "ready" else 0.0
+            )
+        return PlainTextResponse(metrics.render(dynamic))
 
     @app.get("/v1/logs")
     async def logs(limit: int = 50):

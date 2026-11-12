@@ -146,6 +146,36 @@ fallback_chain:
 - **未配置链条**：`fallback_mode` 保持默认、`fallback_chain` 为空时，行为与接入回退前逐字段一致。
 - **后续方向**：跨节点（跨仙徒）的回退需要按能力查询候选，留待阵图提供接口；当前只在单节点内按显式链条回退。
 
+### 可观测性（P1）
+
+**Prometheus 指标**：`GET /metrics`（文本 exposition，与应用其他端点同一套 bearer 鉴权），只读运行时状态，不主动探活，渲染失败不会影响业务请求。
+
+| 指标 | 说明 |
+|---|---|
+| `quasheng_http_requests_total{endpoint,method,status}` | 各端点请求量 |
+| `quasheng_model_requests_total{model,upstream,status}` | 模型请求量（local / provider） |
+| `quasheng_request_duration_seconds{model,upstream,stream}` | 整体耗时直方图 |
+| `quasheng_first_byte_seconds{model,upstream,stream}` | 首字节耗时直方图（非流式等于整体） |
+| `quasheng_inflight_requests` | 当前在途 HTTP 请求 |
+| `quasheng_gate_active` / `quasheng_gate_queue_len` | 并发闸门在途 / 排队 |
+| `quasheng_discovery_total{upstream,result}` | 上游发现成功 / 失败次数 |
+| `quasheng_discovery_last_success_timestamp{upstream}` | 最近一次发现成功时间 |
+| `quasheng_upstream_up{upstream}` | 上游可用状态（1=ready，0=其他） |
+| `quasheng_fallback_total{requested,served_by}` | 回退成功次数与实际来源 |
+| `quasheng_fallback_exhausted_total{requested}` | 回退链条耗尽次数 |
+
+**结构化日志落盘**（可选）：
+
+```yaml
+log_file: /var/log/quasheng/events.jsonl   # 留空 = 仅内存环形缓冲
+log_max_bytes: 10485760                    # 单文件上限，默认 10 MiB
+log_backup_count: 3                        # 轮转保留份数，默认 3；0 表示不保留
+```
+
+- 每行一条 JSON（`time/level/event/message`），沿用与 `/v1/logs` 相同的脱敏规则（shared_token、绝对路径；上游地址不会写入事件）。
+- 按大小轮转为 `events.jsonl.1` … `.N`；**写盘失败自动降级为仅内存**，并在环形缓冲里追加一条 `logfile` WARNING，不影响业务请求。
+- `GET /v1/logs` 语义不变：仍然只读内存环形缓冲，落盘只是额外一路输出。
+
 ## 运行
 
 ```bash
