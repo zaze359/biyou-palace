@@ -155,7 +155,8 @@
     "11-08-quasheng-delivery-hardening",
     "11-12-quasheng-model-lifecycle",
     "11-12-quasheng-upstream-discovery",
-    "11-13-quasheng-fallback"
+    "11-13-quasheng-fallback",
+    "11-13-quasheng-observability"
   ],
   "parent": "10-13-biyou-v1-blueprint",
   "relatedFiles": [
