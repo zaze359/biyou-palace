@@ -1,0 +1,106 @@
+{
+  "id": "sanxian-vision",
+  "name": "sanxian-vision",
+  "title": "散仙视觉 / OCR 能力接入",
+  "description": "在散仙节点接入 llama.cpp mtmd：Qwen2.5-VL-3B + mmproj，OpenAI 兼容 content 数组承载图像，独立视觉引擎与能力分流；真机跑通图像理解/OCR，完成 1024/512/256 三档调参并定默认 512。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "nodes/sanxian",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-13",
+  "completedAt": "2026-11-13",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "d38f1b1bfa292f6133440b348f8bac3e5cd20953",
+  "pr_url": null,
+  "subtasks": [
+    {
+      "id": "V1",
+      "title": "mtmd 并入与 JNI 视觉入口",
+      "status": "done",
+      "files": [
+        "nodes/sanxian/nativelib/src/main/cpp/CMakeLists.txt",
+        "nodes/sanxian/nativelib/src/main/cpp/jni_bridge.cpp",
+        "nodes/sanxian/nativelib/src/main/cpp/third_party/llama.cpp/tools/mtmd"
+      ],
+      "acceptance": "LLAMA_BUILD_MTMD 静态链接；可加载 LLM+mmproj、注入图像、流式生成与释放；纯文本路径不回归",
+      "depends_on": [],
+      "parallel": false,
+      "size": "L"
+    },
+    {
+      "id": "V2",
+      "title": "独立视觉引擎与契约 content 数组",
+      "status": "done",
+      "files": [
+        "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/llm/AndroidVisionEngine.kt",
+        "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/node/VisionEngine.kt",
+        "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/node/AndroidVisionImageLoader.kt",
+        "nodes/sanxian/shared/src/commonMain/kotlin/com/biyou/sanxian/contract/Models.kt"
+      ],
+      "acceptance": "content 兼容字符串与数组；图像加载/缩放/体积校验；未声明能力 501、未加载 503、超限 400",
+      "depends_on": ["V1"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "V3",
+      "title": "路由分流、配置与文档",
+      "status": "done",
+      "files": [
+        "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/node/NodeApi.kt",
+        "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/node/NodeServer.kt",
+        "nodes/sanxian/shared/src/commonMain/kotlin/com/biyou/sanxian/node/NodeConfig.kt",
+        "nodes/sanxian/shared/src/commonMain/kotlin/com/biyou/sanxian/llm/VisionConfig.kt",
+        "nodes/sanxian/composeApp/src/androidMain/assets/sanxian.json",
+        "nodes/sanxian/README.md"
+      ],
+      "acceptance": "vision/ocr 能力在 health/models 真实声明；vision_image_max_tokens 默认 512 三处对齐；README 含配置与实测",
+      "depends_on": ["V2"],
+      "parallel": false,
+      "size": "M"
+    },
+    {
+      "id": "V4",
+      "title": "真机验证、缺陷修复与调参",
+      "status": "done",
+      "files": [
+        "nodes/sanxian/nativelib/src/main/cpp/jni_bridge.cpp",
+        "nodes/sanxian/composeApp/src/androidMain/kotlin/com/biyou/sanxian/NodeForegroundService.kt",
+        "nodes/sanxian/shared/src/androidUnitTest/kotlin/com/biyou/sanxian/node/NodeServerIntegrationTest.kt",
+        "nodes/sanxian/shared/src/commonTest/kotlin/com/biyou/sanxian/contract/ChatContentTest.kt"
+      ],
+      "acceptance": "真机图像理解/OCR 跑通；修复 UTF-8 截断 SIGABRT 与缺失权重 501；三档×三次调参并记录耗时、内存、温度与漏读",
+      "depends_on": ["V3"],
+      "parallel": false,
+      "size": "L"
+    }
+  ],
+  "children": [],
+  "parent": "10-14-sanxian-node-agent",
+  "relatedFiles": [
+    "docs/node-agent-contract.md",
+    "nodes/sanxian/README.md",
+    "nodes/sanxian/nativelib/src/main/cpp/jni_bridge.cpp",
+    "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/node/NodeApi.kt",
+    "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/llm/AndroidVisionEngine.kt"
+  ],
+  "notes": "任务卡在功能与真机验证完成后补记，记录既成事实而非计划；未提交。默认 vision_image_max_tokens=512。",
+  "meta": {
+    "device": "XQ-AT72 / Android 12 / arm64-v8a / 12GB",
+    "models": [
+      "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf 1929901056B",
+      "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf 1338428128B"
+    ],
+    "tests": "shared 65 + composeApp 6 passed",
+    "runs": "1024/512/256 各 3 次冷启动",
+    "firstContent": "1024 89.9-125.8s; 512 77.3-112.1s; 256 36.8-46.3s",
+    "memory": "PSS 4.82G, peak RSS 5.66G, MemAvailable min 5.67G",
+    "knownIssues": "首字 77-112s(512)，与发热强相关；外围 chrome 未读是提示词限制",
+    "followUps": "mmproj 量化 f16→Q8/Q4；更小视觉编码器；提示词/分区裁剪；长跑 OCR 节流与降载阈值复核；release 签名与 CI"
+  }
+}
