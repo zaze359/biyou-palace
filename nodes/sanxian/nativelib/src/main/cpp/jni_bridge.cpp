@@ -10,6 +10,8 @@
 #include <android/log.h>
 
 #include "llama.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 #define LOG_TAG "llama_jni"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -44,11 +46,40 @@ static void bridgeLlamaLogsOnce() {
 namespace {
 
 // 一次模型加载对应的原生会话，Kotlin 侧持有其指针（jlong handle）。
+/**
+ * 返回 UTF-8 字节串中「不截断多字节字符」的最长前缀长度。
+ *
+ * llama.cpp 的一个 token 可能只含某个汉字/emoji 的一部分字节（如 0xE5 0xBA），
+ * 直接 NewStringUTF 会触发 JNI 的 Modified UTF-8 校验并 abort。必须先缓冲，
+ * 只把完整字符交给 Java；余下字节留给下一个 token。
+ */
+static size_t utf8_complete_prefix(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t len;
+        if (c < 0x80) len = 1;
+        else if ((c & 0xE0) == 0xC0) len = 2;
+        else if ((c & 0xF0) == 0xE0) len = 3;
+        else if ((c & 0xF8) == 0xF0) len = 4;
+        else return i;  // 非法首字节
+        if (i + len > s.size()) return i;  // 末尾不完整，等下一个 token
+        for (size_t k = 1; k < len; k++) {
+            if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return i;
+        }
+        i += len;
+    }
+    return i;
+}
+
 struct LlmSession {
     llama_model* model = nullptr;
     llama_context* ctx = nullptr;
     const llama_vocab* vocab = nullptr;
     llama_sampler* sampler = nullptr;
+
+    // 视觉前端（mmproj）。nullptr 表示该句柄只做文本推理；初始化见 initVision()。
+    mtmd_context* mctx = nullptr;
 
     // D4：采样参数单一数据源（rebuildSampler 据此重建采样链）
     float   temperature   = 0.7f;  // 采样温度
@@ -551,6 +582,8 @@ Java_com_biyou_sanxian_llm_LlamaNative_freeModel(JNIEnv* /*env*/, jclass /*clazz
     LlmSession* s = asSession(handle);
     if (!s) return;
     if (s->sampler) llama_sampler_free(s->sampler);
+    // mtmd 持有 text model 指针，必须先于 llama_model_free 释放
+    if (s->mctx) mtmd_free(s->mctx);
     if (s->ctx) llama_free(s->ctx);
     if (s->model) llama_model_free(s->model);
     delete s;
@@ -824,6 +857,7 @@ Java_com_biyou_sanxian_llm_LlamaNative_generate(
     const llama_token eot = llama_vocab_eot(vocab);
     int32_t nGenerated = 0;
     bool ok = true;  // 正常完成（含 eos/eot/上下文占满/达到 maxTokens）才置 true，供末尾更新快照
+    std::string pendingUtf8;  // 跨 token 的 UTF-8 残片
 
     while (nGenerated < maxTokens) {
         if (s->cancelled) {
@@ -845,23 +879,32 @@ Java_com_biyou_sanxian_llm_LlamaNative_generate(
 
         llama_sampler_accept(s->sampler, id);
 
-        jstring jPiece = env->NewStringUTF(std::string(buf, static_cast<size_t>(n)).c_str());
-        if (!jPiece) {
-            s->kvValid = false;
-            return -4;
-        }
-        jboolean cont = env->CallBooleanMethod(sink, onToken, jPiece);
-        env->DeleteLocalRef(jPiece);  // 长循环必须释放，否则局部引用表溢出
+        // 只把完整的 UTF-8 字符发给 Java；半个汉字留在 pending 里等下一个 token
+        pendingUtf8.append(buf, static_cast<size_t>(n));
+        size_t cut = utf8_complete_prefix(pendingUtf8);
+        if (cut == 0 && pendingUtf8.size() > 8) pendingUtf8.erase(0, 1);  // 防御非法序列
+        if (cut > 0) {
+            std::string piece = pendingUtf8.substr(0, cut);
+            pendingUtf8.erase(0, cut);
 
-        if (env->ExceptionCheck()) {
-            s->kvValid = false;
-            return -5;
-        }
-        if (!cont) {
-            s->cancelled = true;
-            s->kvValid = false;  // 用户停止，KV 含半成品，下一轮强制全量
-            ok = false;
-            break;
+            jstring jPiece = env->NewStringUTF(piece.c_str());
+            if (!jPiece) {
+                s->kvValid = false;
+                return -4;
+            }
+            jboolean cont = env->CallBooleanMethod(sink, onToken, jPiece);
+            env->DeleteLocalRef(jPiece);  // 长循环必须释放，否则局部引用表溢出
+
+            if (env->ExceptionCheck()) {
+                s->kvValid = false;
+                return -5;
+            }
+            if (!cont) {
+                s->cancelled = true;
+                s->kvValid = false;  // 用户停止，KV 含半成品，下一轮强制全量
+                ok = false;
+                break;
+            }
         }
 
         // 把新 token 送入解码，为下一次采样准备 logits；同步进快照
@@ -967,4 +1010,232 @@ Java_com_biyou_sanxian_llm_LlamaNative_embed(
     if (!out) return env->NewFloatArray(0);
     env->SetFloatArrayRegion(out, 0, n, emb);
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// 多模态（vision / OCR）
+//
+// OCR 不单独建引擎：同一套 (LLM + mmproj) 权重，靠提示词模板要它输出文字即可。
+// 文本渲染复用 renderChat，图像位置由 Kotlin 侧插入 mtmd 的 media marker
+// （visionMediaMarker() 返回），因此这里只负责「按顺序解码位图 + 分词 + eval + 采样」。
+// ---------------------------------------------------------------------------
+
+/** 视觉前端是否就绪（mmproj 已加载且模型确实支持 vision）。 */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_biyou_sanxian_llm_LlamaNative_isVisionReady(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+    LlmSession* s = asSession(handle);
+    return (s && s->mctx && s->ctx) ? JNI_TRUE : JNI_FALSE;
+}
+
+/** 提示词里代表「一张图」的占位符（mtmd 默认 marker，如 <__media__>）。 */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_biyou_sanxian_llm_LlamaNative_visionMediaMarker(JNIEnv* env, jclass /*clazz*/) {
+    const char* marker = mtmd_default_marker();
+    return env->NewStringUTF(marker ? marker : "");
+}
+
+/**
+ * 在已加载的文本模型上挂载 mmproj 视觉编码器。
+ *
+ * @param imageMaxTokens 动态分辨率视觉模型的图像 token 上限；<=0 用模型元数据默认值。
+ * @return true 表示视觉通道可用
+ */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_biyou_sanxian_llm_LlamaNative_initVision(
+        JNIEnv* env, jclass /*clazz*/, jlong handle, jstring jMmprojPath,
+        jint nThreads, jint imageMaxTokens) {
+
+    LlmSession* s = asSession(handle);
+    if (!s || !s->model) return JNI_FALSE;
+
+    const char* p = env->GetStringUTFChars(jMmprojPath, nullptr);
+    if (!p) return JNI_FALSE;
+    std::string mmprojPath(p);
+    env->ReleaseStringUTFChars(jMmprojPath, p);
+
+    if (s->mctx) {
+        mtmd_free(s->mctx);
+        s->mctx = nullptr;
+    }
+    // mtmd/stb 的错误默认走 stderr，Android 上不可见，接到 logcat
+    mtmd_helper_log_set(sanxian_ggml_log, nullptr);
+
+    mtmd_context_params params = mtmd_context_params_default();
+    params.use_gpu = false;            // 端侧无 GPU 后端，图像编码走 CPU
+    params.print_timings = false;
+    params.n_threads = nThreads > 0 ? nThreads : 4;
+    params.warmup = false;             // 预热会额外占内存，首请求再编码
+    if (imageMaxTokens > 0) params.image_max_tokens = imageMaxTokens;
+
+    s->mctx = mtmd_init_from_file(mmprojPath.c_str(), s->model, params);
+    if (!s->mctx) {
+        LOGE("mmproj 加载失败: %s", mmprojPath.c_str());
+        return JNI_FALSE;
+    }
+    if (!mtmd_support_vision(s->mctx)) {
+        LOGE("mmproj 未声明 vision 能力: %s", mmprojPath.c_str());
+        mtmd_free(s->mctx);
+        s->mctx = nullptr;
+        return JNI_FALSE;
+    }
+    LOGI("视觉前端已加载: %s, marker=%s", mmprojPath.c_str(), mtmd_default_marker());
+    return JNI_TRUE;
+}
+
+/**
+ * 多模态生成（文本 + 图像）。
+ *
+ * 每张图按 [images] 顺序对应 prompt 里第 N 个 media marker。返回码与文本 generate 对齐，
+ * 额外定义：
+ *  - -7 文本 + 图像 token 超出上下文预算（上层转 400）
+ *  - -8 图像/提示词分词失败（上层转 400）
+ *  - -9 图像解码失败（上层转 400）
+ *
+ * 不复用文本路径的增量 KV：视觉请求之间图像内容不同，KV 前缀几乎不可能命中，
+ * 每次清空后全量 eval，行为更可预测。
+ */
+extern "C" JNIEXPORT jint JNICALL
+Java_com_biyou_sanxian_llm_LlamaNative_generateVision(
+        JNIEnv* env, jclass /*clazz*/,
+        jlong handle, jobjectArray roles, jobjectArray contents,
+        jobjectArray images, jint maxTokens, jobject sink) {
+
+    LlmSession* s = asSession(handle);
+    if (!s || !s->ctx || !s->vocab || !s->mctx) return -1;
+
+    jclass sinkCls = env->GetObjectClass(sink);
+    jmethodID onToken = env->GetMethodID(sinkCls, "onToken", "(Ljava/lang/String;)Z");
+    if (!onToken) return -2;
+
+    std::vector<ChatMsg> msgs;
+    if (!readChatArrays(env, roles, contents, &msgs)) return -6;
+
+    s->cancelled = false;
+
+    std::string prompt;
+    if (!renderChat(s, msgs, /*keepSystem=*/false, /*start=*/0, &prompt)) return -6;
+
+    // ---- 1. 图像按序解码为 mtmd_bitmap ----
+    const jsize nImages = images ? env->GetArrayLength(images) : 0;
+    std::vector<mtmd_bitmap*> bitmaps;
+    bitmaps.reserve(static_cast<size_t>(std::max<jsize>(nImages, 0)));
+    mtmd_helper_init_opt opt = mtmd_helper_init_opt_default();
+    for (jsize i = 0; i < nImages; i++) {
+        auto* arr = static_cast<jbyteArray>(env->GetObjectArrayElement(images, i));
+        if (!arr) {
+            for (auto* b : bitmaps) mtmd_bitmap_free(b);
+            return -9;
+        }
+        const jsize len = env->GetArrayLength(arr);
+        std::vector<unsigned char> buf(static_cast<size_t>(len));
+        if (len > 0) {
+            env->GetByteArrayRegion(arr, 0, len, reinterpret_cast<jbyte*>(buf.data()));
+        }
+        env->DeleteLocalRef(arr);
+
+        auto wrapper = mtmd_helper_bitmap_init_from_buf(
+                s->mctx, buf.data(), buf.size(), /*placeholder=*/false, opt);
+        if (!wrapper.bitmap) {
+            LOGE("图像解码失败: index=%d, bytes=%d", static_cast<int>(i), static_cast<int>(len));
+            for (auto* b : bitmaps) mtmd_bitmap_free(b);
+            return -9;
+        }
+        bitmaps.push_back(wrapper.bitmap);
+        if (wrapper.video_ctx) mtmd_helper_video_free(wrapper.video_ctx);
+    }
+
+    // ---- 2. 分词：文本 + 图像 chunk ----
+    mtmd_input_text text{};
+    text.text = prompt.c_str();
+    text.text_len = prompt.size();
+    text.add_special = true;
+    text.parse_special = true;
+
+    mtmd_input_chunks* chunks = mtmd_input_chunks_init();
+    std::vector<const mtmd_bitmap*> bitmapPtrs(bitmaps.begin(), bitmaps.end());
+    const int32_t tokenizeRc = mtmd_tokenize(
+            s->mctx, chunks, &text, bitmapPtrs.data(), bitmapPtrs.size());
+    // tokenize 已把位图数据编码进 chunks，此后不再需要原始位图
+    for (auto* b : bitmaps) mtmd_bitmap_free(b);
+    if (tokenizeRc != 0) {
+        LOGE("视觉分词失败: rc=%d, images=%d", tokenizeRc, static_cast<int>(nImages));
+        mtmd_input_chunks_free(chunks);
+        return -8;
+    }
+
+    const size_t nTokens = mtmd_helper_get_n_tokens(chunks);
+    s->lastPromptTokens = static_cast<int32_t>(nTokens);
+    const int32_t budget = s->n_ctx - maxTokens - kSafetyMargin;
+    if (static_cast<int64_t>(nTokens) > static_cast<int64_t>(budget)) {
+        LOGE("视觉 prompt 超预算: tokens=%zu, budget=%d, n_ctx=%d, maxTokens=%d",
+             nTokens, budget, s->n_ctx, maxTokens);
+        mtmd_input_chunks_free(chunks);
+        return -7;
+    }
+
+    // ---- 3. 全量 eval（图像 chunk 走非因果编码，由 mtmd helper 处理）----
+    llama_memory_clear(llama_get_memory(s->ctx), true);
+    s->n_past = 0;
+    s->kvValid = false;
+    s->cachedTokens.clear();
+
+    llama_pos newNPast = 0;
+    const int32_t evalRc = mtmd_helper_eval_chunks(
+            s->mctx, s->ctx, chunks, 0, 0, s->n_batch, /*logits_last=*/true, &newNPast);
+    mtmd_input_chunks_free(chunks);
+    if (evalRc != 0) {
+        LOGE("视觉 prompt eval 失败: rc=%d, tokens=%zu, n_batch=%d", evalRc, nTokens, s->n_batch);
+        return -4;
+    }
+    s->n_past = newNPast;
+    LOGI("视觉 prompt 完成: %zu tokens, %d 张图", nTokens, static_cast<int>(nImages));
+
+    // ---- 4. 采样（与文本路径同一套采样参数/停词逻辑）----
+    rebuildSampler(s);
+    llama_sampler_reset(s->sampler);
+
+    const llama_token eos = llama_vocab_eos(s->vocab);
+    const llama_token eot = llama_vocab_eot(s->vocab);
+    int32_t nGenerated = 0;
+    std::string pendingUtf8;
+
+    while (nGenerated < maxTokens) {
+        if (s->cancelled) return -3;
+        if (s->n_past >= s->n_ctx) break;
+
+        llama_token id = llama_sampler_sample(s->sampler, s->ctx, -1);
+        if (id == eos || id == eot) break;
+
+        char buf[256];
+        int32_t n = llama_token_to_piece(s->vocab, id, buf, sizeof(buf), 0, true);
+        if (n < 0) break;
+
+        llama_sampler_accept(s->sampler, id);
+
+        pendingUtf8.append(buf, static_cast<size_t>(n));
+        size_t cut = utf8_complete_prefix(pendingUtf8);
+        if (cut == 0 && pendingUtf8.size() > 8) pendingUtf8.erase(0, 1);
+        if (cut > 0) {
+            std::string piece = pendingUtf8.substr(0, cut);
+            pendingUtf8.erase(0, cut);
+
+            jstring jPiece = env->NewStringUTF(piece.c_str());
+            if (!jPiece) return -4;
+            jboolean cont = env->CallBooleanMethod(sink, onToken, jPiece);
+            env->DeleteLocalRef(jPiece);
+            if (env->ExceptionCheck()) return -5;
+            if (!cont) {
+                s->cancelled = true;
+                break;
+            }
+        }
+
+        std::vector<llama_token> one{id};
+        if (decodeChunk(s, one, 0, 1, /*needLogits=*/true) != 0) return -4;
+        s->n_past++;
+        nGenerated++;
+    }
+
+    LOGI("视觉生成结束: %d tokens, n_past=%d", nGenerated, s->n_past);
+    return nGenerated;
 }

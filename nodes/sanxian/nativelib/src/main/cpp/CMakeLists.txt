@@ -15,7 +15,9 @@ set(LLAMA_BUILD_TOOLS              OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES           OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER             OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_APP                OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_MTMD               OFF CACHE BOOL "" FORCE)
+# 多模态（vision）：mtmd 是 llama.cpp 的视觉/音频前端，随 llama 一起静态链接。
+# 依赖 vendor/ 下的 stb（图像解码）等，已在本仓库 third_party/llama.cpp 中。
+set(LLAMA_BUILD_MTMD               ON  CACHE BOOL "" FORCE)
 set(LLAMA_ALL_WARNINGS             OFF CACHE BOOL "" FORCE)
 set(LLAMA_ALL_WARNINGS_3RD_PARTY   OFF CACHE BOOL "" FORCE)
 # 使用 OpenSSL 会引入额外的链接依赖，端侧推理用不到，显式关闭
@@ -45,6 +47,7 @@ add_library(llama_jni SHARED jni_bridge.cpp)
 target_include_directories(llama_jni PRIVATE
     ${LLAMA_DIR}/include
     ${LLAMA_DIR}/ggml/include
+    ${LLAMA_DIR}/tools/mtmd
 )
 
 find_library(log-lib log)
@@ -53,5 +56,6 @@ find_library(log-lib log)
 # 自动追加到本共享库的链接行，因此这里只需显式链接 llama 本身。
 target_link_libraries(llama_jni
     llama
+    mtmd
     ${log-lib}
 )

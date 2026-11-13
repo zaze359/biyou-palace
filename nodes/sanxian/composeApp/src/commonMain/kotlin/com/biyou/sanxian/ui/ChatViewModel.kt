@@ -3,6 +3,7 @@ package com.biyou.sanxian.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.biyou.sanxian.contract.ChatMessage as ContractChatMessage
+import com.biyou.sanxian.contract.ChatContent
 import com.biyou.sanxian.llm.ChatMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -98,9 +99,9 @@ class ChatViewModel(
 
         // 请求体 = 系统提示 + 历史（含本条用户消息）；最后一条空的 assistant 占位不发送。
         val payload = buildList {
-            add(ContractChatMessage(role = "system", content = SYSTEM_PROMPT))
+            add(ContractChatMessage(role = "system", content = ChatContent.Text(SYSTEM_PROMPT)))
             list.dropLast(1).forEach {
-                add(ContractChatMessage(role = it.role.name.lowercase(), content = it.content))
+                add(ContractChatMessage(role = it.role.name.lowercase(), content = ChatContent.Text(it.content)))
             }
         }
 

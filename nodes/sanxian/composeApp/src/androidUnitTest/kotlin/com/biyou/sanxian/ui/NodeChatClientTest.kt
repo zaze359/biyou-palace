@@ -1,5 +1,6 @@
 package com.biyou.sanxian.ui
 
+import com.biyou.sanxian.contract.ChatContent
 import com.biyou.sanxian.contract.ChatMessage
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -51,7 +52,7 @@ class NodeChatClientTest {
         client.streamChat(
             endpoint = NodeChatEndpoint("http://127.0.0.1:4031/v1", "test-token"),
             model = "Qwen3-0.6B-Q8_0.gguf",
-            messages = listOf(ChatMessage(role = "user", content = "你好")),
+            messages = listOf(ChatMessage(role = "user", content = ChatContent.Text("你好"))),
         ) { chunks += it }
         client.close()
 

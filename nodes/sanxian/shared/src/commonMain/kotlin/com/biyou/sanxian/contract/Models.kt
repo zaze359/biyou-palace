@@ -1,8 +1,18 @@
 package com.biyou.sanxian.contract
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * 节点智能体统一契约（contract v1.0）的 Kotlin 数据模型。
@@ -98,10 +108,88 @@ data class ChatRequest(
     @SerialName("max_tokens") val maxTokens: Int? = null,
 )
 
+/**
+ * 消息内容：OpenAI 兼容的「字符串或内容数组」双形态。
+ *
+ * - 纯文本请求/响应始终序列化为 JSON 字符串，保持与旧客户端逐字节兼容；
+ * - 多模态请求可传 `[{"type":"text",...},{"type":"image_url",...}]`，由 [ChatContent.Parts] 承载。
+ */
+@Serializable(with = ChatContentSerializer::class)
+sealed interface ChatContent {
+    /** 拼接所有 text 分片后的纯文本（图片分片忽略），供文本链路与日志使用。 */
+    val plainText: String
+
+    /** 按原始顺序提取图像分片；纯字符串形态恒为空。 */
+    val imageUrls: List<ImageUrl>
+
+    data class Text(val text: String) : ChatContent {
+        override val plainText: String get() = text
+        override val imageUrls: List<ImageUrl> get() = emptyList()
+    }
+
+    data class Parts(val parts: List<ContentPart>) : ChatContent {
+        override val plainText: String get() = parts.mapNotNull { it.text }.joinToString("")
+
+        override val imageUrls: List<ImageUrl> get() = parts.mapNotNull { it.imageUrl }
+    }
+
+    companion object {
+        fun of(text: String): ChatContent = Text(text)
+    }
+}
+
+@Serializable
+data class ContentPart(
+    val type: String,
+    val text: String? = null,
+    @SerialName("image_url") val imageUrl: ImageUrl? = null,
+)
+
+@Serializable
+data class ImageUrl(
+    /** `http(s)://...` 或 `data:image/<type>;base64,...` */
+    val url: String,
+    val detail: String? = null,
+)
+
+/**
+ * 手工读写 `string | array`，不借助 JsonElement 的隐式多态。
+ *
+ * 之所以不用 `JsonElement` 作为 content 类型：响应侧（assistant 消息）必须输出字符串，
+ * 若类型是 JsonElement，任何误构造都会让客户端拿到非契约 JSON。
+ */
+object ChatContentSerializer : KSerializer<ChatContent> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): ChatContent {
+        val input = decoder as? JsonDecoder
+            ?: throw SerializationException("ChatMessage.content 仅支持 JSON 解码")
+        return when (val element = input.decodeJsonElement()) {
+            is JsonPrimitive -> ChatContent.Text(element.content)
+            is JsonArray -> ChatContent.Parts(
+                element.map { input.json.decodeFromJsonElement(ContentPart.serializer(), it) }
+            )
+            else -> throw SerializationException("content 必须是字符串或内容数组")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: ChatContent) {
+        val output = encoder as? JsonEncoder
+            ?: throw SerializationException("ChatMessage.content 仅支持 JSON 编码")
+        when (value) {
+            is ChatContent.Text -> output.encodeString(value.text)
+            is ChatContent.Parts -> output.encodeSerializableValue(
+                ListSerializer(ContentPart.serializer()),
+                value.parts,
+            )
+        }
+    }
+}
+
 @Serializable
 data class ChatMessage(
     val role: String,
-    val content: String,
+    val content: ChatContent,
 )
 
 @Serializable

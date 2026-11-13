@@ -79,7 +79,7 @@ class ChatViewModelTest {
         assertEquals(endpoint, client.lastEndpoint)
         assertEquals("Qwen3-0.6B-Q8_0.gguf", client.lastModel)
         assertEquals(listOf("system", "user"), client.lastMessages.map { it.role })
-        assertEquals("你好", client.lastMessages.last().content)
+        assertEquals("你好", client.lastMessages.last().content.plainText)
         assertEquals("你好", vm.state.value.messages.last().content)
         assertFalse(vm.state.value.isGenerating)
         assertFalse(LlmEngineProvider.isInitialized, "聊天链路不得触碰引擎单例")

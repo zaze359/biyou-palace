@@ -80,6 +80,51 @@ class NodeServerIntegrationTest {
         }
     }
 
+    /** 假视觉引擎：记录收到的图像与会话，便于断言 marker/图像顺序。 */
+    private class FakeVisionEngine(
+        private val loaded: Boolean = true,
+        private val chunks: List<String> = listOf("图中", "有一只猫"),
+    ) : VisionEngine {
+        var lastImages: List<ByteArray> = emptyList()
+        var lastPrompt: String = ""
+        var lastSession: ChatSession? = null
+
+        override val isLoaded: Boolean = loaded
+        override val mediaMarker: String = "<__media__>"
+
+        override fun generate(
+            session: ChatSession,
+            prompt: String,
+            images: List<ByteArray>,
+            maxTokens: Int,
+            stats: GenerateStats?,
+        ): Flow<String> = flow {
+            lastSession = session
+            lastImages = images
+            lastPrompt = prompt
+            chunks.forEach { emit(it) }
+            stats?.apply {
+                promptTokens = 20
+                completionTokens = chunks.size
+            }
+        }
+
+        override fun stopGeneration() = Unit
+        override fun close() = Unit
+    }
+
+    private class FakeImageLoader(
+        private val bytes: ByteArray = byteArrayOf(1, 2, 3),
+        private val error: Exception? = null,
+    ) : VisionImageLoader {
+        var calls = 0
+        override suspend fun load(url: String): ByteArray {
+            calls++
+            error?.let { throw it }
+            return bytes
+        }
+    }
+
     /** 假健康采集：固定返回正常资源，避免触碰 Android API。 */
     private val fakeHealth: suspend (Int) -> NodeHealthCollector.CollectedHealth = { queueLen ->
         NodeHealthCollector.CollectedHealth(
@@ -114,9 +159,14 @@ class NodeServerIntegrationTest {
         health: suspend (Int) -> NodeHealthCollector.CollectedHealth = fakeHealth,
         governor: ThermalGovernor = ThermalGovernor(config),
         thermalProbe: () -> ThermalSignal = { ThermalSignal() },
+        vision: VisionEngine? = null,
+        imageLoader: VisionImageLoader = UnsupportedVisionImageLoader,
     ) {
         application {
-            installNodeApi(config, engine, embedding, gate, health, governor, thermalProbe)
+            installNodeApi(
+                config, engine, embedding, gate, health, governor, thermalProbe,
+                vision, imageLoader,
+            )
         }
     }
 
@@ -284,6 +334,114 @@ class NodeServerIntegrationTest {
         val health = json.parseToJsonElement(client.get("/v1/health").bodyAsText()).jsonObject
         assertEquals("ready", health["status"]!!.jsonPrimitive.content)
         assertTrue(health["models"]!!.jsonArray.single().jsonObject["loaded"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    // ----------------------------- vision / OCR -----------------------------
+
+    private val visionConfig = baseConfig.copy(
+        preloadModels = listOf("/data/models/qwen.gguf"),
+        visionModel = "/data/models/vl.gguf",
+        capabilitiesMap = baseConfig.capabilitiesMap + (
+            "vl.gguf" to ModelCapability(listOf("chat", "vision", "ocr"), contextLen = 4096)
+            ),
+    )
+
+    private fun visionBody(model: String = "vl.gguf", url: String = "data:image/png;base64,AAAA") =
+        """
+        {"model":"$model","stream":false,"messages":[{"role":"user","content":[
+          {"type":"text","text":"这是什么？"},
+          {"type":"image_url","image_url":{"url":"$url"}}
+        ]}]}
+        """.trimIndent()
+
+    @Test
+    fun `图像请求走视觉引擎，marker 与图像按序对应`() = testApplication {
+        val vision = FakeVisionEngine()
+        val loader = FakeImageLoader(bytes = byteArrayOf(9, 9, 9))
+        installTestApi(config = visionConfig, vision = vision, imageLoader = loader)
+
+        val res = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody(visionBody())
+        }
+        assertEquals(HttpStatusCode.OK, res.status)
+        assertContractHeaders(res)
+
+        val message = json.parseToJsonElement(res.bodyAsText()).jsonObject
+            .let { it["choices"]!!.jsonArray.single().jsonObject }
+            .let { it["message"]!!.jsonObject }
+        assertEquals("assistant", message["role"]!!.jsonPrimitive.content)
+        assertEquals("图中有一只猫", message["content"]!!.jsonPrimitive.content)
+        assertTrue(message["content"]!!.jsonPrimitive.isString, "assistant content 必须是 JSON 字符串")
+
+        assertEquals(1, loader.calls)
+        assertEquals(1, vision.lastImages.size)
+        assertTrue(vision.lastImages.single().contentEquals(byteArrayOf(9, 9, 9)))
+        assertTrue(vision.lastPrompt.contains("<__media__>"), "图像分片应替换为 mtmd marker，实际=${vision.lastPrompt}")
+        assertTrue(vision.lastPrompt.contains("这是什么？"), "文本分片必须保留")
+    }
+
+    @Test
+    fun `未声明 vision 能力的模型收到图像请求返回 501`() = testApplication {
+        val loader = FakeImageLoader()
+        installTestApi(vision = FakeVisionEngine(), imageLoader = loader)
+
+        val res = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody(visionBody(model = "qwen.gguf"))
+        }
+        assertEquals(HttpStatusCode.NotImplemented, res.status)
+        val error = json.parseToJsonElement(res.bodyAsText()).jsonObject.errorBody()
+        assertEquals("capability_not_supported", error["code"]!!.jsonPrimitive.content)
+        assertEquals(0, loader.calls, "能力门控必须先于图像下载")
+    }
+
+    @Test
+    fun `视觉模型未加载时返回 503 而非 500`() = testApplication {
+        installTestApi(
+            config = visionConfig,
+            vision = FakeVisionEngine(loaded = false),
+            imageLoader = FakeImageLoader(),
+        )
+
+        val res = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody(visionBody())
+        }
+        assertEquals(HttpStatusCode.ServiceUnavailable, res.status)
+        val error = json.parseToJsonElement(res.bodyAsText()).jsonObject.errorBody()
+        assertEquals("upstream_unavailable", error["code"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `图像过大或解码失败返回 400 与 OpenAI 错误体`() = testApplication {
+        installTestApi(
+            config = visionConfig,
+            vision = FakeVisionEngine(),
+            imageLoader = FakeImageLoader(error = badRequest("图像过大：5120 KB，上限 4096 KB")),
+        )
+
+        val res = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody(visionBody())
+        }
+        assertEquals(HttpStatusCode.BadRequest, res.status)
+        val error = json.parseToJsonElement(res.bodyAsText()).jsonObject.errorBody()
+        assertEquals("invalid_parameter", error["code"]!!.jsonPrimitive.content)
+        val message = error["message"]!!.jsonPrimitive.content
+        assertTrue(message.contains("图像过大"), "错误信息应说明原因，实际=$message")
+    }
+
+    @Test
+    fun `health 把视觉模型标为 loaded 并声明 vision 与 ocr`() = testApplication {
+        installTestApi(config = visionConfig, vision = FakeVisionEngine(), imageLoader = FakeImageLoader())
+
+        val body = json.parseToJsonElement(client.get("/v1/health").bodyAsText()).jsonObject
+        val vl = body["models"]!!.jsonArray.map { it.jsonObject }
+            .single { it["name"]!!.jsonPrimitive.content == "vl.gguf" }
+        assertTrue(vl["loaded"]!!.jsonPrimitive.content.toBoolean())
+        val caps = vl["capabilities"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue("vision" in caps && "ocr" in caps, "应声明 vision 与 ocr，实际=$caps")
     }
 
     // ----------------------------- embeddings -----------------------------

@@ -20,8 +20,10 @@ import com.biyou.sanxian.node.NodeConfigStore
 import com.biyou.sanxian.node.NodeLogBuffer
 import com.biyou.sanxian.node.NodeServer
 import com.biyou.sanxian.node.loadNodeConfig
+import com.biyou.sanxian.llm.AndroidVisionEngine
 import com.biyou.sanxian.llm.LlmConfig
 import com.biyou.sanxian.llm.LlmEngineProvider
+import com.biyou.sanxian.llm.VisionConfig
 import com.biyou.sanxian.ui.getModelsDirectory
 import java.io.File
 
@@ -37,6 +39,9 @@ import java.io.File
 class NodeForegroundService : Service() {
 
     private var server: NodeServer? = null
+
+    /** 视觉引擎独立句柄，随服务销毁显式释放（约 3GB 权重不能泄漏）。 */
+    private var visionEngine: AndroidVisionEngine? = null
 
     /** 熄屏存活用的 CPU 锁与 Wi-Fi 锁，随服务生命周期持有/释放。 */
     private var wakeLock: PowerManager.WakeLock? = null
@@ -103,8 +108,48 @@ class NodeForegroundService : Service() {
         }
 
         val embedding = engine as? EmbeddingEngine
-        server = NodeServer(this, config, engine, embedding)
+        val vision = loadVisionEngine(config)
+        visionEngine = vision
+        server = NodeServer(this, config, engine, embedding, vision)
         server?.start()
+    }
+
+    /**
+     * 视觉引擎是独立句柄（自己的 LLM + mmproj），与 chat/embedding 互不共享 KV。
+     * 加载失败不拖累节点：记录日志后返回 null，视觉请求走 503/501。
+     */
+    private fun loadVisionEngine(config: NodeConfig): AndroidVisionEngine? {
+        val modelPath = config.visionModel ?: return null
+        val mmprojPath = config.visionMmproj ?: return null
+        val vision = AndroidVisionEngine(VisionConfig())
+        return runCatching {
+            vision.loadModel(
+                VisionConfig(
+                    modelPath = modelPath,
+                    mmprojPath = mmprojPath,
+                    contextSize = config.visionContextLen,
+                    imageMaxTokens = config.visionImageMaxTokens,
+                )
+            )
+            Log.i(TAG, "视觉引擎就绪：${File(modelPath).name} + ${File(mmprojPath).name}")
+            NodeLogBuffer.record(
+                "INFO",
+                "warmup",
+                "视觉引擎就绪：${File(modelPath).name} + ${File(mmprojPath).name}",
+            )
+            vision
+        }.getOrElse { error ->
+            Log.e(TAG, "视觉引擎加载失败", error)
+            NodeLogBuffer.record(
+                "ERROR",
+                "warmup",
+                "视觉引擎加载失败：${File(modelPath).name}，原因=${error.message ?: error.javaClass.simpleName}",
+            )
+            // 释放可能已分配的句柄，但保留引擎实例：路由据此返回 503（未加载），
+            // 而不是 501（未配置后端）——前者可重试，后者是配置问题。
+            vision.close()
+            vision
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -127,6 +172,8 @@ class NodeForegroundService : Service() {
         releaseLocks()
         server?.stop()
         server = null
+        visionEngine?.close()
+        visionEngine = null
         super.onDestroy()
     }
 
@@ -196,6 +243,8 @@ class NodeForegroundService : Service() {
         return raw.copy(
             preloadModels = raw.preloadModels.mapNotNull { resolveModel(it, "chat") },
             embeddingModel = raw.embeddingModel?.let { resolveModel(it, "embedding") },
+            visionModel = raw.visionModel?.let { resolveVisionPath(it, "vision") },
+            visionMmproj = raw.visionMmproj?.let { resolveVisionPath(it, "vision-mmproj") },
         )
     }
 
@@ -210,6 +259,21 @@ class NodeForegroundService : Service() {
             Log.w(TAG, "$role 模型 $name 不存在（查找目录 ${getModelsDirectory()}）；请在「模型管理」中导入 GGUF")
         }
         return null
+    }
+
+    /**
+     * 视觉权重路径：**即使文件缺失也返回候选路径**，交给引擎加载失败。
+     *
+     * 这样语义是「已配置但未加载」→ `/v1/health` 的 loaded=false + 请求 503（可重试），
+     * 而不是被静默降级成「未配置」→ 501（客户端会以为节点没有视觉能力）。
+     */
+    private fun resolveVisionPath(entry: String, role: String): String {
+        val name = File(entry).name
+        val target = File(getModelsDirectory(), name)
+        if (!target.isFile) {
+            Log.w(TAG, "$role 模型 $name 不存在（查找目录 ${getModelsDirectory()}）；视觉请求将返回 503")
+        }
+        return target.absolutePath
     }
 
     private fun notifyModelMissing(text: String) {

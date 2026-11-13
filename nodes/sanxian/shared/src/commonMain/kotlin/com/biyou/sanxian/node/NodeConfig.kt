@@ -25,6 +25,15 @@ data class NodeConfig(
      * 并向集群声明该文件的 `embedding` 能力（见 [capabilitiesMap]）。为空则不承接 embedding。
      */
     @SerialName("embedding_model") val embeddingModel: String? = null,
+    /**
+     * 视觉模型（LLM）与 mmproj 投影权重路径。两者都非空时节点额外加载独立视觉句柄，
+     * 承接 `capabilities_map` 中声明了 `vision` / `ocr` 的模型的图像请求。
+     */
+    @SerialName("vision_model") val visionModel: String? = null,
+    @SerialName("vision_mmproj") val visionMmproj: String? = null,
+    @SerialName("vision_context_len") val visionContextLen: Int = 4096,
+    /** 图像 token 上限：越大越清晰，但编码更慢、占 KV 更多；512 为真机实测默认值 */
+    @SerialName("vision_image_max_tokens") val visionImageMaxTokens: Int = 512,
     /** 能力声明：未登记的模型默认只有 chat */
     @SerialName("capabilities_map") val capabilitiesMap: Map<String, ModelCapability> = emptyMap(),
     /** 并发上限（手机资源受限，建议 1~2），满载立即 429 */
@@ -162,6 +171,10 @@ fun NodeConfig.Companion.fromMap(raw: Map<String, Any?>): NodeConfig {
         authEnabled = auth,
         preloadModels = (raw["preload_models"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
         embeddingModel = str("embedding_model"),
+        visionModel = str("vision_model"),
+        visionMmproj = str("vision_mmproj"),
+        visionContextLen = int("vision_context_len") ?: 4096,
+        visionImageMaxTokens = int("vision_image_max_tokens") ?: 512,
         capabilitiesMap = capabilities,
         maxConcurrency = int("max_concurrency") ?: 2,
         memWarnPct = dbl("mem_warn_pct") ?: 85.0,

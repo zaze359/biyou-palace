@@ -141,4 +141,35 @@ object LlamaNative {
      * @return n_embd 维向量；失败返回长度 0 的 FloatArray
      */
     external fun embed(handle: Long, text: String): FloatArray
+
+    // ----------------------------- 多模态（vision / OCR） -----------------------------
+
+    /**
+     * 在已加载的文本模型上挂载 mmproj 视觉编码器（llama.cpp `tools/mtmd`）。
+     *
+     * @param imageMaxTokens 动态分辨率模型（如 Qwen2.5-VL）的图像 token 上限；<=0 用模型元数据默认值
+     * @return true 表示视觉通道可用
+     */
+    external fun initVision(handle: Long, mmprojPath: String, nThreads: Int, imageMaxTokens: Int): Boolean
+
+    /** 视觉通道是否已就绪（mmproj 已加载且模型支持 vision）。 */
+    external fun isVisionReady(handle: Long): Boolean
+
+    /** 提示词中代表「一张图」的占位符（mtmd 默认 marker）。 */
+    external fun visionMediaMarker(): String
+
+    /**
+     * 多模态流式生成。prompt 里的第 N 个 media marker 对应 [images] 的第 N 项。
+     *
+     * @return >=0 生成的 token 数；<0 为错误码，语义同 [generate]，另有
+     *         -7 超出上下文预算 / -8 分词失败 / -9 图像解码失败
+     */
+    external fun generateVision(
+        handle: Long,
+        roles: Array<String>,
+        contents: Array<String>,
+        images: Array<ByteArray>,
+        maxTokens: Int,
+        sink: TokenSink,
+    ): Int
 }

@@ -2,6 +2,7 @@ package com.biyou.sanxian.node
 
 import com.biyou.sanxian.contract.ChatChoice
 import com.biyou.sanxian.contract.ChatCompletion
+import com.biyou.sanxian.contract.ChatContent
 import com.biyou.sanxian.contract.ChatMessage as ContractChatMessage
 import com.biyou.sanxian.contract.ChatRequest
 import com.biyou.sanxian.contract.EmbeddingData
@@ -63,10 +64,15 @@ internal fun Application.installNodeApi(
     health: suspend (queueLen: Int) -> NodeHealthCollector.CollectedHealth,
     governor: ThermalGovernor = ThermalGovernor(config),
     thermalProbe: () -> ThermalSignal = { ThermalSignal() },
+    visionEngine: VisionEngine? = null,
+    imageLoader: VisionImageLoader = UnsupportedVisionImageLoader,
 ) {
     // 日志脱敏需要一个稳定的 token 值：节点安装路由时登记，避免启动早于 /v1/logs 的事件漏脱敏。
     NodeLogBuffer.configure(config.sharedToken)
-    NodeApi(config, engine, embeddingEngine, gate, health, governor, thermalProbe).configure(this)
+    NodeApi(
+        config, engine, embeddingEngine, gate, health, governor, thermalProbe,
+        visionEngine, imageLoader,
+    ).configure(this)
 }
 
 /** 端点实现。行为与抽取前逐条一致；能力/鉴权/响应头语义见各类注释。 */
@@ -78,6 +84,8 @@ private class NodeApi(
     private val health: suspend (queueLen: Int) -> NodeHealthCollector.CollectedHealth,
     private val governor: ThermalGovernor,
     private val thermalProbe: () -> ThermalSignal,
+    private val visionEngine: VisionEngine?,
+    private val imageLoader: VisionImageLoader,
 ) {
     private val json = Json { encodeDefaults = true }
 
@@ -90,6 +98,11 @@ private class NodeApi(
             exception<LlmError> { call, e ->
                 NodeLogBuffer.record("ERROR", "upstream", "推理引擎错误：${e.message}")
                 val (status, body) = upstreamUnavailable("推理引擎错误：${e.message}").toOpenAIError()
+                call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
+            }
+            exception<VisionRequestException> { call, e ->
+                NodeLogBuffer.record("WARNING", "vision", e.message ?: "视觉请求失败")
+                val (status, body) = badRequest(e.message ?: "视觉请求失败").toOpenAIError()
                 call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
             }
             exception<NodeException> { call, e ->
@@ -182,6 +195,10 @@ private class NodeApi(
             if (embeddingEngine?.isLoaded == true) {
                 config.embeddingModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
             }
+            // vision 同样是独立句柄：只有 mmproj + 视觉模型都加载成功才把模型标为 loaded
+            if (visionEngine?.isLoaded == true) {
+                config.visionModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
+            }
         }
         val engineOk = true // 引擎单例已构造（libllama_jni 已 load）；真正不可用由 generate→LlmError→503
         val preloadOk = NodeStatus.preloadSatisfied(
@@ -223,9 +240,17 @@ private class NodeApi(
 
     private suspend fun buildModels(): ModelList {
         val engineLoaded = engine.isModelLoaded()
-        val loadedIds = if (engineLoaded) {
-            config.preloadModels.firstOrNull()?.let { setOf(java.io.File(it).name) } ?: emptySet()
-        } else emptySet()
+        val loadedIds = buildSet {
+            if (engineLoaded) {
+                config.preloadModels.firstOrNull()?.let { add(java.io.File(it).name) }
+            }
+            if (embeddingEngine?.isLoaded == true) {
+                config.embeddingModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
+            }
+            if (visionEngine?.isLoaded == true) {
+                config.visionModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
+            }
+        }
         val names = (config.capabilitiesMap.keys + loadedIds).toSet()
         return ModelList(data = names.map { ModelRef(id = it, ownedBy = "biyou-node") })
     }
@@ -235,9 +260,67 @@ private class NodeApi(
     private suspend fun handleChat(call: ApplicationCall) {
         val req = json.decodeFromString(ChatRequest.serializer(), call.receiveText())
         val id = "chatcmpl-sanxian-${System.currentTimeMillis()}"
-        val session = buildSession(req)
-        val prompt = lastUserContent(req)
+        val imageUrls = req.messages.flatMap { it.content.imageUrls }
 
+        if (imageUrls.isNotEmpty()) {
+            handleVisionChat(call, req, id, imageUrls)
+            return
+        }
+
+        val session = buildSession(req, mediaMarker = null)
+        val prompt = lastUserContent(req, mediaMarker = null)
+        respondChat(call, req, id) { stats -> engine.generate(session, prompt, req.maxTokens ?: 0, stats) }
+    }
+
+    /**
+     * 图像请求：能力门控 → 图像获取/缩放 → 视觉引擎生成。
+     *
+     * 错误分层（与契约一致）：
+     *  - 501 模型未声明 vision/ocr，或节点未配置视觉后端
+     *  - 503 视觉模型/权重未加载成功
+     *  - 400 图像地址非法、下载/解码失败、单图/总量超限（`vision_*` 系列）
+     */
+    private suspend fun handleVisionChat(
+        call: ApplicationCall,
+        req: ChatRequest,
+        id: String,
+        imageUrls: List<com.biyou.sanxian.contract.ImageUrl>,
+    ) {
+        val model = req.model.ifBlank { "(未指定)" }
+        val declared = config.supportsCapability(req.model, "vision") ||
+            config.supportsCapability(req.model, "ocr")
+        if (!declared) {
+            throw capabilityNotSupported("模型 $model 未声明 vision/ocr 能力")
+        }
+        val vision = visionEngine
+            ?: throw capabilityNotSupported("该节点未配置视觉后端（请设置 vision_model / vision_mmproj）")
+        if (!vision.isLoaded) throw upstreamUnavailable("视觉模型未加载")
+        if (imageUrls.size > MAX_IMAGES) {
+            throw badRequest("单次请求最多 $MAX_IMAGES 张图像，实际 ${imageUrls.size}")
+        }
+
+        val images = imageUrls.map { imageLoader.load(it.url) }
+        val totalBytes = images.sumOf { it.size.toLong() }
+        if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
+            throw badRequest("图像总量过大：${totalBytes / 1024} KB，上限 ${MAX_TOTAL_IMAGE_BYTES / 1024} KB")
+        }
+
+        val marker = vision.mediaMarker
+        val session = buildSession(req, marker)
+        val prompt = lastUserContent(req, marker)
+        NodeLogBuffer.record("INFO", "vision", "视觉请求：model=$model，图像=${images.size} 张")
+        respondChat(call, req, id) { stats ->
+            vision.generate(session, prompt, images, req.maxTokens ?: 0, stats)
+        }
+    }
+
+    /** 流式/非流式共用的响应拼装；[generate] 是唯一的引擎差异点。 */
+    private suspend fun respondChat(
+        call: ApplicationCall,
+        req: ChatRequest,
+        id: String,
+        generate: (GenerateStats?) -> kotlinx.coroutines.flow.Flow<String>,
+    ) {
         admitInference()
         if (req.stream) {
             gate.acquire(governor.effectiveLimit) // 满载立即 429（在进入流式前抢占名额）
@@ -248,7 +331,7 @@ private class NodeApi(
                         // 首帧声明 assistant 角色（契约要求，客户端据此初始化消息气泡）
                         w.write(Sse.emit(Sse.roleBlock(id, req.model)))
                         w.flush()
-                        val flow = engine.generate(session, prompt, req.maxTokens ?: 0)
+                        val flow = generate(null)
                         val job = launch {
                             flow.collect { piece ->
                                 try {
@@ -278,7 +361,7 @@ private class NodeApi(
             try {
                 val sb = StringBuilder()
                 val stats = GenerateStats()
-                engine.generate(session, prompt, req.maxTokens ?: 0, stats).collect { sb.append(it) }
+                generate(stats).collect { sb.append(it) }
                 val content = sb.toString()
                 call.respondJson(
                     HttpStatusCode.OK,
@@ -290,7 +373,7 @@ private class NodeApi(
                             choices = listOf(
                                 ChatChoice(
                                     index = 0,
-                                    message = ContractChatMessage(role = "assistant", content = content),
+                                    message = ContractChatMessage(role = "assistant", content = ChatContent.Text(content)),
                                     finishReason = "stop",
                                 )
                             ),
@@ -360,17 +443,33 @@ private class NodeApi(
         governor.admit()
     }
 
-    private fun buildSession(req: ChatRequest): ChatSession {
-        val system = req.messages.firstOrNull { it.role == "system" }?.content
+    /**
+     * 请求消息 → 引擎会话。图像分片按顺序替换为 [mediaMarker]；文本链路传 null，
+     * 此时不会出现 marker（带图请求已在上层分流到视觉路径）。
+     */
+    private fun buildSession(req: ChatRequest, mediaMarker: String?): ChatSession {
+        val system = req.messages.firstOrNull { it.role == "system" }
+            ?.content?.toPromptText(mediaMarker)
         val history = req.messages
             .filter { it.role != "system" }
             .dropLast(1)
-            .map { ChatMessage(role = roleOf(it.role), content = it.content) }
+            .map { ChatMessage(role = roleOf(it.role), content = it.content.toPromptText(mediaMarker)) }
         return ChatSession(messages = history, systemPrompt = system)
     }
 
-    private fun lastUserContent(req: ChatRequest): String =
-        req.messages.lastOrNull { it.role == "user" }?.content ?: ""
+    private fun lastUserContent(req: ChatRequest, mediaMarker: String?): String =
+        req.messages.lastOrNull { it.role == "user" }?.content?.toPromptText(mediaMarker) ?: ""
+
+    /** 文本分片原样保留；图像分片替换为占位符（每个 marker 对应 images 里的一张图）。 */
+    private fun ChatContent.toPromptText(mediaMarker: String?): String = when (this) {
+        is ChatContent.Text -> text
+        is ChatContent.Parts -> parts.joinToString("") { part ->
+            when {
+                part.imageUrl != null -> mediaMarker ?: ""
+                else -> part.text ?: ""
+            }
+        }
+    }
 
     private fun roleOf(role: String): Role = when (role.lowercase()) {
         "assistant" -> Role.Assistant
@@ -380,5 +479,13 @@ private class NodeApi(
 
     private suspend fun ApplicationCall.respondJson(status: HttpStatusCode, jsonString: String) {
         respondText(jsonString, ContentType.Application.Json, status)
+    }
+
+    private companion object {
+        /** 单次请求最多图像数：端侧编码串行，更多只会把首 token 延迟拉长。 */
+        const val MAX_IMAGES = 4
+
+        /** 单次请求图像总量上限（编码前字节）；单图上限由 [VisionImageLoader] 保证。 */
+        const val MAX_TOTAL_IMAGE_BYTES = 12L * 1024 * 1024
     }
 }

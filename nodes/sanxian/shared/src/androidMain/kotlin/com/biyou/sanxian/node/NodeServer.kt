@@ -26,6 +26,8 @@ class NodeServer(
     private val config: NodeConfig,
     private val engine: LlmEngine,
     private val embeddingEngine: EmbeddingEngine?,
+    private val visionEngine: VisionEngine? = null,
+    private val imageLoader: VisionImageLoader = AndroidVisionImageLoader(),
 ) {
     private val gate = ConcurrencyGate(config.maxConcurrency)
     private val governor = ThermalGovernor(config)
@@ -35,6 +37,8 @@ class NodeServer(
             health = { queueLen -> NodeHealthCollector.collect(context, queueLen) },
             governor = governor,
             thermalProbe = { NodeHealthCollector.readThermalSignal(context) },
+            visionEngine = visionEngine,
+            imageLoader = imageLoader,
         )
     }
 

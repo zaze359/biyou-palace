@@ -39,6 +39,7 @@ nodes/sanxian/
 | `/v1/chat/completions` SSE 流式（自产 chunk，`[DONE]` 收尾） | ✅ | `NodeServer.handleChat` 桥 `LlmEngine.generate(): Flow<String>` |
 | `/v1/embeddings` 能力驱动（无能力 501） | ✅ 路由 | `NodeServer.handleEmbeddings` |
 | embeddings **真实向量化** | ✅ | 独立 embedding 句柄 + JNI `embed` 桥（`NATIVE_INTEGRATION.md` §4）；`embedding_model` 未配置或加载失败时 503 |
+| vision / OCR（`content` 数组 + `image_url`） | ✅ | 独立视觉句柄（视觉 LLM + mmproj，llama.cpp `tools/mtmd`）；OCR 与 vision 共用权重，用提示词触发 |
 | 并发闸门 429 + Retry-After | ✅ | `ConcurrencyGate` |
 | 可选 bearer 鉴权（覆盖全端点） | ✅ | `NodeServer` 鉴权中间件 |
 | 客户端断连即 `stopGeneration` | ✅ | Flow 取消 → `AndroidLlmEngine.finally` |
@@ -72,9 +73,30 @@ curl http://127.0.0.1:4011/v1/models
 curl -N -X POST http://127.0.0.1:4011/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"<loaded>","messages":[{"role":"user","content":"你好"}],"stream":true}'
+# 视觉 / OCR：content 传数组，image_url 支持 http(s) 与 data:image/...;base64
+curl -X POST http://127.0.0.1:4011/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<vision-model>","messages":[{"role":"user","content":[
+        {"type":"text","text":"识别图中文字"},
+        {"type":"image_url","image_url":{"url":"data:image/png;base64,<b64>"}}]}],"stream":false}'
+# 错误语义：模型未声明 vision/ocr → 501；视觉权重未加载 → 503；
+#           图像非法/超限（单图 4MB、总量 12MB、最多 4 张）或文本+图像超上下文 → 400
 # 并发：发起 max_concurrency+1 个请求 → 429 + Retry-After
 # 断连：流式中途断开，日志应出现引擎停止生成
 ```
+
+视觉配置示例（`composeApp/src/androidMain/assets/sanxian.json`）：
+
+```json
+{
+  "vision_model": "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+  "vision_mmproj": "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf",
+  "vision_context_len": 4096,
+  "vision_image_max_tokens": 512
+}
+```
+
+`vision_image_max_tokens` 是动态分辨率模型的图像 token 上限。XQ-AT72 实测（同一张 1096×2560 截图、同一提示词）首 content 约：1024 → 89s、512 → 72s、256 → 37s；512 在本机截图 OCR 上未见文字损失，故作为默认值。
 
 准圣的 `mock_ollama` 冒烟脚本已验证契约行为，散仙应对标准圣**逐条对照**。
 
