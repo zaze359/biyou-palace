@@ -14,7 +14,10 @@ import com.biyou.sanxian.ui.theme.LightColorScheme
 private enum class Screen { Chat, Models, Settings }
 
 @Composable
-fun SanXianApp(darkTheme: Boolean) {
+fun SanXianApp(
+    darkTheme: Boolean,
+    banner: (@Composable () -> Unit)? = null,
+) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
         typography = com.biyou.sanxian.ui.theme.Typography,
@@ -30,6 +33,7 @@ fun SanXianApp(darkTheme: Boolean) {
                 ChatScreen(
                     state = uiState,
                     accessRefreshKey = accessRefreshKey,
+                    banner = banner,
                     onInputChange = chatViewModel::onInputChange,
                     onSend = chatViewModel::onSend,
                     onStop = chatViewModel::onStop,

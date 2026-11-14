@@ -78,6 +78,19 @@
       "depends_on": ["V3"],
       "parallel": false,
       "size": "L"
+    },
+    {
+      "id": "V5",
+      "title": "视觉编码性能优化（暂缓）",
+      "status": "paused",
+      "files": [
+        "nodes/sanxian/composeApp/src/androidMain/assets/sanxian.json",
+        "nodes/sanxian/shared/src/commonMain/kotlin/com/biyou/sanxian/llm/VisionConfig.kt"
+      ],
+      "acceptance": "已完成线程数 4/6/8、连续请求升温、Q8_0 mmproj 三组测量；结论为收益不足，暂停继续投入，数据留档",
+      "depends_on": ["V4"],
+      "parallel": false,
+      "size": "M"
     }
   ],
   "children": [],
@@ -101,6 +114,15 @@
     "firstContent": "1024 89.9-125.8s; 512 77.3-112.1s; 256 36.8-46.3s",
     "memory": "PSS 4.82G, peak RSS 5.66G, MemAvailable min 5.67G",
     "knownIssues": "首字 77-112s(512)，与发热强相关；外围 chrome 未读是提示词限制",
+    "performanceStatus": "paused",
+    "performance": {
+      "threads": "4/6/8 收益在 ±2% 内，保持 4",
+      "temperature": "温度主导耗时；33→35℃ 约 +15~21s",
+      "continuous": "连续 5 次首 content +55.8%、总耗时 +61%；未触发 thermal_shedding",
+      "q8mmproj": "Q8_0 仅省约 430-469MB 内存，不提速；默认保留 f16，设备 Q8 已删除",
+      "q4k": "无量化入口、无官方产物，不可行",
+      "softThrottle": "方案已记录但未实施"
+    },
     "followUps": "mmproj 量化 f16→Q8/Q4；更小视觉编码器；提示词/分区裁剪；长跑 OCR 节流与降载阈值复核；release 签名与 CI"
   }
 }

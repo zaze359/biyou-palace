@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     state: ChatUiState,
     accessRefreshKey: Int,
+    banner: (@Composable () -> Unit)? = null,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -86,6 +87,7 @@ fun ChatScreen(
                 refreshKey = accessRefreshKey,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
             )
+            banner?.invoke()
             NodeModelBar(
                 state = state,
                 onOpenSettings = onOpenSettings,
