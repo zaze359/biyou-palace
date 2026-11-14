@@ -29,7 +29,7 @@
   "temp_warn_c": 45.0,
   "request_timeout_ms": 300000,
   "registry_url": "",
-  "registry_heartbeat_interval_s": 30,
+  "registry_heartbeat_interval_s": 15,
   "registry_public_endpoint": "",
   "registry_timeout_ms": 3000
 }

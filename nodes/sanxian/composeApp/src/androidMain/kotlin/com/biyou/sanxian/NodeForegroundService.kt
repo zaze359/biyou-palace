@@ -177,7 +177,9 @@ class NodeForegroundService : Service() {
 
     override fun onDestroy() {
         releaseLocks()
-        registry?.stop()
+        // 服务销毁不等于用户主动下线：app idle / 进程回收 / 重启都不发 deregister，
+        // 让阵图按租约自然过期；只有显式“关闭节点”的用户操作才应传 true。
+        registry?.stop(deregister = false)
         registry = null
         server?.stop()
         server = null

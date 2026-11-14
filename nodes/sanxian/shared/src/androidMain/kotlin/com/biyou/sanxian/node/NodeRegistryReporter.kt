@@ -159,13 +159,20 @@ class NodeRegistryReporter(
         job = scope.launch { runLoop() }
     }
 
-    fun stop() {
+    /**
+     * 停止上报。
+     *
+     * [deregister] 只在**用户显式关闭节点**时传 true；系统回收进程、app idle 停服务、
+     * 服务重启等非用户意图的退出一律传 false，让阵图按租约自然过期显示 offline，
+     * 避免把“被系统杀掉”误报成“优雅下线”。
+     */
+    fun stop(deregister: Boolean = false) {
         val wasRegistered = registered
         registered = false
         job?.cancel()
         job = null
         scope.cancel()
-        if (wasRegistered && !token.isNullOrBlank() && baseUrl.isNotBlank()) {
+        if (deregister && wasRegistered && !token.isNullOrBlank() && baseUrl.isNotBlank()) {
             val body = buildJsonObject { put("boot_id", bootId) }.toString()
             Thread {
                 runCatching {
