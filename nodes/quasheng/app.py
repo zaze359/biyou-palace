@@ -47,6 +47,7 @@ from .errors import (
 )
 from .health import build_health
 from .ollama_client import OllamaClient
+from .registry import RegistryReporter
 from .upstream import (
     UpstreamRuntime,
     read_upstream_error,
@@ -1032,6 +1033,40 @@ async def lifespan(app: FastAPI):
 
     await _warmup(client, settings, app.state.loading, app.state.warmup_failed)
 
+    # 阵图注册：纯出站后台任务，首轮也不 await。阵图不可达只影响注册视图，
+    # 不改变本地 health/状态/推理路径。
+    async def _registry_snapshot() -> dict[str, Any]:
+        payload = await build_health(
+            settings,
+            client,
+            app.state.gate,
+            loading=app.state.loading,
+            warmup_failed=app.state.warmup_failed,
+        )
+        return {
+            "node": payload["node"],
+            "status": payload["status"],
+            "models": [
+                {
+                    "name": model.get("name"),
+                    "capabilities": list(model.get("capabilities") or []),
+                    "context_len": model.get("context_len"),
+                    "loaded": bool(model.get("loaded")),
+                }
+                for model in payload.get("models") or []
+            ],
+            "limits": payload.get("limits") or {},
+            "resources": payload.get("resources") or {},
+        }
+
+    reporter = RegistryReporter(
+        settings,
+        _registry_snapshot,
+        transport=getattr(app.state, "registry_transport", None),
+    )
+    app.state.registry = reporter
+    app.state.registry_task = reporter.start()
+
     # 动态发现完全后台化：首轮也在后台任务里立即执行，启动流程不 await 任何
     # 上游请求。阵图不可达只会让远程视图为空/陈旧，不影响本地能力与启动耗时。
     discovering = [runtime for runtime in app.state.upstreams if runtime.cfg.discover]
@@ -1074,6 +1109,17 @@ async def lifespan(app: FastAPI):
                 await task
             except asyncio.CancelledError:
                 pass
+        registry_task = getattr(app.state, "registry_task", None)
+        if registry_task is not None:
+            registry_task.cancel()
+            try:
+                await registry_task
+            except asyncio.CancelledError:
+                pass
+        reporter = getattr(app.state, "registry", None)
+        if reporter is not None:
+            # 停机注销最多等 1s，不拖长 shutdown_timeout
+            await reporter.stop()
         drained = await app.state.gate.wait_idle(settings.shutdown_timeout)
         if drained:
             logger.info("在途请求已清空，节点退出")
@@ -1207,7 +1253,7 @@ def create_app() -> FastAPI:
                 upstream_states.append(state)
                 if loopback or runtime.cfg.cluster_visible():
                     remote_models.extend(_remote_health_models(runtime))
-        return await build_health(
+        payload = await build_health(
             settings,
             request.app.state.client,
             request.app.state.gate,
@@ -1216,6 +1262,11 @@ def create_app() -> FastAPI:
             upstream_states=upstream_states,
             upstream_models=remote_models,
         )
+        # 可选字段：仅在启用注册表时出现，关闭时 health 与现状逐字段一致
+        reporter = getattr(request.app.state, "registry", None)
+        if settings.registry.enabled and reporter is not None:
+            payload["registry"] = reporter.health()
+        return payload
 
     @app.get("/v1/models")
     async def models(request: Request):
@@ -1342,6 +1393,10 @@ def create_app() -> FastAPI:
             dynamic[f'quasheng_upstream_up{{upstream="{runtime.cfg.id}"}}'] = (
                 1.0 if runtime.status == "ready" else 0.0
             )
+        settings: Settings = request.app.state.settings
+        reporter = getattr(request.app.state, "registry", None)
+        if settings.registry.enabled and reporter is not None:
+            dynamic["quasheng_registry_up"] = 1.0 if reporter.state == "online" else 0.0
         return PlainTextResponse(metrics.render(dynamic))
 
     @app.get("/v1/logs")

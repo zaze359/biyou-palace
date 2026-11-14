@@ -47,6 +47,7 @@ export QUASHENG_CONFIG=nodes/quasheng/config.yaml   # 不设置则只读当前�
 | `mem_warn_pct` / `cpu_warn_pct` | `degraded` 判定阈值 |
 | `shutdown_timeout` | 优雅停机等待在途请求的最长秒数，默认 10 |
 | `upstreams` | 可选的外部 OpenAI 兼容上游列表（默认空 = 行为与未接入时完全一致），见下节 |
+| `registry` | 可选的阵图注册表（默认关闭）。节点只做出站注册/心跳，不新增入站端点；阵图不可达不影响本地服务 |
 
 > ⚠️ 能力必须显式声明：模型没登记进 `capabilities_map` 就没有 embedding 能力，请求 `/v1/embeddings` 会直接 `501`；反过来，只有 embedding 能力的模型请求 `/v1/chat/completions` 也会 `501 capability_not_supported`。
 
@@ -144,7 +145,38 @@ fallback_chain:
 - **耗尽错误**：链条走完仍失败时返回最后一次失败的状态码，`error.code=fallback_exhausted`，`error.fallback_attempts` 按顺序列出试过的模型与原因，`error.fallback_candidates` 列出候选；消息中同样包含这些信息。原因均为脱敏短码（如 `http_502`、`upstream_unavailable`、`upstream_timeout`）。
 - **启动校验**：`local/<model>` 是硬校验——需存在于 `/api/tags` 且声明 chat，否则拒绝启动并指出条目。`<provider>/<model>` 只做可用性提示：不在静态清单/发现快照、或首次发现尚未完成时，记录 WARNING（标记为「未校验」），**不拦截启动**；阵图不可达只意味着该远程候选暂时不可用，节点自身照常提供服务。
 - **未配置链条**：`fallback_mode` 保持默认、`fallback_chain` 为空时，行为与接入回退前逐字段一致。
-- **后续方向**：跨节点（跨仙徒）的回退需要按能力查询候选，留待阵图提供接口；当前只在单节点内按显式链条回退。
+- **后续方向**：跨节点（跨仙徒）的回退需要按能力查询候选；阵图已提供 `GET /zhentu/v1/candidates`，节点侧 `fallback_source=registry` 留到 P2 接入。
+
+### 阵图注册与心跳（可选）
+
+节点可作为**出站客户端**向阵图旁路注册表登记存在性与能力；默认关闭，关闭时行为与未接入时逐字段一致。
+
+```yaml
+registry:
+  enabled: true
+  base_url: "http://127.0.0.1:4020"
+  token_env: "ZHENTU_REGISTRY_TOKEN"
+  heartbeat_interval_s: 15
+  public_endpoint: "http://192.168.1.20:4010"  # 监听 0.0.0.0 时建议显式填写
+  timeout_s: 3
+```
+
+```bash
+export ZHENTU_REGISTRY_TOKEN='<cluster-token>'
+bash scripts/run_zhentu.sh
+
+curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
+  http://127.0.0.1:4020/zhentu/v1/nodes
+curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
+  "http://127.0.0.1:4020/zhentu/v1/candidates?capability=chat"
+```
+
+- 注册 / 心跳 / 注销全部是**出站请求**；节点不新增任何入站端点，契约 v1.0 的四个端点语义不变。
+- 首轮注册在后台任务执行，**不 await 启动**；阵图不可达只让 `health.registry.state=offline`，节点 `status`、本地模型可用性、`/v1/chat`、`/v1/embeddings` 全部不变。
+- 心跳周期 15s；租约 `ttl = max(3 × 15, 90) = 90s`。注册表只用服务器时钟判离线，节点时钟漂移不影响。
+- `models_rev` 变化时 Registry 返回 `need_snapshot=true`；心跳遇到 `404 node_unknown` / `409 boot_mismatch` 也会立即补注册。阵图重启后，节点在一个心跳周期内恢复。
+- `health` 仅在 `registry.enabled=true` 时追加 `registry` 块（`state/registered/attempts/last_ok_at/last_error`）；关闭时输出与之前逐字段一致。
+- token 只从 `token_env` 指向的环境变量读取，不写配置、不落日志、不进入错误体。
 
 ### 可观测性（P1）
 
@@ -163,6 +195,7 @@ fallback_chain:
 | `quasheng_upstream_up{upstream}` | 上游可用状态（1=ready，0=其他） |
 | `quasheng_fallback_total{requested,served_by}` | 回退成功次数与实际来源 |
 | `quasheng_fallback_exhausted_total{requested}` | 回退链条耗尽次数 |
+| `quasheng_registry_up` | 阵图注册状态（仅 `registry.enabled=true` 时出现；1=online，0=其他） |
 
 **结构化日志落盘**（可选）：
 

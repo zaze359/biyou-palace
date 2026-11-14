@@ -1,4 +1,4 @@
-# 节点智能体统一契约（Node Agent Contract）v1.0
+# 节点智能体统一契约（Node Agent Contract）v1.1
 
 > **实现方**：准圣节点（PC · Python / Ollama）、散仙节点（安卓 App · Kotlin / llama.cpp）
 > **消费方**：碧游宫网关（渠道转发 / 探活）、阵图 ZhenTu（任务路由）、灵脉 LingMai（指标采集）、节点自身本地客户端
@@ -113,3 +113,52 @@
 - **不含模型 / 权重管理 API**：模型放置由节点本地管理（散仙由 App 管理）。
 - **不含 Prometheus 指标格式**：第四步灵脉再定义；本步 `/v1/health` 返回 JSON 快照即可，灵脉后续直接 scrape 该端点。
 - **不含集群级重试 / 降级**：属第三步阵图编排职责。
+
+> v1.1 补充：注册是**节点出站**协议，不改变上述四类入站端点；响应头 `Contract-Version` 仍为 `1.0`，节点无需新增任何 HTTP 端点。
+
+## 六、v1.1 节点注册与心跳（出站）
+
+节点启动后可向阵图旁路注册表（默认 `http://<hub>:4020`）登记存在性与能力。注册与心跳均为节点主动出站请求，使用独立集群级 Bearer token（`ZHENTU_REGISTRY_TOKEN`），与节点对外 `shared_token` 分离。
+
+### 6.1 端点
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/zhentu/v1/nodes/register` | 注册/覆盖完整快照（幂等 upsert） |
+| POST | `/zhentu/v1/nodes/{node_id}/heartbeat` | 刷新租约、状态、资源与 `loaded` |
+| POST | `/zhentu/v1/nodes/{node_id}/deregister` | 优雅停机注销 |
+| GET | `/zhentu/v1/nodes` | 列表（按在线/角色/状态/能力/模型过滤） |
+| GET | `/zhentu/v1/nodes/{node_id}` | 单节点详情 |
+| GET | `/zhentu/v1/capabilities` | 按能力聚合在线节点与模型 |
+| GET | `/zhentu/v1/candidates` | 回退候选（按状态/队列/空闲率排序） |
+| GET | `/zhentu/v1/health` | 注册表自身健康（免鉴权） |
+
+### 6.2 注册报文
+
+与 `/v1/health` 同源：`node`、`status`、`models[]`（含 `capabilities`、`context_len`、`loaded`）、`limits`、`resources`，另加 `endpoint`、`heartbeat_interval_s`、`boot_id`、`sent_at`。请求头 `X-Node-Id` / `X-Node-Role` / `Contract-Version` 如存在必须与 body 一致。
+
+响应包含 `lease.ttl_s`、`lease.expires_at`、`models_rev`、`registry_version`。`register` 是幂等覆盖；同一 `node_id` 重启后以新 `boot_id` 覆盖。
+
+### 6.3 心跳与离线
+
+- 周期：准圣 15s、散仙 30s，允许 10–120s。
+- 租约：`ttl = clamp(3 × interval, role_floor, 600)`；准圣 floor 90s，散仙 floor 180s（容忍手机 doze）。
+- 以注册表服务器时钟判定 `online/offline`；节点 `sent_at` 仅展示。
+- 心跳携带 `boot_id`、`status`、`models_rev`、`loaded_models`、`resources`、`limits`。
+- 未知节点返回 `404 node_unknown`、`boot_id` 不一致返回 `409 boot_mismatch`，节点应立即重新注册；`models_rev` 变化时返回 `200 need_snapshot=true`，节点补一次完整注册。
+- 优雅停机调用 `deregister`；失败不阻塞退出。
+
+### 6.4 能力与摘要
+
+- 能力挂在模型上，规范名 `chat` / `embedding` / `vision` / `ocr` / `rerank`；输入兼容 `embeddings` 别名并归一为 `embedding`。
+- `models_rev` 是跨语言一致的协议摘要：`name|cap1,cap2|context_len` 按 name 排序后用 `\n` 连接，再取 SHA-256；`loaded` 不参与。
+- `routable = lease.online && status ∈ {ready, degraded}`；`loaded` 与 `routable` 分开，支持按需加载模型。
+
+### 6.5 隔离原则（硬约束）
+
+阵图故障只能让节点无法对外沟通，绝不能影响节点自身的本地能力与启动：
+
+- 首次注册在后台任务中执行，启动流程不 `await` 任何注册请求；
+- 注册失败只改变 reporter 状态与日志，不改变节点 `status`、本地模型可用性、`/v1/chat`、`/v1/embeddings`、`/v1/health`；
+- 节点不新增任何入站注册端点，注册表不代理推理；
+- token 只从环境变量读取，不进入日志、health、错误体或响应头。

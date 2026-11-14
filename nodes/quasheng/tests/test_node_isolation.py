@@ -14,7 +14,13 @@ import httpx
 from fastapi.testclient import TestClient
 
 from nodes.quasheng import app as app_module
-from nodes.quasheng.config import Secret, Settings, UpstreamModel, UpstreamSettings
+from nodes.quasheng.config import (
+    RegistrySettings,
+    Secret,
+    Settings,
+    UpstreamModel,
+    UpstreamSettings,
+)
 from nodes.quasheng.ollama_client import OllamaClient
 from nodes.quasheng.upstream import UpstreamRuntime
 
@@ -158,3 +164,56 @@ def test_node_fully_usable_when_upstream_unreachable(monkeypatch):
         )
         assert embeddings.status_code == 200
         assert embeddings.json()["data"][0]["embedding"] == [0.1, 0.2]
+
+
+def test_registry_unreachable_does_not_affect_local(monkeypatch):
+    """阵图注册表不可达：启动不被 await，本地能力与 health 状态完全不变。"""
+    settings = Settings(
+        node_id="registry-isolation",
+        node_name="注册隔离",
+        preload_models=[],
+        capabilities_map={
+            "qwen2.5:0.5b": {"capabilities": ["chat", "embedding"], "context_len": 32768}
+        },
+        registry=RegistrySettings(
+            enabled=True,
+            base_url="http://registry.invalid:4020",
+            heartbeat_interval_s=15,
+        ),
+    )
+    monkeypatch.setenv("ZHENTU_REGISTRY_TOKEN", "registry-test-token")
+    monkeypatch.setattr(app_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        app_module,
+        "OllamaClient",
+        lambda base, timeout: OllamaClient(
+            base, timeout, transport=httpx.MockTransport(_local_handler)
+        ),
+    )
+
+    app = app_module.create_app()
+    app.state.registry_transport = _SlowDeadTransport()
+    started = time.monotonic()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.6, f"启动被注册表拖慢：{elapsed:.2f}s"
+
+        health = client.get("/v1/health").json()
+        assert health["status"] == "ready"
+        assert health["registry"]["enabled"] is True
+        assert health["registry"]["state"] in {"starting", "offline"}
+        assert health["models"][0]["loaded"] is True
+
+        chat = client.post(
+            "/v1/chat/completions",
+            json={"model": "qwen2.5:0.5b", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert chat.status_code == 200
+        assert chat.json()["choices"][0]["message"]["content"] == "local ok"
+
+        # 后台任务失败只改变 registry 状态，不改变节点整体状态
+        time.sleep(1.0)
+        health = client.get("/v1/health").json()
+        assert health["registry"]["state"] == "offline"
+        assert health["status"] == "ready"
+        assert client.get("/v1/models").status_code == 200

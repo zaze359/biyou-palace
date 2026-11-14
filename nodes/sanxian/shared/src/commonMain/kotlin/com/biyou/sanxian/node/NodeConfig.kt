@@ -55,6 +55,16 @@ data class NodeConfig(
     @SerialName("thermal_retry_after_s") val thermalRetryAfterS: Int = 10,
     /** 单次推理 / 嵌入的请求超时（毫秒） */
     @SerialName("request_timeout_ms") val requestTimeoutMs: Long = 300_000,
+    /** 阵图注册表地址；为空表示不注册（默认关闭，行为与未接入时一致） */
+    @SerialName("registry_url") val registryUrl: String? = null,
+    /** 注册表 Bearer token；为空则回退 shared_token */
+    @SerialName("registry_token") val registryToken: String? = null,
+    /** 注册表心跳周期（秒），registry 侧会再夹到 10..120 */
+    @SerialName("registry_heartbeat_interval_s") val registryHeartbeatIntervalS: Int = 30,
+    /** 对外通告的 endpoint；为空则按当前局域网 IPv4 + port 推导 */
+    @SerialName("registry_public_endpoint") val registryPublicEndpoint: String? = null,
+    /** 注册表 HTTP 超时（毫秒），与推理超时解耦 */
+    @SerialName("registry_timeout_ms") val registryTimeoutMs: Long = 3000,
 ) {
     fun capabilityFor(model: String): List<String> {
         val entry = capabilitiesMap[model]
@@ -185,5 +195,10 @@ fun NodeConfig.Companion.fromMap(raw: Map<String, Any?>): NodeConfig {
         thermalResumeC = dbl("thermal_resume_c") ?: 45.0,
         thermalRetryAfterS = int("thermal_retry_after_s") ?: 10,
         requestTimeoutMs = (int("request_timeout_ms") ?: 300_000).toLong(),
+        registryUrl = str("registry_url"),
+        registryToken = str("registry_token"),
+        registryHeartbeatIntervalS = int("registry_heartbeat_interval_s") ?: 30,
+        registryPublicEndpoint = str("registry_public_endpoint"),
+        registryTimeoutMs = (int("registry_timeout_ms") ?: 3000).toLong(),
     )
 }

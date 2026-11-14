@@ -1,0 +1,506 @@
+"""阵图 ZhenTu · 节点注册表 HTTP 服务。
+
+端点前缀 /zhentu/v1，与 NewAPI 的 /api、/v1 完全隔离。
+健康检查免鉴权；其余端点统一 Bearer。
+"""
+from __future__ import annotations
+
+import secrets
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, Callable
+
+from fastapi import Depends, FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from .config import REGISTRY_VERSION, ConfigError, RegistrySettings, load_settings
+from .models import (
+    CANONICAL_CAPABILITIES,
+    DeregisterRequest,
+    HeartbeatRequest,
+    NodeStatus,
+    RegisterRequest,
+    capability_union,
+    models_revision,
+    normalize_capability,
+    ttl_for,
+)
+from .store import RegistryStore
+
+_MAX_LIMIT = 500
+_NODE_STATUSES = {"ready", "loading", "degraded", "down"}
+_ROLES = {"quasheng", "sanxian"}
+
+
+class RegistryError(Exception):
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        *,
+        type_: str = "invalid_request_error",
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.type = type_
+
+
+def _error_response(
+    status: int,
+    code: str,
+    message: str,
+    *,
+    type_: str = "invalid_request_error",
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status,
+        content={
+            "error": {"message": message, "type": type_, "param": None, "code": code}
+        },
+        headers={"X-Registry-Version": REGISTRY_VERSION},
+    )
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000).astimezone().isoformat()
+
+
+def _lease(row: dict[str, Any], now_ms: int) -> dict[str, Any]:
+    last_seen = int(row["last_seen_ms"])
+    ttl_s = int(row["ttl_s"])
+    if row.get("deregistered_at_ms"):
+        state = "deregistered"
+    elif now_ms - last_seen <= ttl_s * 1000:
+        state = "online"
+    else:
+        state = "offline"
+    return {
+        "state": state,
+        "last_seen_at": _iso(last_seen),
+        "age_s": max(0, (now_ms - last_seen) // 1000),
+        "ttl_s": ttl_s,
+        "expires_at": _iso(last_seen + ttl_s * 1000),
+    }
+
+
+def _node_view(row: dict[str, Any], now_ms: int) -> dict[str, Any]:
+    lease = _lease(row, now_ms)
+    loaded = set(row.get("loaded_json") or [])
+    models = [{**model, "loaded": model["name"] in loaded} for model in row["models_json"]]
+    payload = row.get("payload_json") or {}
+    node = payload.get("node") or {
+        "id": row["node_id"],
+        "name": row["name"],
+        "role": row["role"],
+        "contract_version": row["contract_version"],
+    }
+    return {
+        "node": node,
+        "endpoint": row["endpoint"],
+        "status": row["status"],
+        "lease": lease,
+        "models": models,
+        "capabilities": row["capabilities_json"],
+        "limits": row["limits_json"],
+        "resources": row["resources_json"],
+        "boot_id": row["boot_id"],
+        "revision": row["revision"],
+        "routable": lease["state"] == "online" and row["status"] in ("ready", "degraded"),
+    }
+
+
+def _matches(
+    view: dict[str, Any],
+    *,
+    role: str | None,
+    status: str | None,
+    capability: str | None,
+    model: str | None,
+) -> bool:
+    if role and view["node"].get("role") != role:
+        return False
+    if status and view["status"] != status:
+        return False
+    if capability and capability not in view["capabilities"]:
+        return False
+    if model and model not in [entry["name"] for entry in view["models"]]:
+        return False
+    return True
+
+
+def _view_sort_key(view: dict[str, Any]) -> tuple:
+    rank = 0 if view["status"] == "ready" else 1 if view["status"] == "degraded" else 2
+    queue_len = int((view["resources"] or {}).get("queue_len") or 0)
+    return (
+        0 if view["lease"]["state"] == "online" else 1,
+        rank,
+        queue_len,
+        view["node"].get("id") or "",
+    )
+
+
+def create_app(
+    settings: RegistrySettings | None = None,
+    clock: Callable[[], int] | None = None,
+) -> FastAPI:
+    cfg = settings or load_settings()
+    cfg.validate()
+    store = RegistryStore(cfg.db_path)
+    now = clock or (lambda: int(time.time() * 1000))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.started_ms = now()
+        try:
+            yield
+        finally:
+            store.close()
+
+    app = FastAPI(
+        title="BiYouPalace 阵图 · 节点注册表",
+        version=REGISTRY_VERSION,
+        lifespan=lifespan,
+    )
+    app.state.settings = cfg
+    app.state.store = store
+    app.state.clock = now
+
+    async def require_auth(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> None:
+        token = request.app.state.settings.token
+        if not token:
+            return
+        scheme, _, value = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not secrets.compare_digest(value, token.get()):
+            raise RegistryError(401, "unauthorized", "缺少或无效的 bearer token")
+
+    @app.middleware("http")
+    async def registry_headers(request: Request, call_next):
+        length = request.headers.get("content-length")
+        if length:
+            try:
+                too_large = int(length) > request.app.state.settings.max_body_bytes
+            except ValueError:
+                too_large = True
+            if too_large:
+                return _error_response(413, "payload_too_large", "请求体超过大小限制")
+        response = await call_next(request)
+        response.headers["X-Registry-Version"] = REGISTRY_VERSION
+        return response
+
+    @app.exception_handler(RegistryError)
+    async def handle_registry_error(request: Request, exc: RegistryError):
+        return _error_response(exc.status, exc.code, exc.message, type_=exc.type)
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(request: Request, exc: RequestValidationError):
+        first = (exc.errors() or [{}])[0]
+        message = str(first.get("msg") or "请求体格式错误")
+        return _error_response(422, "invalid_payload", message)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_error(request: Request, exc: StarletteHTTPException):
+        code = {404: "not_found", 405: "method_not_allowed"}.get(exc.status_code, "http_error")
+        type_ = "invalid_request_error" if exc.status_code < 500 else "server_error"
+        return _error_response(exc.status_code, code, str(exc.detail), type_=type_)
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected(request: Request, exc: Exception):
+        return _error_response(500, "internal_error", "注册表内部错误", type_="server_error")
+
+    # ---------------------------------------------------------------- 健康
+
+    @app.get("/zhentu/v1/health")
+    async def health(request: Request):
+        db_ok = request.app.state.store.ping()
+        total, online = request.app.state.store.counts(request.app.state.clock())
+        return {
+            "status": "ready" if db_ok else "degraded",
+            "registry_version": REGISTRY_VERSION,
+            "server_time": _iso(request.app.state.clock()),
+            "db": "ok" if db_ok else "error",
+            "nodes_total": total,
+            "nodes_online": online,
+            "uptime_s": max(0, (request.app.state.clock() - app.state.started_ms) // 1000),
+        }
+
+    # ---------------------------------------------------------------- 注册
+
+    @app.post(
+        "/zhentu/v1/nodes/register",
+        dependencies=[Depends(require_auth)],
+    )
+    async def register(
+        request: Request,
+        body: RegisterRequest,
+        x_node_id: str | None = Header(default=None, alias="X-Node-Id"),
+        x_node_role: str | None = Header(default=None, alias="X-Node-Role"),
+        contract_version: str | None = Header(default=None, alias="Contract-Version"),
+    ):
+        if x_node_id and x_node_id != body.node.id:
+            raise RegistryError(400, "node_id_mismatch", "X-Node-Id 与 body.node.id 不一致")
+        if x_node_role and x_node_role != body.node.role:
+            raise RegistryError(400, "node_role_mismatch", "X-Node-Role 与 body.node.role 不一致")
+        if contract_version and contract_version != body.node.contract_version:
+            raise RegistryError(
+                400, "contract_version_mismatch", "Contract-Version 与 body.node.contract_version 不一致"
+            )
+
+        models = [model.model_dump() for model in body.models]
+        capabilities = capability_union(body.models)
+        revision = models_revision(body.models)
+        ttl_s = ttl_for(body.node.role, body.heartbeat_interval_s, cfg.ttl_max_s)
+        now_ms = request.app.state.clock()
+        row = store.register(
+            node=body.node.model_dump(),
+            endpoint=body.endpoint,
+            status=body.status,
+            models=models,
+            limits=body.limits,
+            resources=body.resources,
+            heartbeat_interval_s=body.heartbeat_interval_s,
+            ttl_s=ttl_s,
+            boot_id=body.boot_id,
+            models_rev=revision,
+            capabilities=capabilities,
+            sent_at=body.sent_at,
+            now_ms=now_ms,
+        )
+        return {
+            "ok": True,
+            "node_id": row["node_id"],
+            "revision": row["revision"],
+            "models_rev": row["models_rev"],
+            "lease": {
+                "ttl_s": row["ttl_s"],
+                "expires_at": _iso(row["last_seen_ms"] + row["ttl_s"] * 1000),
+            },
+            "server_time": _iso(now_ms),
+            "registry_version": REGISTRY_VERSION,
+        }
+
+    @app.post(
+        "/zhentu/v1/nodes/{node_id}/heartbeat",
+        dependencies=[Depends(require_auth)],
+    )
+    async def heartbeat(node_id: str, request: Request, body: HeartbeatRequest):
+        now_ms = request.app.state.clock()
+        result, row, need_snapshot = store.heartbeat(
+            node_id=node_id,
+            boot_id=body.boot_id,
+            status=body.status,
+            models_rev=body.models_rev,
+            loaded_models=body.loaded_models,
+            resources=body.resources,
+            limits=body.limits,
+            now_ms=now_ms,
+        )
+        if result == "unknown":
+            raise RegistryError(404, "node_unknown", f"节点 {node_id} 未注册")
+        if result == "boot_mismatch":
+            raise RegistryError(409, "boot_mismatch", "boot_id 与当前注册不一致，请重新注册")
+        assert row is not None
+        return {
+            "ok": True,
+            "node_id": node_id,
+            "need_snapshot": need_snapshot,
+            "lease": {
+                "ttl_s": row["ttl_s"],
+                "expires_at": _iso(row["last_seen_ms"] + row["ttl_s"] * 1000),
+            },
+            "server_time": _iso(now_ms),
+            "registry_version": REGISTRY_VERSION,
+        }
+
+    @app.post(
+        "/zhentu/v1/nodes/{node_id}/deregister",
+        dependencies=[Depends(require_auth)],
+    )
+    async def deregister(node_id: str, request: Request, body: DeregisterRequest):
+        now_ms = request.app.state.clock()
+        if not store.deregister(node_id, body.boot_id, now_ms):
+            raise RegistryError(404, "node_unknown", f"节点 {node_id} 未注册或 boot_id 不一致")
+        return {
+            "ok": True,
+            "node_id": node_id,
+            "state": "deregistered",
+            "server_time": _iso(now_ms),
+            "registry_version": REGISTRY_VERSION,
+        }
+
+    # ---------------------------------------------------------------- 查询
+
+    @app.get("/zhentu/v1/nodes", dependencies=[Depends(require_auth)])
+    async def list_nodes(
+        request: Request,
+        include_offline: bool = False,
+        role: str | None = None,
+        status: str | None = None,
+        capability: str | None = None,
+        model: str | None = None,
+        limit: int = 100,
+    ):
+        if role and role not in _ROLES:
+            raise RegistryError(400, "invalid_role", f"role 只能是 {sorted(_ROLES)}")
+        if status and status not in _NODE_STATUSES:
+            raise RegistryError(400, "invalid_status", f"status 只能是 {sorted(_NODE_STATUSES)}")
+        if capability:
+            try:
+                capability = normalize_capability(capability)
+            except ValueError as exc:
+                raise RegistryError(400, "invalid_capability", str(exc)) from None
+        now_ms = request.app.state.clock()
+        views = []
+        for row in store.list_all():
+            view = _node_view(row, now_ms)
+            if not include_offline and view["lease"]["state"] != "online":
+                continue
+            if _matches(
+                view, role=role, status=status, capability=capability, model=model
+            ):
+                views.append(view)
+        views.sort(key=_view_sort_key)
+        capped = max(1, min(limit, _MAX_LIMIT))
+        return {
+            "registry_version": REGISTRY_VERSION,
+            "server_time": _iso(now_ms),
+            "total": len(views),
+            "nodes": views[:capped],
+        }
+
+    @app.get("/zhentu/v1/nodes/{node_id}", dependencies=[Depends(require_auth)])
+    async def get_node(node_id: str, request: Request):
+        row = store.get(node_id)
+        if row is None:
+            raise RegistryError(404, "node_unknown", f"节点 {node_id} 未注册")
+        return {
+            "registry_version": REGISTRY_VERSION,
+            "server_time": _iso(request.app.state.clock()),
+            "node": _node_view(row, request.app.state.clock()),
+        }
+
+    @app.get("/zhentu/v1/capabilities", dependencies=[Depends(require_auth)])
+    async def capabilities(request: Request, include_offline: bool = False):
+        now_ms = request.app.state.clock()
+        result: dict[str, list[dict[str, Any]]] = {cap: [] for cap in CANONICAL_CAPABILITIES}
+        for row in store.list_all():
+            view = _node_view(row, now_ms)
+            if not include_offline and view["lease"]["state"] != "online":
+                continue
+            resources = view["resources"] or {}
+            limits = view["limits"] or {}
+            for entry in view["models"]:
+                for cap in entry["capabilities"]:
+                    result.setdefault(cap, []).append(
+                        {
+                            "node_id": view["node"].get("id"),
+                            "node_name": view["node"].get("name"),
+                            "role": view["node"].get("role"),
+                            "model": entry["name"],
+                            "loaded": entry["loaded"],
+                            "status": view["status"],
+                            "queue_len": int(resources.get("queue_len") or 0),
+                            "max_concurrency": limits.get("max_concurrency"),
+                            "routable": view["routable"],
+                        }
+                    )
+        for entries in result.values():
+            entries.sort(key=lambda item: (item["node_id"] or "", item["model"]))
+        return {
+            "registry_version": REGISTRY_VERSION,
+            "server_time": _iso(now_ms),
+            "capabilities": result,
+        }
+
+    @app.get("/zhentu/v1/candidates", dependencies=[Depends(require_auth)])
+    async def candidates(
+        request: Request,
+        capability: str = "chat",
+        model: str | None = None,
+        exclude: str | None = None,
+        limit: int = 5,
+        include_loading: bool = False,
+        include_degraded: bool = True,
+    ):
+        try:
+            capability = normalize_capability(capability)
+        except ValueError as exc:
+            raise RegistryError(400, "invalid_capability", str(exc)) from None
+        excluded = {item.strip() for item in (exclude or "").split(",") if item.strip()}
+        now_ms = request.app.state.clock()
+        scored: list[tuple[tuple, dict[str, Any]]] = []
+        for row in store.list_all():
+            view = _node_view(row, now_ms)
+            if view["lease"]["state"] != "online" or not view["routable"]:
+                continue
+            if view["status"] == "loading" and not include_loading:
+                continue
+            if view["status"] == "degraded" and not include_degraded:
+                continue
+            node_id = view["node"].get("id")
+            if node_id in excluded:
+                continue
+            resources = view["resources"] or {}
+            limits = view["limits"] or {}
+            queue_len = int(resources.get("queue_len") or 0)
+            max_concurrency = int(limits.get("max_concurrency") or 0)
+            active = int(resources.get("active") or 0)
+            ratio = (active / max_concurrency) if max_concurrency > 0 else 0.0
+            for entry in view["models"]:
+                if capability not in entry["capabilities"]:
+                    continue
+                if model and entry["name"] != model:
+                    continue
+                rank = 0 if view["status"] == "ready" else 1
+                score = (rank, queue_len, ratio, -int(row["last_seen_ms"]), node_id or "", entry["name"])
+                scored.append(
+                    (
+                        score,
+                        {
+                            "node_id": node_id,
+                            "node_name": view["node"].get("name"),
+                            "role": view["node"].get("role"),
+                            "endpoint": view["endpoint"],
+                            "model": entry["name"],
+                            "loaded": entry["loaded"],
+                            "status": view["status"],
+                            "queue_len": queue_len,
+                            "max_concurrency": max_concurrency,
+                            "active": active,
+                        },
+                    )
+                )
+        scored.sort(key=lambda item: item[0])
+        capped = max(1, min(limit, 50))
+        return {
+            "registry_version": REGISTRY_VERSION,
+            "server_time": _iso(now_ms),
+            "capability": capability,
+            "candidates": [item for _, item in scored[:capped]],
+        }
+
+    return app
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import uvicorn
+
+    try:
+        settings = load_settings()
+        settings.validate()
+    except ConfigError as exc:
+        print(f"[ERR] 配置错误，拒绝启动：{exc}")
+        raise SystemExit(1)
+    uvicorn.run(
+        create_app(settings),
+        host=settings.host,
+        port=settings.port,
+    )

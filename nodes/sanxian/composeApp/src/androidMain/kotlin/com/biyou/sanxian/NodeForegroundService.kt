@@ -18,6 +18,7 @@ import com.biyou.sanxian.node.EmbeddingEngine
 import com.biyou.sanxian.node.NodeConfig
 import com.biyou.sanxian.node.NodeConfigStore
 import com.biyou.sanxian.node.NodeLogBuffer
+import com.biyou.sanxian.node.NodeRegistryReporter
 import com.biyou.sanxian.node.NodeServer
 import com.biyou.sanxian.node.loadNodeConfig
 import com.biyou.sanxian.llm.AndroidVisionEngine
@@ -39,6 +40,9 @@ import java.io.File
 class NodeForegroundService : Service() {
 
     private var server: NodeServer? = null
+
+    /** 阵图注册 reporter：与本地服务同生命周期，失败不影响节点。 */
+    private var registry: NodeRegistryReporter? = null
 
     /** 视觉引擎独立句柄，随服务销毁显式释放（约 3GB 权重不能泄漏）。 */
     private var visionEngine: AndroidVisionEngine? = null
@@ -111,7 +115,10 @@ class NodeForegroundService : Service() {
         val vision = loadVisionEngine(config)
         visionEngine = vision
         server = NodeServer(this, config, engine, embedding, vision)
-        server?.start()
+        val startedServer = server
+        startedServer?.start()
+        // 注册表是纯出站旁路：后台协程失败只影响注册视图，不影响本地服务。
+        registry = NodeRegistryReporter(config) { startedServer?.healthSnapshot() }.also { it.start() }
     }
 
     /**
@@ -170,6 +177,8 @@ class NodeForegroundService : Service() {
 
     override fun onDestroy() {
         releaseLocks()
+        registry?.stop()
+        registry = null
         server?.stop()
         server = null
         visionEngine?.close()

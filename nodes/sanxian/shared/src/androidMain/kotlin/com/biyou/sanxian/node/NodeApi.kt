@@ -66,12 +66,14 @@ internal fun Application.installNodeApi(
     thermalProbe: () -> ThermalSignal = { ThermalSignal() },
     visionEngine: VisionEngine? = null,
     imageLoader: VisionImageLoader = UnsupportedVisionImageLoader,
+    /** 把与 /v1/health 同源的快照提供给阵图注册 reporter；不新增任何入站端点。 */
+    onHealth: ((suspend () -> HealthResponse) -> Unit)? = null,
 ) {
     // 日志脱敏需要一个稳定的 token 值：节点安装路由时登记，避免启动早于 /v1/logs 的事件漏脱敏。
     NodeLogBuffer.configure(config.sharedToken)
     NodeApi(
         config, engine, embeddingEngine, gate, health, governor, thermalProbe,
-        visionEngine, imageLoader,
+        visionEngine, imageLoader, onHealth,
     ).configure(this)
 }
 
@@ -86,10 +88,13 @@ private class NodeApi(
     private val thermalProbe: () -> ThermalSignal,
     private val visionEngine: VisionEngine?,
     private val imageLoader: VisionImageLoader,
+    private val onHealth: ((suspend () -> HealthResponse) -> Unit)?,
 ) {
     private val json = Json { encodeDefaults = true }
 
     fun configure(application: Application) {
+        // 只暴露快照读取函数，不改变任何端点语义
+        onHealth?.invoke { buildHealth() }
         application.install(StatusPages) {
             exception<kotlinx.serialization.SerializationException> { call, e ->
                 val (status, body) = badRequest("请求体格式错误：${e.message}").toOpenAIError()

@@ -100,6 +100,27 @@ curl -X POST http://127.0.0.1:4011/v1/chat/completions \
 
 准圣的 `mock_ollama` 冒烟脚本已验证契约行为，散仙应对标准圣**逐条对照**。
 
+## 阵图注册与心跳（可选）
+
+散仙可作为出站客户端向阵图旁路注册表登记存在性与能力；默认关闭（`registry_url` 为空）。节点不新增任何入站端点。
+
+```json
+{
+  "registry_url": "http://192.168.1.10:4020",
+  "registry_heartbeat_interval_s": 30,
+  "registry_public_endpoint": "http://192.168.1.31:4011",
+  "registry_timeout_ms": 3000
+}
+```
+
+- token 优先 `registry_token`，未配置则回退 `shared_token`；只在内存，不落日志。
+- `registry_public_endpoint` 为空时按当前局域网 IPv4 + `port` 推导。
+- 随 `NodeForegroundService` 启停：`server.start()` 后拉起，`onDestroy` 中先停 reporter 再停 server。
+- 上报 `battery_pct / temperature_c / thermal_state`；能力来自 `capabilities_map`，`loaded` 来自当前引擎状态。
+- 失败只写 `NodeLogBuffer`（`registry` 事件）与 logcat，不影响前台服务、本地聊天、`/v1/health` 与节点状态。
+- 心跳 30s；Registry 侧租约 floor 180s，容忍 Android doze/WiFi 休眠。
+- 阵图重启后，节点在一个心跳周期内恢复注册；`404/409` 会立即补注册。
+
 ## 发热降载（thermal shedding）
 
 触发信号（任一满足即降载）：

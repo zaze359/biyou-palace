@@ -31,6 +31,9 @@ DEFAULT_DISCOVER_INTERVAL_S = 300.0
 # fallback_chain 中本地模型的保留前缀
 LOCAL_PROVIDER = "local"
 FALLBACK_MODES = ("manual", "auto")
+# 阵图注册表：心跳周期范围（秒）
+REGISTRY_MIN_INTERVAL_S = 10
+REGISTRY_MAX_INTERVAL_S = 120
 
 
 def _normalize_caps(raw: dict | None) -> dict[str, dict]:
@@ -341,6 +344,62 @@ def _parse_fallback_chain(raw: Any, upstreams: list[UpstreamSettings]) -> list[s
     return chain
 
 
+def _validate_registry_url(raw: Any, *, field_name: str) -> str:
+    """注册表地址：http(s)、允许反代前缀，不允许凭据/查询串。"""
+    value = str(raw or "").strip()
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ConfigError(f"{field_name} 必须是 http(s)://host[:port] 形式")
+    if parsed.username or parsed.password:
+        raise ConfigError(f"{field_name} 不允许包含用户名/密码")
+    if parsed.query or parsed.fragment:
+        raise ConfigError(f"{field_name} 不允许带查询串或片段")
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+def _parse_registry(raw: Any) -> "RegistrySettings":
+    if raw is None:
+        return RegistrySettings()
+    if not isinstance(raw, dict):
+        raise ConfigError("registry 必须是映射")
+    enabled = bool(raw.get("enabled", False))
+    base_url = _validate_registry_url(
+        raw.get("base_url", "http://127.0.0.1:4020"), field_name="registry.base_url"
+    )
+    token_env = str(raw.get("token_env") or "ZHENTU_REGISTRY_TOKEN").strip()
+    if not token_env:
+        raise ConfigError("registry.token_env 不能为空")
+    try:
+        interval = int(raw.get("heartbeat_interval_s", 15))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("registry.heartbeat_interval_s 必须是整数") from exc
+    if not REGISTRY_MIN_INTERVAL_S <= interval <= REGISTRY_MAX_INTERVAL_S:
+        raise ConfigError(
+            f"registry.heartbeat_interval_s={interval} 超出 "
+            f"{REGISTRY_MIN_INTERVAL_S}..{REGISTRY_MAX_INTERVAL_S} 秒"
+        )
+    try:
+        timeout = float(raw.get("timeout_s", 3.0))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("registry.timeout_s 必须是数字") from exc
+    if timeout <= 0:
+        raise ConfigError("registry.timeout_s 必须大于 0")
+    public_endpoint = str(raw.get("public_endpoint") or "").strip()
+    if public_endpoint:
+        public_endpoint = _validate_registry_url(
+            public_endpoint, field_name="registry.public_endpoint"
+        )
+    return RegistrySettings(
+        enabled=enabled,
+        base_url=base_url,
+        token_env=token_env,
+        heartbeat_interval_s=interval,
+        public_endpoint=public_endpoint,
+        timeout_s=timeout,
+    )
+
+
 def check_local_model_conflicts(settings: Settings, local_model_ids: list[str]) -> None:
     """启动期校验：本地模型首段不得与任何已启用上游 id 相同。
 
@@ -371,6 +430,18 @@ def validate_settings(settings: Settings) -> None:
 
 
 @dataclass
+class RegistrySettings:
+    """阵图注册表（旁路服务）接入配置；默认关闭 = 行为与未接入时完全一致。"""
+
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:4020"
+    token_env: str = "ZHENTU_REGISTRY_TOKEN"
+    heartbeat_interval_s: int = 15
+    public_endpoint: str = ""
+    timeout_s: float = 3.0
+
+
+@dataclass
 class Settings:
     host: str = "127.0.0.1"
     ollama_base: str = "http://127.0.0.1:11434"
@@ -393,6 +464,8 @@ class Settings:
     # 回退策略：manual 只提示候选；auto 按 fallback_chain 顺序尝试
     fallback_mode: str = "manual"
     fallback_chain: list[str] = field(default_factory=list)
+    # 阵图注册表（可选）：只做出站注册/心跳，不新增入站端点
+    registry: RegistrySettings = field(default_factory=RegistrySettings)
     # 结构化事件落盘（可选）：为空时只保留内存环形缓冲
     log_file: str = ""
     log_max_bytes: int = 10 * 1024 * 1024
@@ -433,13 +506,14 @@ def load_settings(path: str | Path | None = None) -> Settings:
         **{
             k: v
             for k, v in raw.items()
-            if k in known and k not in ("upstreams", "fallback_mode", "fallback_chain")
+            if k in known and k not in ("upstreams", "fallback_mode", "fallback_chain", "registry")
         }
     )
     settings.capabilities_map = _normalize_caps(raw.get("capabilities_map"))
     settings.upstreams = _parse_upstreams(raw.get("upstreams"))
     settings.fallback_mode = _parse_fallback_mode(raw.get("fallback_mode"))
     settings.fallback_chain = _parse_fallback_chain(raw.get("fallback_chain"), settings.upstreams)
+    settings.registry = _parse_registry(raw.get("registry"))
     settings.log_file = str(raw.get("log_file") or "").strip()
     try:
         settings.log_max_bytes = int(raw.get("log_max_bytes") or settings.log_max_bytes)

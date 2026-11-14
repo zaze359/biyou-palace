@@ -1,6 +1,7 @@
 package com.biyou.sanxian.node
 
 import android.content.Context
+import com.biyou.sanxian.contract.HealthResponse
 import com.biyou.sanxian.llm.LlmEngine
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
@@ -31,6 +32,12 @@ class NodeServer(
 ) {
     private val gate = ConcurrencyGate(config.maxConcurrency)
     private val governor = ThermalGovernor(config)
+
+    /** 与 /v1/health 同源的快照；由 installNodeApi 在路由安装时注入，供注册 reporter 读取。 */
+    @Volatile
+    var healthProvider: (suspend () -> HealthResponse)? = null
+        private set
+
     private val server = embeddedServer(CIO, port = config.port, host = "0.0.0.0") {
         installNodeApi(
             config, engine, embeddingEngine, gate,
@@ -39,9 +46,12 @@ class NodeServer(
             thermalProbe = { NodeHealthCollector.readThermalSignal(context) },
             visionEngine = visionEngine,
             imageLoader = imageLoader,
+            onHealth = { healthProvider = it },
         )
     }
 
     fun start(wait: Boolean = false) = server.start(wait)
     fun stop(gracePeriod: Long = 1000, timeout: Long = 2000) = server.stop(gracePeriod, timeout)
+
+    suspend fun healthSnapshot(): HealthResponse? = healthProvider?.invoke()
 }

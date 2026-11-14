@@ -84,3 +84,18 @@ shutdown_timeout: 10
 # log_file: "/var/log/quasheng/events.jsonl"
 # log_max_bytes: 10485760       # 单文件上限，默认 10 MiB
 # log_backup_count: 3           # 轮转保留份数，0 表示不保留
+
+# ---------------------------------------------------------------------------
+# 阵图注册与心跳（可选；默认关闭 = 行为与未接入时完全一致）
+#
+# 节点只做出站注册/心跳，不新增任何入站端点；阵图不可达只影响注册视图，
+# 不影响启动耗时、本地 chat/embeddings/health 与节点状态。
+# token 只从 token_env 指向的环境变量读取，不写进本文件。
+# ---------------------------------------------------------------------------
+# registry:
+#   enabled: false
+#   base_url: "http://127.0.0.1:4020"   # 阵图 Registry 旁路服务
+#   token_env: "ZHENTU_REGISTRY_TOKEN"  # 集群级 Bearer token 的变量名
+#   heartbeat_interval_s: 15            # 10..120；registry 侧按 3x 计算租约
+#   public_endpoint: ""                 # 空则按 host:port 推导；监听 0.0.0.0 时建议显式填写
+#   timeout_s: 3
