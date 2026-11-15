@@ -69,5 +69,8 @@ logs/
 *.tmp
 *.swp
 
+# ---- 运行时数据（SQLite 等，不入库）----
+zhentu/data/
+
 # ---- WorkBuddy 本地数据（个人/会话级，不入库）----
 .workbuddy/

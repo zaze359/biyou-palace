@@ -268,6 +268,7 @@ def test_fallback_chain_is_parsed(tmp_path, monkeypatch):
 
     settings = load_settings()
     assert settings.fallback_mode == "auto"
+    assert settings.fallback_source == "static"
     assert settings.fallback_chain == ["relay-a/gpt-4o-mini", "local/qwen2.5:0.5b"]
 
 
@@ -278,6 +279,36 @@ def test_fallback_invalid_mode_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(ConfigError) as excinfo:
         load_settings()
     assert "fallback_mode" in str(excinfo.value)
+
+
+def test_fallback_invalid_source_is_rejected(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, "fallback_source: gateway\n")
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "fallback_source" in str(excinfo.value)
+
+
+def test_fallback_source_registry_requires_enabled_registry(tmp_path, monkeypatch):
+    path = _write_config(tmp_path, "fallback_source: registry\n")
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "registry.enabled" in str(excinfo.value)
+
+
+def test_fallback_source_registry_is_parsed(tmp_path, monkeypatch):
+    path = _write_config(
+        tmp_path,
+        "fallback_source: registry\nregistry:\n  enabled: true\n",
+    )
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+
+    settings = load_settings()
+    assert settings.fallback_source == "registry"
+    assert settings.registry.enabled is True
 
 
 def test_fallback_static_remote_model_is_deferred_to_startup(tmp_path, monkeypatch):

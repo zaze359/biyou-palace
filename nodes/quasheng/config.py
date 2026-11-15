@@ -31,6 +31,10 @@ DEFAULT_DISCOVER_INTERVAL_S = 300.0
 # fallback_chain 中本地模型的保留前缀
 LOCAL_PROVIDER = "local"
 FALLBACK_MODES = ("manual", "auto")
+# 回退候选来源：static = 只用 fallback_chain；registry = 查阵图后映射回该网关上游
+FALLBACK_SOURCES = ("static", "registry")
+# 阵图候选统一经 NewAPI 网关执行，不做节点间直连
+REGISTRY_GATEWAY_PROVIDER = "newapi"
 # 阵图注册表：心跳周期范围（秒）
 REGISTRY_MIN_INTERVAL_S = 10
 REGISTRY_MAX_INTERVAL_S = 120
@@ -305,6 +309,15 @@ def _parse_fallback_mode(raw: Any) -> str:
     return mode
 
 
+def _parse_fallback_source(raw: Any) -> str:
+    source = str(raw or "static").strip().lower()
+    if source not in FALLBACK_SOURCES:
+        raise ConfigError(
+            f"fallback_source={raw!r} 无效，只能是 {' / '.join(FALLBACK_SOURCES)}"
+        )
+    return source
+
+
 def _parse_fallback_chain(raw: Any, upstreams: list[UpstreamSettings]) -> list[str]:
     """校验 fallback_chain 的**结构**：<provider>/<model> 或 local/<model>。
 
@@ -463,6 +476,8 @@ class Settings:
     upstreams: list[UpstreamSettings] = field(default_factory=list)
     # 回退策略：manual 只提示候选；auto 按 fallback_chain 顺序尝试
     fallback_mode: str = "manual"
+    # 候选来源：static 只用 fallback_chain；registry 查阵图并映射回 NewAPI 上游
+    fallback_source: str = "static"
     fallback_chain: list[str] = field(default_factory=list)
     # 阵图注册表（可选）：只做出站注册/心跳，不新增入站端点
     registry: RegistrySettings = field(default_factory=RegistrySettings)
@@ -506,14 +521,27 @@ def load_settings(path: str | Path | None = None) -> Settings:
         **{
             k: v
             for k, v in raw.items()
-            if k in known and k not in ("upstreams", "fallback_mode", "fallback_chain", "registry")
+            if k in known
+            and k
+            not in (
+                "upstreams",
+                "fallback_mode",
+                "fallback_source",
+                "fallback_chain",
+                "registry",
+            )
         }
     )
     settings.capabilities_map = _normalize_caps(raw.get("capabilities_map"))
     settings.upstreams = _parse_upstreams(raw.get("upstreams"))
     settings.fallback_mode = _parse_fallback_mode(raw.get("fallback_mode"))
+    settings.fallback_source = _parse_fallback_source(raw.get("fallback_source"))
     settings.fallback_chain = _parse_fallback_chain(raw.get("fallback_chain"), settings.upstreams)
     settings.registry = _parse_registry(raw.get("registry"))
+    if settings.fallback_source == "registry" and not settings.registry.enabled:
+        raise ConfigError(
+            "fallback_source=registry 要求 registry.enabled=true：候选查询依赖阵图接入"
+        )
     settings.log_file = str(raw.get("log_file") or "").strip()
     try:
         settings.log_max_bytes = int(raw.get("log_max_bytes") or settings.log_max_bytes)

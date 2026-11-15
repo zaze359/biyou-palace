@@ -15,7 +15,14 @@ from fastapi.testclient import TestClient
 from nodes.quasheng import logbuffer
 from nodes.quasheng.app import _validate_fallback_targets, create_app
 from nodes.quasheng.concurrency import ConcurrencyGate
-from nodes.quasheng.config import ConfigError, Secret, Settings, UpstreamModel, UpstreamSettings
+from nodes.quasheng.config import (
+    ConfigError,
+    RegistrySettings,
+    Secret,
+    Settings,
+    UpstreamModel,
+    UpstreamSettings,
+)
 from nodes.quasheng.ollama_client import OllamaClient
 from nodes.quasheng.upstream import UpstreamRuntime
 
@@ -71,6 +78,9 @@ def _make_app(
     mode: str = "auto",
     chain: list[str] | None = None,
     upstream_cfg: UpstreamSettings | None = None,
+    source: str = "static",
+    registry: RegistrySettings | None = None,
+    registry_transport: httpx.AsyncBaseTransport | None = None,
 ) -> TestClient:
     cfg = upstream_cfg or _upstream_cfg()
     settings = Settings(
@@ -79,7 +89,9 @@ def _make_app(
         max_concurrency=2,
         upstreams=[cfg],
         fallback_mode=mode,
+        fallback_source=source,
         fallback_chain=list(chain or []),
+        registry=registry or RegistrySettings(),
     )
     app = create_app()
     app.state.settings = settings
@@ -88,6 +100,7 @@ def _make_app(
         "http://ollama", transport=httpx.MockTransport(_local_ok)
     )
     app.state.upstreams = [UpstreamRuntime(cfg, transport=httpx.MockTransport(handler))]
+    app.state.registry_transport = registry_transport
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -140,8 +153,11 @@ _CHAT = {"model": "relay-a/gpt-4o-mini", "messages": [{"role": "user", "content"
 _CHAIN = ["relay-a/gpt-4o-mini", "local/qwen2.5:0.5b"]
 
 
-def _post(client: TestClient, *, stream: bool = False):
-    return client.post("/v1/chat/completions", json={**_CHAT, "stream": stream})
+def _post(client: TestClient, *, stream: bool = False, model: str | None = None):
+    payload = {**_CHAT, "stream": stream}
+    if model:
+        payload["model"] = model
+    return client.post("/v1/chat/completions", json=payload)
 
 
 # ---------------------------------------------------------------- manual
@@ -333,3 +349,239 @@ def test_startup_skips_remote_check_when_discovery_failed():
         upstreams=[cfg], fallback_mode="auto", fallback_chain=["relay-a/gpt-4o-mini"]
     )
     _validate_fallback_targets(settings, [runtime], ["qwen2.5:0.5b"])  # 放行并告警
+
+
+# ---------------------------------------------------------------- registry 候选
+
+_REGISTRY_ENV = "TEST_REGISTRY_TOKEN"
+
+
+def _gateway_cfg(models: tuple[str, ...] = ("gpt-4o-mini", "qwen2.5:0.5b")) -> UpstreamSettings:
+    return UpstreamSettings(
+        id="newapi",
+        base_url="http://newapi.example/v1",
+        api_key=Secret(SECRET),
+        api_key_env="QUASHENG_NEWAPI_KEY",
+        enabled=True,
+        visibility="both",
+        models=[UpstreamModel(id=model) for model in models],
+    )
+
+
+def _registry_settings() -> RegistrySettings:
+    return RegistrySettings(
+        enabled=True,
+        base_url="http://registry.example",
+        token_env=_REGISTRY_ENV,
+    )
+
+
+def _registry_transport(
+    candidates: list[str],
+    *,
+    calls: list[dict[str, str]] | None = None,
+    status: int = 200,
+) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/zhentu/v1/candidates"
+        if calls is not None:
+            calls.append(dict(request.url.params))
+        if status >= 400:
+            return httpx.Response(status, json={"error": {"code": "registry_down"}})
+        return httpx.Response(
+            200,
+            json={"candidates": [{"model": model} for model in candidates]},
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def _fail_first_handler(failing: str = "gpt-4o-mini"):
+    """首个模型 502，其余模型成功；用于验证候选真正被执行。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"object": "list", "data": [{"id": failing}]})
+        if request.url.path == "/v1/chat/completions":
+            payload = json.loads(request.content)
+            if payload.get("model") == failing:
+                return httpx.Response(
+                    502,
+                    json={"error": {"message": "relay failed", "code": "relay_error"}},
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "remote-2",
+                    "object": "chat.completion",
+                    "model": payload.get("model"),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "registry ok"},
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404, json={"error": {"message": "unexpected"}})
+
+    return handler
+
+
+def test_registry_candidates_map_to_gateway_and_filter_snapshot(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    calls: list[dict[str, str]] = []
+    client = _make_app(
+        _fail_first_handler(),
+        mode="auto",
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(),
+        registry_transport=_registry_transport(
+            ["qwen2.5:0.5b", "not-in-snapshot"], calls=calls
+        ),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    assert resp.status_code == 200
+    assert resp.json()["choices"][0]["message"]["content"] == "registry ok"
+    # 候选只保留 NewAPI 快照中存在的模型，并仍以 newapi/<model> 执行
+    assert resp.headers["X-Node-Fallback-Source"] == "newapi/qwen2.5:0.5b"
+    assert resp.headers["X-Node-Fallback-Origin"] == "registry"
+    entries = logbuffer.recent(20)["lines"]
+    assert any(
+        entry.get("event") == "fallback" and "候选来源 registry" in entry.get("message", "")
+        for entry in entries
+    )
+    assert calls and calls[0]["capability"] == "chat"
+    assert calls[0]["exclude"] == "fb-node"
+
+
+def test_registry_query_failure_falls_back_to_static_chain(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("registry down", request=request)
+
+    client = _make_app(
+        _upstream_handler(502),
+        mode="auto",
+        chain=["local/qwen2.5:0.5b"],
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(),
+        registry_transport=httpx.MockTransport(handler),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Node-Fallback-Source"] == "local/qwen2.5:0.5b"
+    assert resp.headers["X-Node-Fallback-Origin"] == "static"
+    entries = logbuffer.recent(30)["lines"]
+    assert any(
+        entry.get("event") == "fallback" and "阵图候选查询失败" in entry.get("message", "")
+        for entry in entries
+    )
+    assert any(
+        entry.get("event") == "fallback" and "候选来源 static" in entry.get("message", "")
+        for entry in entries
+    )
+
+
+def test_registry_results_are_cached_between_requests(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    calls: list[dict[str, str]] = []
+    client = _make_app(
+        _upstream_handler(502),
+        mode="auto",
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(),
+        registry_transport=_registry_transport(["qwen2.5:0.5b"], calls=calls),
+    )
+
+    first = _post(client, model="newapi/gpt-4o-mini")
+    second = _post(client, model="newapi/gpt-4o-mini")
+
+    assert first.status_code == 502
+    assert second.status_code == 502
+    assert first.json()["error"]["code"] == "fallback_exhausted"
+    assert first.json()["error"]["fallback_origin"] == "registry"
+    # 10s 缓存：第二次请求不应再查阵图
+    assert len(calls) == 1
+
+
+def test_registry_candidates_all_filtered_falls_back_to_static(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    client = _make_app(
+        _upstream_handler(502),
+        mode="auto",
+        chain=["local/qwen2.5:0.5b"],
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(),
+        registry_transport=_registry_transport(["ghost-model"]),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Node-Fallback-Source"] == "local/qwen2.5:0.5b"
+    assert resp.headers["X-Node-Fallback-Origin"] == "static"
+
+
+def test_registry_empty_without_static_chain_returns_original_failure(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    client = _make_app(
+        _upstream_handler(502),
+        mode="auto",
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(("gpt-4o-mini",)),
+        registry_transport=_registry_transport([]),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    # 没有候选时保持原始上游错误，不因阵图抖动改写错误语义
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "relay_error"
+    assert "X-Node-Fallback-Origin" not in resp.headers
+
+
+def test_static_source_never_queries_registry():
+    calls: list[dict[str, str]] = []
+    client = _make_app(
+        _upstream_handler(502),
+        mode="auto",
+        chain=["local/qwen2.5:0.5b"],
+        registry_transport=_registry_transport([], calls=calls),
+    )
+
+    resp = _post(client)
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Node-Fallback-Source"] == "local/qwen2.5:0.5b"
+    assert "X-Node-Fallback-Origin" not in resp.headers
+    assert calls == []
+
+
+def test_manual_registry_lists_filtered_candidates(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    client = _make_app(
+        _upstream_handler(502),
+        mode="manual",
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(),
+        registry_transport=_registry_transport(["qwen2.5:0.5b", "not-in-snapshot"]),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    assert resp.status_code == 502
+    assert resp.json()["error"]["fallback_candidates"] == ["newapi/qwen2.5:0.5b"]
+    assert "X-Node-Fallback-Source" not in resp.headers
+    assert "X-Node-Fallback-Origin" not in resp.headers

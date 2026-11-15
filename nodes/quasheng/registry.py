@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable
@@ -29,6 +30,12 @@ from .config import (
 logger = logging.getLogger("quasheng")
 
 SnapshotBuilder = Callable[[], Awaitable[dict[str, Any]]]
+
+# 候选查询硬指标：单次最多等 300ms，结果（含失败）缓存 10s。
+# 阵图抖动只能让本次退回静态链条，不能拖慢或打断推理请求。
+CANDIDATE_QUERY_TIMEOUT_S = 0.3
+CANDIDATE_CACHE_TTL_S = 10.0
+CANDIDATE_LIMIT = 10
 
 
 class RegistryHTTPError(Exception):
@@ -290,3 +297,115 @@ class RegistryReporter:
             "limits": snapshot.get("limits") or {},
             "sent_at": _now_iso(),
         }
+
+
+class RegistryCandidateClient:
+    """查询阵图回退候选（`/zhentu/v1/candidates`）。
+
+    与注册 reporter 分开：候选查询的延迟直接落在用户请求上，因此使用
+    300ms 超时，并缓存结果（含失败）10s。任何失败都只返回空列表，由调用
+    方回退静态链条；这里绝不抛异常。
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.cfg = settings.registry
+        self._node_id = settings.node_id
+        self._token = Secret(os.environ.get(self.cfg.token_env) or "")
+        self._transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._cache: tuple[float, list[str], str | None] | None = None
+        self._lock = asyncio.Lock()
+        self._last_logged_error: str | None = None
+
+    async def models(self) -> tuple[list[str], str | None]:
+        """返回 (候选模型名, 错误码)。错误码为 None 表示查询成功。"""
+        now = time.monotonic()
+        cached = self._cache
+        if cached is not None and now - cached[0] < CANDIDATE_CACHE_TTL_S:
+            return list(cached[1]), cached[2]
+        async with self._lock:
+            # 并发请求只让一个去查阵图，其余复用刚写入的缓存
+            cached = self._cache
+            now = time.monotonic()
+            if cached is not None and now - cached[0] < CANDIDATE_CACHE_TTL_S:
+                return list(cached[1]), cached[2]
+            models, error = await self._fetch()
+            self._cache = (now, models, error)
+            return list(models), error
+
+    async def close(self) -> None:
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _open(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(CANDIDATE_QUERY_TIMEOUT_S),
+                headers={
+                    "authorization": f"Bearer {self._token.get()}",
+                    "X-Node-Id": self._node_id,
+                    "X-Node-Role": NODE_ROLE,
+                    "Contract-Version": CONTRACT_VERSION,
+                },
+                transport=self._transport,
+                # 阵图是内网旁路，不应被 HTTP(S)_PROXY 改写
+                trust_env=False,
+            )
+        return self._client
+
+    async def _fetch(self) -> tuple[list[str], str | None]:
+        if not self.cfg.enabled:
+            return [], "disabled"
+        if not self._token:
+            self._warn("missing_token")
+            return [], "missing_token"
+        try:
+            resp = await self._open().get(
+                f"{self.cfg.base_url}/zhentu/v1/candidates",
+                params={
+                    "capability": "chat",
+                    "exclude": self._node_id,
+                    "limit": CANDIDATE_LIMIT,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - 阵图失败不得影响请求
+            code = type(exc).__name__
+            self._warn(code)
+            return [], code
+        if resp.status_code >= 400:
+            code = f"http_{resp.status_code}"
+            self._warn(code)
+            return [], code
+        try:
+            data = resp.json()
+        except ValueError:
+            self._warn("bad_json")
+            return [], "bad_json"
+        models: list[str] = []
+        for item in (data.get("candidates") if isinstance(data, dict) else None) or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("model") or "").strip()
+            if name and name not in models:
+                models.append(name)
+        self._last_logged_error = None
+        return models, None
+
+    def _warn(self, code: str) -> None:
+        # 同一错误只记一次；恢复后重置，避免阵图长期宕机刷屏
+        if code == self._last_logged_error:
+            return
+        self._last_logged_error = code
+        message = f"阵图候选查询失败（{code}），本次回退静态链条"
+        logger.warning(message)
+        logbuffer.record("WARNING", "fallback", message)
+

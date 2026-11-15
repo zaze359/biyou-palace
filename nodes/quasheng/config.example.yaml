@@ -75,6 +75,10 @@ shutdown_timeout: 10
 # 回退策略（可选；不配置时行为与未接入时完全一致）
 # manual：不切换，仅在可回退类错误体里追加候选提示；
 # auto：按链顺序尝试，仅兜连接失败/超时/5xx，4xx 与 401/403 不兜。
+# fallback_source：static（默认，只用下面的 fallback_chain）或 registry
+# （查阵图 /zhentu/v1/candidates，只保留 newapi 上游快照中存在的模型，
+#  仍经 newapi 网关执行；查询失败/无候选时自动退回 fallback_chain）。
+# fallback_source: static
 # fallback_mode: manual
 # fallback_chain:
 #   - newapi/qwen2.5:0.5b        # 远程：<provider>/<model>
@@ -99,3 +103,6 @@ shutdown_timeout: 10
 #   heartbeat_interval_s: 15            # 10..120；registry 侧按 3x 计算租约
 #   public_endpoint: ""                 # 空则按 host:port 推导；监听 0.0.0.0 时建议显式填写
 #   timeout_s: 3
+#
+# 使用 fallback_source: registry 时必须 registry.enabled: true；
+# 候选查询复用上面的 base_url 与 token，单次超时固定 300ms、结果缓存 10s。

@@ -28,6 +28,7 @@ from .config import (
     LOCAL_PROVIDER,
     MODEL_OWNER,
     NODE_ROLE,
+    REGISTRY_GATEWAY_PROVIDER,
     ConfigError,
     Settings,
     UpstreamModel,
@@ -47,7 +48,7 @@ from .errors import (
 )
 from .health import build_health
 from .ollama_client import OllamaClient
-from .registry import RegistryReporter
+from .registry import RegistryCandidateClient, RegistryReporter
 from .upstream import (
     UpstreamRuntime,
     read_upstream_error,
@@ -359,6 +360,7 @@ class _ChatTarget:
     native_model: str  # 真正发给后端的模型名
     runtime: UpstreamRuntime | None = None
     upstream_model: UpstreamModel | None = None
+    origin: str = "static"  # 候选来源：static（配置链条）| registry（阵图查询）
 
 
 @dataclass
@@ -561,6 +563,87 @@ def _fallback_candidates(
     return targets
 
 
+def _registry_candidate_client(request: Request) -> RegistryCandidateClient | None:
+    client = getattr(request.app.state, "registry_candidates", None)
+    if client is not None:
+        return client
+    settings: Settings = request.app.state.settings
+    if settings.fallback_source != "registry":
+        return None
+    client = RegistryCandidateClient(
+        settings, transport=getattr(request.app.state, "registry_transport", None)
+    )
+    request.app.state.registry_candidates = client
+    return client
+
+
+def _gateway_runtime(request: Request) -> UpstreamRuntime | None:
+    for runtime in _upstream_runtimes(request):
+        if runtime.cfg.id == REGISTRY_GATEWAY_PROVIDER:
+            return runtime
+    return None
+
+
+async def _registry_candidates(request: Request, first: _ChatTarget) -> list[_ChatTarget]:
+    """查阵图候选，只保留 NewAPI 快照中确实存在的 chat 模型。
+
+    执行仍走 NewAPI：候选统一拼成 `newapi/<model>`，不做节点间直连。
+    阵图查询失败、无候选或模型不在快照时返回空列表，由调用方退回静态链条。
+    """
+    runtime = _gateway_runtime(request)
+    client = _registry_candidate_client(request)
+    if runtime is None or client is None:
+        return []
+    if not _remote_visible(request, runtime.cfg):
+        return []
+    models, _error = await client.models()
+    if not models:
+        return []
+    seen = {(first.kind, first.native_model)}
+    targets: list[_ChatTarget] = []
+    for name in models:
+        model = runtime.model_for(name)
+        if model is None or "chat" not in model.capabilities:
+            continue  # 阵图有、但 NewAPI 上游快照没有：丢弃
+        key = ("remote", name)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(
+            _ChatTarget(
+                entry=f"{runtime.cfg.id}/{name}",
+                kind="remote",
+                native_model=name,
+                runtime=runtime,
+                upstream_model=model,
+                origin="registry",
+            )
+        )
+    return targets
+
+
+async def _candidate_targets(
+    request: Request, settings: Settings, first: _ChatTarget
+) -> list[_ChatTarget]:
+    """registry 模式优先用阵图候选；查询失败/无候选时退回静态链条。"""
+    if settings.fallback_source == "registry":
+        targets = await _registry_candidates(request, first)
+        if targets:
+            return targets
+    return _fallback_candidates(request, settings, first)
+
+
+async def _manual_candidate_entries(
+    request: Request, settings: Settings, first: _ChatTarget
+) -> list[str]:
+    """manual 模式的候选提示；registry 模式优先展示阵图候选。"""
+    if settings.fallback_source == "registry":
+        targets = await _registry_candidates(request, first)
+        if targets:
+            return [target.entry for target in targets]
+    return _manual_candidates(request, settings, first)
+
+
 async def _run_auto_fallback(
     request: Request,
     settings: Settings,
@@ -570,8 +653,9 @@ async def _run_auto_fallback(
     gate: ConcurrencyGate,
     loading: LoadingTracker | None,
 ) -> Any:
-    candidates = _fallback_candidates(request, settings, first)
+    candidates = await _candidate_targets(request, settings, first)
     attempted: list[dict[str, Any]] = []
+    first_failure: _ChatFailure | None = None
 
     for index, target in enumerate([first, *candidates]):
         result = await _execute_chat_target(request, payload, target, client, gate, loading)
@@ -579,16 +663,31 @@ async def _run_auto_fallback(
             if index:
                 # 回退成功：响应头标记实际服务来源，并写一条可审计日志
                 result.headers["X-Node-Fallback-Source"] = target.entry
+                if settings.fallback_source == "registry":
+                    result.headers["X-Node-Fallback-Origin"] = target.origin
                 metrics.fallback_result(first.entry, target.entry)
                 reason = attempted[0]["reason"] if attempted else "unknown"
-                logger.warning("模型 %s 失败（%s），已回退到 %s", first.entry, reason, target.entry)
+                suffix = (
+                    f"（候选来源 {target.origin}）"
+                    if settings.fallback_source == "registry"
+                    else ""
+                )
+                logger.warning(
+                    "模型 %s 失败（%s），已回退到 %s%s",
+                    first.entry,
+                    reason,
+                    target.entry,
+                    suffix,
+                )
                 logbuffer.record(
                     "WARNING",
                     "fallback",
-                    f"模型 {first.entry} 失败（{reason}），已回退到 {target.entry}",
+                    f"模型 {first.entry} 失败（{reason}），已回退到 {target.entry}{suffix}",
                 )
             return result
 
+        if index == 0:
+            first_failure = result
         attempted.append(
             {"model": target.entry, "reason": result.reason, "status": result.status}
         )
@@ -596,27 +695,35 @@ async def _run_auto_fallback(
             # 4xx（含 401/403/429）：配置/权限问题必须暴露，不继续兜
             return _failure_response(result)
 
+    if not candidates and first_failure is not None:
+        # 没有可用候选（例如阵图不可达且静态链条为空）：保持原始上游错误，
+        # 不因候选来源抖动改写错误语义。
+        return _failure_response(first_failure)
+
     status = attempted[-1]["status"] if attempted and attempted[-1]["status"] >= 500 else 502
     detail = "；".join(f"{item['model']}（{item['reason']}）" for item in attempted)
-    message = f"模型 {first.entry} 及回退候选均失败：{detail}"
+    suffix = (
+        f"（候选来源 {candidates[0].origin}）"
+        if settings.fallback_source == "registry" and candidates
+        else ""
+    )
+    message = f"模型 {first.entry} 及回退候选均失败：{detail}{suffix}"
     logger.error(message)
     logbuffer.record("ERROR", "fallback", message)
     metrics.fallback_result(first.entry, None)
-    return JSONResponse(
-        status_code=status,
-        content={
-            "error": {
-                "message": message,
-                "type": "server_error",
-                "param": None,
-                "code": "fallback_exhausted",
-                "fallback_attempts": [
-                    {"model": item["model"], "reason": item["reason"]} for item in attempted
-                ],
-                "fallback_candidates": [target.entry for target in candidates],
-            }
-        },
-    )
+    error: dict[str, Any] = {
+        "message": message,
+        "type": "server_error",
+        "param": None,
+        "code": "fallback_exhausted",
+        "fallback_attempts": [
+            {"model": item["model"], "reason": item["reason"]} for item in attempted
+        ],
+        "fallback_candidates": [target.entry for target in candidates],
+    }
+    if settings.fallback_source == "registry" and candidates:
+        error["fallback_origin"] = candidates[0].origin
+    return JSONResponse(status_code=status, content={"error": error})
 
 
 async def _handle_upstream_chat(
@@ -1067,6 +1174,33 @@ async def lifespan(app: FastAPI):
     app.state.registry = reporter
     app.state.registry_task = reporter.start()
 
+    # 回退候选查询客户端：仅在 registry 模式启用；查询超时/缓存见 registry.py
+    if settings.fallback_source == "registry":
+        app.state.registry_candidates = RegistryCandidateClient(
+            settings, transport=getattr(app.state, "registry_transport", None)
+        )
+        gateway = next(
+            (
+                cfg
+                for cfg in settings.upstreams
+                if cfg.enabled and cfg.id == REGISTRY_GATEWAY_PROVIDER
+            ),
+            None,
+        )
+        if gateway is None:
+            message = (
+                f"fallback_source=registry 但未配置已启用的 {REGISTRY_GATEWAY_PROVIDER} 上游；"
+                "阵图候选无法映射，将始终回退静态链条"
+            )
+            logger.warning(message)
+            logbuffer.record("WARNING", "fallback", message)
+        else:
+            message = (
+                f"回退候选来源：registry（阵图），经 {REGISTRY_GATEWAY_PROVIDER} 上游执行"
+            )
+            logger.info(message)
+            logbuffer.record("INFO", "fallback", message)
+
     # 动态发现完全后台化：首轮也在后台任务里立即执行，启动流程不 await 任何
     # 上游请求。阵图不可达只会让远程视图为空/陈旧，不影响本地能力与启动耗时。
     discovering = [runtime for runtime in app.state.upstreams if runtime.cfg.discover]
@@ -1120,6 +1254,9 @@ async def lifespan(app: FastAPI):
         if reporter is not None:
             # 停机注销最多等 1s，不拖长 shutdown_timeout
             await reporter.stop()
+        candidate_client = getattr(app.state, "registry_candidates", None)
+        if candidate_client is not None:
+            await candidate_client.close()
         drained = await app.state.gate.wait_idle(settings.shutdown_timeout)
         if drained:
             logger.info("在途请求已清空，节点退出")
@@ -1323,7 +1460,8 @@ def create_app() -> FastAPI:
             bool(payload.get("stream")),
         )
         try:
-            if settings.fallback_mode == "auto" and settings.fallback_chain:
+            auto_ready = bool(settings.fallback_chain) or settings.fallback_source == "registry"
+            if settings.fallback_mode == "auto" and auto_ready:
                 return metrics.wrap_response(
                     await _run_auto_fallback(
                         request, settings, payload, first, client, gate, loading
@@ -1338,7 +1476,7 @@ def create_app() -> FastAPI:
             body = result.body
             if settings.fallback_mode == "manual" and result.retryable:
                 body = _attach_candidates(
-                    body, _manual_candidates(request, settings, first)
+                    body, await _manual_candidate_entries(request, settings, first)
                 )
             return metrics.wrap_response(
                 JSONResponse(
