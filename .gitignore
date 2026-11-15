@@ -74,3 +74,7 @@ zhentu/data/
 
 # ---- WorkBuddy 本地数据（个人/会话级，不入库）----
 .workbuddy/
+
+# ---- 本地临时产物 / 工作区日志（不入库）----
+.trae-html-share-packages/
+.trellis/workspace/
