@@ -64,6 +64,8 @@ data class Resources(
     @SerialName("mem_total_mb") val memTotalMb: Long?,
     @SerialName("disk_free_mb") val diskFreeMb: Long?,
     @SerialName("queue_len") val queueLen: Int,
+    /** 当前在途请求数（散仙取并发闸门占用数）；满载立即 429，故 queue_len 恒为 0 */
+    @SerialName("active") val active: Int? = null,
     // 散仙专属真实字段；非安卓实现（如未来桌面）置 null
     @SerialName("battery_pct") val batteryPct: Double? = null,
     @SerialName("temperature_c") val temperatureC: Double? = null,

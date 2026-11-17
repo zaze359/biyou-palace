@@ -41,7 +41,7 @@ class NodeServer(
     private val server = embeddedServer(CIO, port = config.port, host = "0.0.0.0") {
         installNodeApi(
             config, engine, embeddingEngine, gate,
-            health = { queueLen -> NodeHealthCollector.collect(context, queueLen) },
+            health = { inFlight -> NodeHealthCollector.collect(context, inFlight) },
             governor = governor,
             thermalProbe = { NodeHealthCollector.readThermalSignal(context) },
             visionEngine = visionEngine,

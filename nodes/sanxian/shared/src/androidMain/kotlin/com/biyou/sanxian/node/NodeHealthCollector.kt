@@ -29,7 +29,7 @@ object NodeHealthCollector {
         val thermalStatusLevel: Int? = null,
     )
 
-    suspend fun collect(context: Context, queueLen: Int): CollectedHealth {
+    suspend fun collect(context: Context, inFlight: Int): CollectedHealth {
         val batteryPct = readBatteryPct(context)
         val tempC = readTemperatureC(context)
         val statusLevel = readThermalStatusLevel(context)
@@ -42,7 +42,10 @@ object NodeHealthCollector {
             memUsedMb = memUsedMb,
             memTotalMb = memTotalMb,
             diskFreeMb = diskFreeMb,
-            queueLen = queueLen,
+            // 节点满载立即 429、不排队：queue_len 是真实排队数，恒为 0；
+            // 在途并发走契约 v1.2 的可选字段 active。
+            queueLen = 0,
+            active = inFlight,
             batteryPct = batteryPct,
             temperatureC = tempC,
             thermalState = thermalState,

@@ -145,6 +145,13 @@ curl -X POST http://127.0.0.1:4011/v1/chat/completions \
 | `resources.shed_reason` | 触发原因（如 `thermal_status=3`、`temperature=50.0℃ ≥ 48.0℃`） |
 | `limits.effective_max_concurrency` | 当前生效并发上限（降载为 1） |
 
+契约 v1.2 补充（[`docs/node-agent-contract.md`](../../docs/node-agent-contract.md)，响应头仍为 `Contract-Version: 1.0`）：
+
+| 字段 | 含义 |
+|---|---|
+| `resources.active` | 当前在途请求数（并发闸门占用数），供阵图精确计算负载 |
+| `resources.queue_len` | 恒为 `0`：节点满载立即 429、不排队，该字段只表示真实排队数 |
+
 配置项（assets / DataStore 同风格）：
 
 ```json

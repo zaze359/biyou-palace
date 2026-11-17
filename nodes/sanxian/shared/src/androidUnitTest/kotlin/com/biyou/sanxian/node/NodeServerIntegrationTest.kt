@@ -126,14 +126,15 @@ class NodeServerIntegrationTest {
     }
 
     /** 假健康采集：固定返回正常资源，避免触碰 Android API。 */
-    private val fakeHealth: suspend (Int) -> NodeHealthCollector.CollectedHealth = { queueLen ->
+    private val fakeHealth: suspend (Int) -> NodeHealthCollector.CollectedHealth = { inFlight ->
         NodeHealthCollector.CollectedHealth(
             resources = Resources(
                 cpuPct = 10.0,
                 memUsedMb = 1024,
                 memTotalMb = 4096,
                 diskFreeMb = 8192,
-                queueLen = queueLen,
+                queueLen = 0,
+                active = inFlight,
                 batteryPct = 88.0,
                 temperatureC = 30.0,
                 thermalState = "nominal",
@@ -596,7 +597,7 @@ class NodeServerIntegrationTest {
     /** 健康采集跟随注入的热信号，保证 /v1/health 与准入判断同源。 */
     private fun thermalHealth(
         signal: () -> ThermalSignal,
-    ): suspend (Int) -> NodeHealthCollector.CollectedHealth = { queueLen ->
+    ): suspend (Int) -> NodeHealthCollector.CollectedHealth = { inFlight ->
         val s = signal()
         NodeHealthCollector.CollectedHealth(
             resources = Resources(
@@ -604,7 +605,8 @@ class NodeServerIntegrationTest {
                 memUsedMb = 1024,
                 memTotalMb = 4096,
                 diskFreeMb = 8192,
-                queueLen = queueLen,
+                queueLen = 0,
+                active = inFlight,
                 batteryPct = 88.0,
                 temperatureC = s.tempC,
                 thermalState = if ((s.statusLevel ?: 0) >= 3) "warn" else "nominal",
@@ -696,14 +698,16 @@ class NodeServerIntegrationTest {
     // ----------------------------- 并发闸门 -----------------------------
 
     @Test
-    fun `并发满载返回 429 与 Retry-After 且 health 上报 queue_len`() = testApplication {
+    fun `并发满载返回 429 与 Retry-After 且 health 上报 active`() = testApplication {
         val gate = ConcurrencyGate(limit = 1)
         installTestApi(config = baseConfig.copy(maxConcurrency = 1), gate = gate)
 
         gate.acquire()
         try {
             val health = json.parseToJsonElement(client.get("/v1/health").bodyAsText()).jsonObject
-            assertEquals(1, health["resources"]!!.jsonObject.int("queue_len"))
+            // 满载立即 429 不排队：queue_len 恒为 0，在途并发走 active
+            assertEquals(0, health["resources"]!!.jsonObject.int("queue_len"))
+            assertEquals(1, health["resources"]!!.jsonObject.int("active"))
 
             val res = client.post("/v1/chat/completions") {
                 contentType(ContentType.Application.Json)
