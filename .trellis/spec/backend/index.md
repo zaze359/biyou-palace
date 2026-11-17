@@ -35,6 +35,10 @@ This directory contains guidelines for backend development. Fill in each file wi
 - 准圣 registry 模式的审计头：`X-Node-Fallback-Origin: registry|static`，
   阵图决策额外带 `X-Node-Route-Decision: dec-...`；`fallback` 日志同时记录决策与节点。
   阵图查询失败只让本次退回静态链条，不影响本地 chat/embeddings/health。
+- 阵图 `/metrics` 与其它 `/v1` 端点一样要求 Bearer 鉴权，不新增鉴权例外；
+  指标不得携带 `node_id` / `model` / endpoint 等高基数或敏感标签。
+- 契约新增字段必须是可选的向后兼容字段；`Contract-Version` 响应头保持 `1.0`，
+  文档版本单独递增（v1.2），旧节点无需改动。
 
 ---
 

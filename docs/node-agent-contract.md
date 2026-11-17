@@ -1,4 +1,4 @@
-# 节点智能体统一契约（Node Agent Contract）v1.1
+# 节点智能体统一契约（Node Agent Contract）v1.2
 
 > **实现方**：准圣节点（PC · Python / Ollama）、散仙节点（安卓 App · Kotlin / llama.cpp）
 > **消费方**：碧游宫网关（渠道转发 / 探活）、阵图 ZhenTu（任务路由）、灵脉 LingMai（指标采集）、节点自身本地客户端
@@ -57,6 +57,7 @@
     "mem_total_mb": 16384,
     "disk_free_mb": 204800,
     "queue_len": 0,
+    "active": 0,
     "battery_pct": null,
     "temperature_c": null,
     "thermal_state": "nominal"
@@ -72,7 +73,8 @@
 - `status`：`ready` 可服务 ｜ `loading` 模型加载中（上层暂勿路由）｜ `degraded` 高温 / 内存吃紧等降质状态（上层应降权）｜ `down` 拒绝服务。
 - `models[].capabilities`：`chat` ｜ `embedding` ｜ `vision` ｜ `ocr` ｜ `rerank`。
 - 散仙专属：`battery_pct`、`temperature_c`、`thermal_state`（`nominal` \| `warn` \| `hot`）须真实填充；准圣置 `null`。
-- `queue_len`：当前排队请求数，供网关加权 / 阵图避免堆积。
+- `queue_len`：当前**真实排队**请求数。准圣 / 散仙采用「满载立即 429、不排队」策略，故二者恒为 `0`；供网关与阵图识别堆积。
+- `active`（v1.2 可选）：当前在途请求数（并发闸门占用数），供阵图精确计算负载与余量；旧消费方可忽略。
 
 ### 3.2 `GET /v1/models` — 模型列表（OpenAI 兼容）
 
@@ -115,6 +117,8 @@
 - **不含集群级重试 / 降级**：属第三步阵图编排职责。
 
 > v1.1 补充：注册是**节点出站**协议，不改变上述四类入站端点；响应头 `Contract-Version` 仍为 `1.0`，节点无需新增任何 HTTP 端点。
+
+> v1.2 补充：`resources` 新增可选 `active`（在途请求数），`queue_len` 明确为真实排队数（满载立即 429 的节点恒为 0）。字段可选、向后兼容，响应头 `Contract-Version` 仍为 `1.0`，节点无需新增任何 HTTP 端点。
 
 ## 六、v1.1 节点注册与心跳（出站）
 

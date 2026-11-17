@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现后质量检查"}
+{"file": ".trellis/spec/backend/index.md", "reason": "校验指标/鉴权/控制面约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验契约 v1.2 与旧节点兼容"}
