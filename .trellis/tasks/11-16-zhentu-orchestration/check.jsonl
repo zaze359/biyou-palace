@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现后按后端质量规范检查"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验 /route 与准圣回退错误语义"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验阵图决策面与 NewAPI 执行面边界"}

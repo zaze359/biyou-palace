@@ -22,6 +22,22 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 ---
 
+## Project-Specific Conventions
+
+### 阵图（ZhenTu）是控制面，不是代理
+
+- `POST /zhentu/v1/route` 只返回 `selected` / `alternates` / `rejected` 与 `decision_id`；
+  绝不代理推理请求、不返回 `endpoint`、不持有节点或上游凭据。执行仍由调用方经 NewAPI 完成。
+- 选路评分缺失字段必须退化（中性值或保守估算 + `reasons` 标注），不得因字段不全返回 5xx；
+  无候选是 `200 + selected=null + reason=no_route`，不是 5xx。
+- 新只读端点必须保持既有行为不变：`fallback_source=static` 的节点不得产生任何阵图请求，
+  `GET /zhentu/v1/candidates` 等既有端点响应形状不得改动。
+- 准圣 registry 模式的审计头：`X-Node-Fallback-Origin: registry|static`，
+  阵图决策额外带 `X-Node-Route-Decision: dec-...`；`fallback` 日志同时记录决策与节点。
+  阵图查询失败只让本次退回静态链条，不影响本地 chat/embeddings/health。
+
+---
+
 ## How to Fill These Guidelines
 
 For each guideline file:
