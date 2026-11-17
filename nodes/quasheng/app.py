@@ -176,6 +176,27 @@ async def _read_upstream_error(upstream) -> dict[str, Any]:
     return normalize_upstream_error(upstream.status_code, raw)
 
 
+async def _close_stream(
+    stack: AsyncExitStack,
+    gate: ConcurrencyGate,
+    runtime: UpstreamRuntime | None = None,
+) -> None:
+    """释放流式资源：关闭上游失败也必须归还并发名额。
+
+    `AsyncExitStack.aclose()` 可能因上游连接异常而抛出。若先关闭再释放，关闭
+    抛错会永久占用名额，累积到上限后节点持续返回 429。这里把释放放进
+    `finally`，并吞掉关闭异常（清理失败不应改变已经确定的响应结果）。
+    """
+    try:
+        await stack.aclose()
+    except Exception:  # noqa: BLE001 - 清理失败不得掩盖原始响应/异常
+        logger.warning("关闭上游流失败", exc_info=True)
+    finally:
+        if runtime is not None:
+            runtime.release()
+        await gate.release()
+
+
 async def _stream_body(
     request: Request,
     upstream,
@@ -210,8 +231,7 @@ async def _stream_body(
     finally:
         if not loaded_seen and loading is not None and model:
             loading.mark_failed(model)
-        await stack.aclose()
-        await gate.release()
+        await _close_stream(stack, gate)
 
 
 # ---------------------------------------------------------------- 外部上游桥接
@@ -219,6 +239,20 @@ async def _stream_body(
 
 def _upstream_runtimes(request: Request) -> list[UpstreamRuntime]:
     return list(getattr(request.app.state, "upstreams", []) or [])
+
+
+async def _refresh_upstreams(runtimes: list[UpstreamRuntime]) -> None:
+    """并发刷新多个上游的探活状态。
+
+    串行探测会让 health/models 的耗时随上游数量线性增长（单个超时上限 2s），
+    多上游时可能拖垮编排层的健康检查。`refresh_status` 自身已把 httpx 异常
+    收敛为状态，`return_exceptions` 只是防御性兜底，避免一个上游拖垮整个端点。
+    """
+    if not runtimes:
+        return
+    await asyncio.gather(
+        *(runtime.refresh_status() for runtime in runtimes), return_exceptions=True
+    )
 
 
 def _source_is_loopback(request: Request) -> bool:
@@ -343,9 +377,7 @@ async def _stream_upstream_body(
         )
         yield stream_error_frame()
     finally:
-        await stack.aclose()
-        runtime.release()
-        await gate.release()
+        await _close_stream(stack, gate, runtime)
 
 
 # ---------------------------------------------------------------- 回退策略
@@ -418,14 +450,12 @@ async def _handle_local_chat(
         except NodeError as exc:
             if loading is not None:
                 loading.mark_failed(model)
-            await stack.aclose()
-            await gate.release()
+            await _close_stream(stack, gate)
             return _failure_from_node_error(exc)
         except BaseException:
             if loading is not None:
                 loading.mark_failed(model)
-            await stack.aclose()
-            await gate.release()
+            await _close_stream(stack, gate)
             raise
 
         if upstream.status_code >= 400:
@@ -433,8 +463,7 @@ async def _handle_local_chat(
             _record_upstream_error(upstream.status_code, body)
             if loading is not None:
                 loading.mark_failed(model)
-            await stack.aclose()
-            await gate.release()
+            await _close_stream(stack, gate)
             return _ChatFailure(
                 status=upstream.status_code,
                 body=body,
@@ -674,7 +703,10 @@ async def _run_auto_fallback(
     for index, target in enumerate([first, *candidates]):
         result = await _execute_chat_target(request, payload, target, client, gate, loading)
         if not isinstance(result, _ChatFailure):
-            if index:
+            status = int(getattr(result, "status_code", 200) or 200)
+            # 只有 2xx 才算回退成功：候选返回 429（上游满载）等非 2xx 时虽然
+            # 已切换过去，但不得打成功标记或记成功指标。
+            if index and status < 400:
                 # 回退成功：响应头标记实际服务来源，并写一条可审计日志
                 result.headers["X-Node-Fallback-Source"] = target.entry
                 if settings.fallback_source == "registry":
@@ -778,14 +810,10 @@ async def _handle_upstream_chat(
             upstream = await stack.enter_async_context(runtime.client.stream_chat(forward))
         except NodeError as exc:
             runtime.note_result(False, code=exc.code)
-            runtime.release()
-            await stack.aclose()
-            await gate.release()
+            await _close_stream(stack, gate, runtime)
             return _failure_from_node_error(exc)
         except BaseException:
-            runtime.release()
-            await stack.aclose()
-            await gate.release()
+            await _close_stream(stack, gate, runtime)
             raise
 
         # 上游 4xx/5xx 必须按原状态码返回 JSON 错误，不能包装成 200 + SSE
@@ -793,9 +821,7 @@ async def _handle_upstream_chat(
             body = await read_upstream_error(upstream, cfg)
             code = _error_code(body)
             runtime.note_result(False, code=code)
-            await stack.aclose()
-            runtime.release()
-            await gate.release()
+            await _close_stream(stack, gate, runtime)
             _record_upstream_error(upstream.status_code, body, cfg.id)
             return _ChatFailure(
                 status=upstream.status_code,
@@ -1372,6 +1398,9 @@ def create_app() -> FastAPI:
         # 因此这里显式补上 X-Node-* 响应头。
         logger.exception("未捕获异常：%s %s", request.method, request.url.path)
         logbuffer.record("ERROR", "exception", f"未捕获异常：{type(exc).__name__}: {exc}")
+        # 该 handler 由 ServerErrorMiddleware（用户中间件之外）调用，500 不会经过
+        # add_node_headers 里的 observe_http，因此这里补记一次，避免指标漏掉 5xx。
+        metrics.observe_http(request.url.path, request.method, 500)
         return JSONResponse(
             status_code=500,
             content=openai_error_payload("节点内部错误", type_="server_error", code="internal_error"),
@@ -1387,8 +1416,9 @@ def create_app() -> FastAPI:
         if settings.upstreams:
             loopback = _source_is_loopback(request)
             upstream_states = []
+            await _refresh_upstreams(runtimes)
             for runtime in runtimes:
-                status = await runtime.refresh_status()
+                status = runtime.status
                 state: dict[str, Any] = {
                     "id": runtime.cfg.id,
                     "status": status,
@@ -1428,10 +1458,11 @@ def create_app() -> FastAPI:
         # 设计稿 4.2：visibility=local 的远程模型不进入 /v1/models（避免集群发现
         # 一个调用方无权使用的模型）；本地 CLI 仍可按完整 id 调用。
         remote: list[dict[str, Any]] = []
-        for runtime in _upstream_runtimes(request):
-            if not runtime.cfg.cluster_visible():
-                continue
-            await runtime.refresh_status()
+        visible = [
+            runtime for runtime in _upstream_runtimes(request) if runtime.cfg.cluster_visible()
+        ]
+        await _refresh_upstreams(visible)
+        for runtime in visible:
             remote.extend(_remote_list_entries(runtime))
         return _models_response(resp, remote)
 

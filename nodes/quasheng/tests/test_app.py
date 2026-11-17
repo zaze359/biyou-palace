@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from nodes.quasheng import app as app_module
 from nodes.quasheng import logbuffer
-from nodes.quasheng.app import _stream_body, _warmup, create_app
+from nodes.quasheng.app import _stream_body, _stream_upstream_body, _warmup, create_app
 from nodes.quasheng.concurrency import ConcurrencyGate
 from nodes.quasheng.config import Settings
 from nodes.quasheng.ollama_client import OllamaClient
@@ -871,4 +871,74 @@ def test_upstream_error_is_recorded_without_request_body():
     # 不记录请求 body（提示词不得出现在事件里）
     assert all("secret prompt" not in l["message"] for l in logbuffer.recent(20)["lines"])
 
+
+# ---------------------------------------------------------------- 流式资源释放
+
+
+class _NotDisconnected:
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+class _OneChunk:
+    async def aiter_bytes(self):
+        yield b"data: hi\n\n"
+
+
+class _FailingCloseStack:
+    async def aclose(self) -> None:
+        raise RuntimeError("upstream close failed")
+
+
+class _FakeRuntime:
+    """只实现 `_stream_upstream_body` 需要的最小接口，避免创建真实 httpx client。"""
+
+    class cfg:  # noqa: N801 - 仅作为属性容器
+        id = "relay-a"
+
+    def __init__(self) -> None:
+        self.active = 1
+        self.result: tuple[bool, str | None] | None = None
+
+    def note_result(self, ok: bool, code: str | None = None) -> None:
+        self.result = (ok, code)
+
+    def release(self) -> None:
+        self.active = max(0, self.active - 1)
+
+
+def test_stream_close_failure_still_releases_gate():
+    """关闭上游流抛错时，本地流式名额仍必须归还（否则节点会被永久占满）。"""
+
+    async def scenario() -> None:
+        gate = ConcurrencyGate(limit=1)
+        await gate.acquire()
+        gen = _stream_body(_NotDisconnected(), _OneChunk(), _FailingCloseStack(), gate)
+        received = [chunk async for chunk in gen]
+        assert received == [b"data: hi\n\n"]
+        assert gate.active == 0
+        await gate.acquire()  # 泄漏时这里会抛 ConcurrencyLimitExceeded
+        await gate.release()
+
+    asyncio.run(scenario())
+
+
+def test_upstream_stream_close_failure_releases_both_slots():
+    """远程流式关闭失败时，上游名额与全局闸门都要归还。"""
+
+    async def scenario() -> None:
+        gate = ConcurrencyGate(limit=1)
+        runtime = _FakeRuntime()
+        await gate.acquire()
+        gen = _stream_upstream_body(
+            _NotDisconnected(), _OneChunk(), _FailingCloseStack(), runtime, gate
+        )
+        received = [chunk async for chunk in gen]
+        assert received == [b"data: hi\n\n"]
+        assert runtime.active == 0
+        assert gate.active == 0
+        await gate.acquire()
+        await gate.release()
+
+    asyncio.run(scenario())
 

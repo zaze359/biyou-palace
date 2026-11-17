@@ -690,3 +690,51 @@ def test_route_client_cache_respects_ttl_ms(monkeypatch):
         assert len(calls) == 2
 
     asyncio.run(run())
+
+
+def test_auto_candidate_capacity_429_is_not_marked_as_fallback_success():
+    """候选上游满载（429）不是回退成功：不得打回退头、写成功日志或累加成功指标。"""
+    from nodes.quasheng import metrics
+
+    metrics.reset()
+    cfg = _upstream_cfg()
+    cfg.max_concurrency = 1
+
+    def local_500(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(500, json={"error": {"message": "boom", "code": "local_error"}})
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen2.5:0.5b"}]})
+        return httpx.Response(200, json={"models": []})
+
+    settings = Settings(
+        node_id="fb-cap",
+        node_name="容量测试",
+        max_concurrency=2,
+        upstreams=[cfg],
+        fallback_mode="auto",
+        fallback_chain=["relay-a/gpt-4o-mini"],
+    )
+    app = create_app()
+    app.state.settings = settings
+    app.state.gate = ConcurrencyGate(2)
+    app.state.client = OllamaClient("http://ollama", transport=httpx.MockTransport(local_500))
+    app.state.upstreams = [
+        UpstreamRuntime(cfg, transport=httpx.MockTransport(_upstream_handler(200)))
+    ]
+    client = TestClient(app, raise_server_exceptions=False)
+
+    runtime = app.state.upstreams[0]
+    assert runtime.try_acquire()  # 预占唯一名额，模拟候选上游已满载
+
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"model": "qwen2.5:0.5b", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "upstream_capacity"
+    assert "X-Node-Fallback-Source" not in resp.headers
+
+    events = [l for l in logbuffer.recent(50)["lines"] if l["event"] == "fallback"]
+    assert not any("已回退到" in l["message"] for l in events)
+    assert "quasheng_fallback_total{" not in client.get("/metrics").text

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nodes.quasheng import logbuffer
-from nodes.quasheng.app import create_app
+from nodes.quasheng.app import _refresh_upstreams, create_app
 from nodes.quasheng.concurrency import ConcurrencyGate
 from nodes.quasheng.config import Secret, Settings, UpstreamModel, UpstreamSettings
 from nodes.quasheng.ollama_client import OllamaClient
@@ -497,3 +497,20 @@ def test_upstream_capacity_rejects_immediately_with_429(stream):
     assert app.state.gate.active == 0
 
     runtime.release()
+
+
+def test_refresh_upstreams_probes_concurrently():
+    """多上游探活必须并发：串行会让 health/models 随上游数量线性变慢。"""
+    state = {"active": 0, "peak": 0}
+
+    class FakeRuntime:
+        async def refresh_status(self) -> str:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+            await asyncio.sleep(0)
+            state["active"] -= 1
+            return "ready"
+
+    asyncio.run(_refresh_upstreams([FakeRuntime() for _ in range(3)]))
+    assert state["peak"] == 3
+

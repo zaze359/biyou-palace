@@ -134,6 +134,28 @@ def test_metrics_endpoint_failure_does_not_break_business(monkeypatch):
     assert resp.status_code == 200
 
 
+def test_unexpected_500_is_counted_in_http_metrics():
+    """未捕获异常返回的 500 必须进入 HTTP 指标（否则面板看不到 5xx）。"""
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("boom")
+
+    settings = Settings(node_id="m500", node_name="500 测试")
+    app = create_app()
+    app.state.settings = settings
+    app.state.gate = ConcurrencyGate(2)
+    app.state.client = OllamaClient("http://ollama", transport=httpx.MockTransport(boom))
+    app.state.upstreams = []
+    client = TestClient(app, raise_server_exceptions=False)
+
+    assert client.get("/v1/models").status_code == 500
+    text = client.get("/metrics").text
+    assert (
+        'quasheng_http_requests_total{endpoint="/v1/models",method="GET",status="500"} 1'
+        in text
+    )
+
+
 def test_logfile_writes_scrubbed_jsonl(tmp_path):
     path = tmp_path / "quasheng.log"
     logbuffer.configure("sk-secret-token", file_path=str(path), max_bytes=10_000, backup_count=2)
