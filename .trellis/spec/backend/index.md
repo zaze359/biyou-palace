@@ -40,6 +40,26 @@ This directory contains guidelines for backend development. Fill in each file wi
 - 契约新增字段必须是可选的向后兼容字段；`Contract-Version` 响应头保持 `1.0`，
   文档版本单独递增（v1.2），旧节点无需改动。
 
+### 准圣节点（nodes/quasheng）健壮性约定
+
+- **流式清理与名额归还分离**：关闭上游流（`AsyncExitStack.aclose()`）可能抛异常，
+  必须先释放并发名额再处理关闭结果；所有流式失败分支统一走 `_close_stream()`，
+  禁止先 `aclose()` 后 `release()` 的裸顺序（否则关闭失败会永久泄漏名额，最终全站 429）。
+- **回退成功标记只对 2xx 生效**：候选返回 `429 upstream_capacity` 等非 2xx 时，
+  不得附加 `X-Node-Fallback-*`、写“已回退到”日志或累加 `quasheng_fallback_total`。
+- **多上游探测必须并发**：`/v1/health`、`/v1/models` 使用 `_refresh_upstreams()` 并发探活，
+  串行探测会让耗时随上游数量线性增长（单个超时上限 2s）。
+- **5xx 必须进入指标**：`ServerErrorMiddleware` 生成的 500 不经过用户中间件，
+  需在 `handle_unexpected` 内补记 `metrics.observe_http(..., 500)`。
+- **CLI 异常边界**：REPL 与 `--once` 遇到节点不可达/非 JSON 响应只打印可读错误并返回失败，
+  不得把 `httpx.HTTPError` 抛给用户。
+
+### 观测数据的一致性
+
+- 日志事件（`/v1/logs`）、Prometheus 指标与响应头描述同一事实时必须一致：
+  成功态标记不能出现在失败响应上，失败也不应被记成成功。
+
+
 ---
 
 ## How to Fill These Guidelines
