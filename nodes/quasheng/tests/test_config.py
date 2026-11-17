@@ -79,6 +79,17 @@ def test_env_host_override_applies(tmp_path, monkeypatch):
     assert settings.auth_enabled is True
 
 
+def test_invalid_numeric_env_override_is_config_error(tmp_path, monkeypatch):
+    """数值型环境变量非法时必须抛 ConfigError 并点名变量，而不是裸 ValueError。"""
+    path = _write_config(tmp_path, "")
+    monkeypatch.setenv("QUASHENG_CONFIG", path)
+    monkeypatch.setenv("QUASHENG_PORT", "abc")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings()
+    assert "QUASHENG_PORT" in str(excinfo.value)
+
+
 def test_example_config_uses_loopback_and_real_model_tags():
     raw = yaml.safe_load(_EXAMPLE.read_text(encoding="utf-8"))
     assert raw["host"] == "127.0.0.1"

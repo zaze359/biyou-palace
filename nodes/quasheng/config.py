@@ -558,7 +558,12 @@ def load_settings(path: str | Path | None = None) -> Settings:
     for env_key, (attr, cast) in _ENV_OVERRIDES.items():
         val = os.environ.get(env_key)
         if val:
-            setattr(settings, attr, cast(val))
+            try:
+                setattr(settings, attr, cast(val))
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"环境变量 {env_key}={val!r} 无法解析为 {cast.__name__}"
+                ) from exc
 
     # 未显式声明 auth_enabled 时：配了 token 就自动开启
     if "auth_enabled" not in raw and settings.shared_token:
