@@ -144,3 +144,51 @@ def test_once_mode_returns_nonzero_on_error(monkeypatch):
     with pytest.raises(SystemExit) as excinfo:
         cli.main()
     assert excinfo.value.code == 1
+
+
+def test_stream_chat_reports_connection_error(capsys):
+    """节点不可达时打印可读错误并返回失败，不向上抛异常。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    ok, reply = cli._stream_chat(
+        "http://node",
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        transport=httpx.MockTransport(handler),
+    )
+    assert ok is False
+    assert reply == ""
+    assert "请求节点失败" in capsys.readouterr().out
+
+
+def test_list_models_rejects_non_json_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>not json</html>")
+
+    with pytest.raises(cli.CliHTTPError) as excinfo:
+        cli._list_model_ids("http://node", None, transport=httpx.MockTransport(handler))
+    assert "非 JSON" in str(excinfo.value)
+
+
+def test_repl_survives_connection_error(monkeypatch, capsys):
+    """单轮失败不能让 REPL 崩溃，且该轮 user 消息要回滚。"""
+
+    calls: list[list[dict]] = []
+
+    def fake_stream(base, token, model, messages, *, transport=None):
+        calls.append(list(messages))
+        return (False, "") if len(calls) == 1 else (True, "ok")
+
+    monkeypatch.setattr(cli, "_stream_chat", fake_stream)
+    inputs = iter(["first", "second", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda *_: next(inputs))
+
+    cli.run_repl("http://node", None, "m")
+
+    assert calls[0] == [{"role": "user", "content": "first"}]
+    # 失败轮次被回滚：第二轮只带自己的 user 消息
+    assert calls[1] == [{"role": "user", "content": "second"}]
+

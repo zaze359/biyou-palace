@@ -62,8 +62,16 @@ def _list_model_ids(base: str, token: str | None, *, transport=None) -> list[str
         resp = client.get(f"{base}/v1/models", headers=_headers(token))
     if resp.status_code >= 400:
         raise CliHTTPError(_format_error(resp.status_code, resp.content))
-    data = resp.json().get("data") or []
-    return [str(item["id"]) for item in data if isinstance(item, dict) and item.get("id")]
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise CliHTTPError("节点 /v1/models 返回了非 JSON 响应") from exc
+    data = payload.get("data") if isinstance(payload, dict) else None
+    return [
+        str(item["id"])
+        for item in (data or [])
+        if isinstance(item, dict) and item.get("id")
+    ]
 
 
 def _pick_model(
@@ -92,34 +100,39 @@ def _stream_chat(
     """
     payload = {"model": model, "messages": list(messages), "stream": True}
     parts: list[str] = []
-    with httpx.Client(transport=transport, timeout=None, trust_env=False) as client:
-        with client.stream(
-            "POST",
-            f"{base}/v1/chat/completions",
-            json=payload,
-            headers=_headers(token),
-        ) as resp:
-            if resp.status_code >= 400:
-                resp.read()
-                print(_format_error(resp.status_code, resp.content))
-                return False, ""
+    try:
+        with httpx.Client(transport=transport, timeout=None, trust_env=False) as client:
+            with client.stream(
+                "POST",
+                f"{base}/v1/chat/completions",
+                json=payload,
+                headers=_headers(token),
+            ) as resp:
+                if resp.status_code >= 400:
+                    resp.read()
+                    print(_format_error(resp.status_code, resp.content))
+                    return False, ""
 
-            for line in resp.iter_lines():
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
-                content = delta.get("content")
-                # delta.content 可能为 None（角色/结束标记 chunk），必须做保护
-                if content:
-                    parts.append(str(content))
-                    print(content, end="", flush=True)
+                for line in resp.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                    content = delta.get("content")
+                    # delta.content 可能为 None（角色/结束标记 chunk），必须做保护
+                    if content:
+                        parts.append(str(content))
+                        print(content, end="", flush=True)
+    except httpx.HTTPError as exc:
+        # 节点不可达 / 连接中断：REPL 与 --once 都要给出可读错误，而不是抛栈退出
+        print(f"请求节点失败：{exc}")
+        return False, ""
     print()
     return True, "".join(parts)
 
@@ -164,7 +177,7 @@ def run_repl(
                 try:
                     ids = _list_model_ids(base, token, transport=transport)
                     print("可用模型：" + (", ".join(ids) or "（无）") + "\n")
-                except CliHTTPError as exc:
+                except (CliHTTPError, httpx.HTTPError) as exc:
                     print(str(exc))
             continue
 
