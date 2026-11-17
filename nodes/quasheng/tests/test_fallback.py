@@ -24,6 +24,7 @@ from nodes.quasheng.config import (
     UpstreamSettings,
 )
 from nodes.quasheng.ollama_client import OllamaClient
+from nodes.quasheng.registry import RegistryRouteClient
 from nodes.quasheng.upstream import UpstreamRuntime
 
 SECRET = "sk-fallback-super-secret-do-not-leak"
@@ -379,18 +380,28 @@ def _registry_settings() -> RegistrySettings:
 def _registry_transport(
     candidates: list[str],
     *,
-    calls: list[dict[str, str]] | None = None,
-    status: int = 200,
+    calls: list[dict] | None = None,
+    decision_id: str = "dec-test123",
+    node_id: str = "quasheng-02",
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/zhentu/v1/candidates"
+        assert request.url.path == "/zhentu/v1/route"
+        assert request.method == "POST"
         if calls is not None:
-            calls.append(dict(request.url.params))
-        if status >= 400:
-            return httpx.Response(status, json={"error": {"code": "registry_down"}})
+            calls.append(json.loads(request.content))
+        entries = [
+            {"node_id": node_id, "model": model, "score": 0.9, "reasons": ["loaded"]}
+            for model in candidates
+        ]
         return httpx.Response(
             200,
-            json={"candidates": [{"model": model} for model in candidates]},
+            json={
+                "decision_id": decision_id,
+                "ttl_ms": 5000,
+                "selected": entries[0] if entries else None,
+                "alternates": entries[1:],
+                "rejected": [],
+            },
         )
 
     return httpx.MockTransport(handler)
@@ -449,13 +460,18 @@ def test_registry_candidates_map_to_gateway_and_filter_snapshot(monkeypatch):
     # 候选只保留 NewAPI 快照中存在的模型，并仍以 newapi/<model> 执行
     assert resp.headers["X-Node-Fallback-Source"] == "newapi/qwen2.5:0.5b"
     assert resp.headers["X-Node-Fallback-Origin"] == "registry"
+    assert resp.headers["X-Node-Route-Decision"] == "dec-test123"
     entries = logbuffer.recent(20)["lines"]
     assert any(
-        entry.get("event") == "fallback" and "候选来源 registry" in entry.get("message", "")
+        entry.get("event") == "fallback"
+        and "候选来源 registry" in entry.get("message", "")
+        and "决策 dec-test123" in entry.get("message", "")
+        and "节点 quasheng-02" in entry.get("message", "")
         for entry in entries
     )
     assert calls and calls[0]["capability"] == "chat"
-    assert calls[0]["exclude"] == "fb-node"
+    assert calls[0]["exclude_nodes"] == ["fb-node"]
+    assert calls[0]["max_candidates"] == 10
 
 
 def test_registry_query_failure_falls_back_to_static_chain(monkeypatch):
@@ -481,7 +497,7 @@ def test_registry_query_failure_falls_back_to_static_chain(monkeypatch):
     assert resp.headers["X-Node-Fallback-Origin"] == "static"
     entries = logbuffer.recent(30)["lines"]
     assert any(
-        entry.get("event") == "fallback" and "阵图候选查询失败" in entry.get("message", "")
+        entry.get("event") == "fallback" and "阵图路由查询失败" in entry.get("message", "")
         for entry in entries
     )
     assert any(
@@ -509,7 +525,7 @@ def test_registry_results_are_cached_between_requests(monkeypatch):
     assert second.status_code == 502
     assert first.json()["error"]["code"] == "fallback_exhausted"
     assert first.json()["error"]["fallback_origin"] == "registry"
-    # 10s 缓存：第二次请求不应再查阵图
+    # 成功决策缓存 5s：第二次请求不应再查阵图
     assert len(calls) == 1
 
 
@@ -585,3 +601,92 @@ def test_manual_registry_lists_filtered_candidates(monkeypatch):
     assert resp.json()["error"]["fallback_candidates"] == ["newapi/qwen2.5:0.5b"]
     assert "X-Node-Fallback-Source" not in resp.headers
     assert "X-Node-Fallback-Origin" not in resp.headers
+
+
+def test_manual_registry_keeps_decision_order(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    client = _make_app(
+        _upstream_handler(502),
+        mode="manual",
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(("gpt-4o-mini", "qwen2.5:0.5b", "qwen2.5:7b")),
+        registry_transport=_registry_transport(["qwen2.5:7b", "qwen2.5:0.5b"]),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    # selected 在前、alternates 按阵图顺序在后
+    assert resp.json()["error"]["fallback_candidates"] == [
+        "newapi/qwen2.5:7b",
+        "newapi/qwen2.5:0.5b",
+    ]
+
+
+def test_registry_route_without_decision_id_falls_back_to_static(monkeypatch):
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/zhentu/v1/route"
+        return httpx.Response(200, json={"selected": {"model": "qwen2.5:0.5b"}})
+
+    client = _make_app(
+        _upstream_handler(502),
+        mode="auto",
+        chain=["local/qwen2.5:0.5b"],
+        source="registry",
+        registry=_registry_settings(),
+        upstream_cfg=_gateway_cfg(),
+        registry_transport=httpx.MockTransport(handler),
+    )
+
+    resp = _post(client, model="newapi/gpt-4o-mini")
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Node-Fallback-Origin"] == "static"
+    assert "X-Node-Route-Decision" not in resp.headers
+    entries = logbuffer.recent(30)["lines"]
+    assert any(
+        entry.get("event") == "fallback" and "bad_json" in entry.get("message", "")
+        for entry in entries
+    )
+
+
+def test_route_client_cache_respects_ttl_ms(monkeypatch):
+    from types import SimpleNamespace
+
+    from nodes.quasheng import registry as registry_module
+
+    monkeypatch.setenv(_REGISTRY_ENV, "registry-token")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "decision_id": "dec-ttl",
+                "ttl_ms": 1000,
+                "selected": {"model": "m", "node_id": "n"},
+                "alternates": [],
+            },
+        )
+
+    settings = Settings(node_id="fb-node", registry=_registry_settings())
+    client = RegistryRouteClient(settings, transport=httpx.MockTransport(handler))
+    fake = {"now": 100.0}
+    monkeypatch.setattr(
+        registry_module, "time", SimpleNamespace(monotonic=lambda: fake["now"])
+    )
+
+    async def run():
+        first = await client.decision()
+        assert first.ttl_ms == 1000
+        assert await client.decision() == first
+        assert len(calls) == 1
+        # 阵图 TTL 只有 1s：超过后必须重新决策，不能沿用 5s 默认缓存
+        fake["now"] += 1.1
+        assert (await client.decision()).decision_id == "dec-ttl"
+        assert len(calls) == 2
+
+    asyncio.run(run())

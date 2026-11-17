@@ -12,8 +12,10 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -31,11 +33,13 @@ logger = logging.getLogger("quasheng")
 
 SnapshotBuilder = Callable[[], Awaitable[dict[str, Any]]]
 
-# 候选查询硬指标：单次最多等 300ms，结果（含失败）缓存 10s。
-# 阵图抖动只能让本次退回静态链条，不能拖慢或打断推理请求。
-CANDIDATE_QUERY_TIMEOUT_S = 0.3
-CANDIDATE_CACHE_TTL_S = 10.0
-CANDIDATE_LIMIT = 10
+# 选路决策硬指标：单次最多等 300ms；成功决策缓存 5s（对应 ttl_ms），
+# 失败缓存 10s（沿用 P2，避免阵图宕机时每个请求都多等 300ms）。
+ROUTE_QUERY_TIMEOUT_S = 0.3
+ROUTE_DECISION_CACHE_TTL_S = 5.0
+ROUTE_ERROR_CACHE_TTL_S = 10.0
+ROUTE_MAX_CANDIDATES = 10
+_SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
 
 
 class RegistryHTTPError(Exception):
@@ -299,12 +303,38 @@ class RegistryReporter:
         }
 
 
-class RegistryCandidateClient:
-    """查询阵图回退候选（`/zhentu/v1/candidates`）。
+@dataclass(frozen=True)
+class RouteDecision:
+    """一次 `/route` 决策的可用结果；失败时 error 非空、candidates 为空。"""
 
-    与注册 reporter 分开：候选查询的延迟直接落在用户请求上，因此使用
-    300ms 超时，并缓存结果（含失败）10s。任何失败都只返回空列表，由调用
-    方回退静态链条；这里绝不抛异常。
+    decision_id: str | None = None
+    candidates: tuple[tuple[str, str | None], ...] = ()
+    ttl_ms: int | None = None
+    error: str | None = None
+
+
+def _cache_ttl(decision: RouteDecision) -> float:
+    if decision.error:
+        return ROUTE_ERROR_CACHE_TTL_S
+    ttl_ms = decision.ttl_ms
+    if isinstance(ttl_ms, int) and ttl_ms > 0:
+        # 尊重阵图给的有效期：阵图调小 TTL 时不能继续用过期决策。
+        return min(ROUTE_DECISION_CACHE_TTL_S, ttl_ms / 1000)
+    return ROUTE_DECISION_CACHE_TTL_S
+
+
+def _safe_token(value: Any) -> str | None:
+    """只允许可安全放进响应头的字符，避免异常阵图注入响应头。"""
+    text = str(value or "").strip()
+    return text if _SAFE_TOKEN_RE.fullmatch(text) else None
+
+
+class RegistryRouteClient:
+    """查询阵图单跳选路决策（`POST /zhentu/v1/route`）。
+
+    与注册 reporter 分开：决策延迟直接落在用户请求上，因此使用 300ms 超时；
+    成功决策缓存 5s，失败缓存 10s。任何失败都返回空候选，由调用方回退静态
+    链条；这里绝不抛异常。
     """
 
     def __init__(
@@ -317,25 +347,25 @@ class RegistryCandidateClient:
         self._token = Secret(os.environ.get(self.cfg.token_env) or "")
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
-        self._cache: tuple[float, list[str], str | None] | None = None
+        self._cache: tuple[float, RouteDecision] | None = None
         self._lock = asyncio.Lock()
         self._last_logged_error: str | None = None
 
-    async def models(self) -> tuple[list[str], str | None]:
-        """返回 (候选模型名, 错误码)。错误码为 None 表示查询成功。"""
+    async def decision(self) -> RouteDecision:
+        """返回缓存的决策；错误码非空表示本次查询失败。"""
         now = time.monotonic()
         cached = self._cache
-        if cached is not None and now - cached[0] < CANDIDATE_CACHE_TTL_S:
-            return list(cached[1]), cached[2]
+        if cached is not None and now - cached[0] < _cache_ttl(cached[1]):
+            return cached[1]
         async with self._lock:
             # 并发请求只让一个去查阵图，其余复用刚写入的缓存
             cached = self._cache
             now = time.monotonic()
-            if cached is not None and now - cached[0] < CANDIDATE_CACHE_TTL_S:
-                return list(cached[1]), cached[2]
-            models, error = await self._fetch()
-            self._cache = (now, models, error)
-            return list(models), error
+            if cached is not None and now - cached[0] < _cache_ttl(cached[1]):
+                return cached[1]
+            result = await self._fetch()
+            self._cache = (now, result)
+            return result
 
     async def close(self) -> None:
         client = self._client
@@ -349,7 +379,7 @@ class RegistryCandidateClient:
     def _open(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(CANDIDATE_QUERY_TIMEOUT_S),
+                timeout=httpx.Timeout(ROUTE_QUERY_TIMEOUT_S),
                 headers={
                     "authorization": f"Bearer {self._token.get()}",
                     "X-Node-Id": self._node_id,
@@ -362,50 +392,76 @@ class RegistryCandidateClient:
             )
         return self._client
 
-    async def _fetch(self) -> tuple[list[str], str | None]:
+    async def _fetch(self) -> RouteDecision:
         if not self.cfg.enabled:
-            return [], "disabled"
+            return RouteDecision(error="disabled")
         if not self._token:
             self._warn("missing_token")
-            return [], "missing_token"
+            return RouteDecision(error="missing_token")
+        payload = {
+            "capability": "chat",
+            "max_candidates": ROUTE_MAX_CANDIDATES,
+            # 与 P2 的候选查询一致：不把本节点当作自己的回退
+            "exclude_nodes": [self._node_id],
+        }
         try:
-            resp = await self._open().get(
-                f"{self.cfg.base_url}/zhentu/v1/candidates",
-                params={
-                    "capability": "chat",
-                    "exclude": self._node_id,
-                    "limit": CANDIDATE_LIMIT,
-                },
+            resp = await self._open().post(
+                f"{self.cfg.base_url}/zhentu/v1/route", json=payload
             )
         except Exception as exc:  # noqa: BLE001 - 阵图失败不得影响请求
             code = type(exc).__name__
             self._warn(code)
-            return [], code
+            return RouteDecision(error=code)
         if resp.status_code >= 400:
             code = f"http_{resp.status_code}"
             self._warn(code)
-            return [], code
+            return RouteDecision(error=code)
         try:
             data = resp.json()
         except ValueError:
             self._warn("bad_json")
-            return [], "bad_json"
-        models: list[str] = []
-        for item in (data.get("candidates") if isinstance(data, dict) else None) or []:
+            return RouteDecision(error="bad_json")
+        if not isinstance(data, dict):
+            self._warn("bad_json")
+            return RouteDecision(error="bad_json")
+
+        decision_id = _safe_token(data.get("decision_id"))
+        if decision_id is None:
+            # 没有决策标识说明响应形状不对，按失败处理，避免静默吞错。
+            self._warn("bad_json")
+            return RouteDecision(error="bad_json")
+
+        alternates = data.get("alternates")
+        entries = [data.get("selected"), *(alternates if isinstance(alternates, list) else [])]
+        candidates: list[tuple[str, str | None]] = []
+        seen: set[str] = set()
+        for item in entries:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("model") or "").strip()
-            if name and name not in models:
-                models.append(name)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            candidates.append((name, _safe_token(item.get("node_id"))))
+        ttl_raw = data.get("ttl_ms")
+        ttl_ms = (
+            ttl_raw
+            if isinstance(ttl_raw, int) and not isinstance(ttl_raw, bool) and ttl_raw > 0
+            else None
+        )
         self._last_logged_error = None
-        return models, None
+        return RouteDecision(
+            decision_id=decision_id,
+            candidates=tuple(candidates),
+            ttl_ms=ttl_ms,
+        )
 
     def _warn(self, code: str) -> None:
         # 同一错误只记一次；恢复后重置，避免阵图长期宕机刷屏
         if code == self._last_logged_error:
             return
         self._last_logged_error = code
-        message = f"阵图候选查询失败（{code}），本次回退静态链条"
+        message = f"阵图路由查询失败（{code}），本次回退静态链条"
         logger.warning(message)
         logbuffer.record("WARNING", "fallback", message)
 

@@ -76,8 +76,9 @@ shutdown_timeout: 10
 # manual：不切换，仅在可回退类错误体里追加候选提示；
 # auto：按链顺序尝试，仅兜连接失败/超时/5xx，4xx 与 401/403 不兜。
 # fallback_source：static（默认，只用下面的 fallback_chain）或 registry
-# （查阵图 /zhentu/v1/candidates，只保留 newapi 上游快照中存在的模型，
-#  仍经 newapi 网关执行；查询失败/无候选时自动退回 fallback_chain）。
+# （查阵图 POST /zhentu/v1/route，按 selected/alternates 只保留 newapi 上游
+#  快照中存在的模型，仍经 newapi 网关执行；查询失败/无候选时自动退回
+#  fallback_chain）。
 # fallback_source: static
 # fallback_mode: manual
 # fallback_chain:

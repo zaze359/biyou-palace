@@ -140,8 +140,8 @@ fallback_chain:
 | `manual`（默认） | **不切换**。上游错误原样返回，仅在可回退类失败的 OpenAI 错误体里追加 `error.fallback_candidates`（调用方可见的候选 id），不包含 base_url 与密钥。 |
 | `auto` | 首次尝试失败且属于可回退类错误时，按候选顺序逐个尝试；每个候选最多一次。成功时响应头 `X-Node-Fallback-Source: <实际条目>` 标记实际服务来源，并在 `/v1/logs` 记一条 `fallback` 事件。 |
 
-- **候选来源（P2）**：`fallback_source: static`（默认）只使用 `fallback_chain`，行为与 P1 逐字段一致。`fallback_source: registry` 时，上游失败后查询阵图 `GET /zhentu/v1/candidates?capability=chat`，**只保留当前 `newapi` 上游快照中确实存在的 chat 模型**，拼成 `newapi/<model>` 候选；执行仍走 NewAPI，不做节点间直连、不绕过网关。查询超时固定 300ms、结果（含失败）缓存 10s；查询失败、无候选或候选全被上游快照过滤时，自动退回 `fallback_chain`，阵图抖动不会让请求失败。该模式要求 `registry.enabled: true`。
-- **来源可区分**：registry 模式下回退成功时额外返回 `X-Node-Fallback-Origin: registry|static`（`registry`=阵图查到的候选，`static`=退回配置链条），`/v1/logs` 的 `fallback` 事件也会标注「候选来源 registry/static」。
+- **候选来源（P3）**：`fallback_source: static`（默认）只使用 `fallback_chain`，行为与 P1 逐字段一致。`fallback_source: registry` 时，上游失败后查询阵图 `POST /zhentu/v1/route`（`capability=chat`、`max_candidates=10`、`exclude_nodes=[本节点]`），按 `selected` → `alternates` 的顺序取候选，**只保留当前 `newapi` 上游快照中确实存在的 chat 模型**，拼成 `newapi/<model>`；执行仍走 NewAPI，不做节点间直连、不绕过网关。查询超时固定 300ms；成功决策缓存 5s（对应 `ttl_ms`），失败缓存 10s；查询失败、无候选或候选全被上游快照过滤时，自动退回 `fallback_chain`，阵图抖动不会让请求失败。该模式要求 `registry.enabled: true`。
+- **来源可区分**：registry 模式下回退成功时额外返回 `X-Node-Fallback-Origin: registry|static`（`registry`=阵图决策的候选，`static`=退回配置链条），阵图决策还带 `X-Node-Route-Decision: dec-...`；`/v1/logs` 的 `fallback` 事件会标注「候选来源 registry/static · 决策 dec-... · 节点 ...」。
 - **只兜首字节前的失败**：连接失败、超时、5xx。**4xx 一律不兜**，尤其是 `401/403`（凭据/权限配置错误必须暴露，不能掩盖）；`429` 同样不兜。
 - **流式**：首字节之后上游中断，保持原行为——发一帧 SSE `error`（`upstream_stream_aborted`）并关闭，**不补 `[DONE]`**，也不回退。
 - **不重复目标**：请求原模型若也在链条里，会被跳过；同一目标只尝试一次。不可见（`visibility=local` 且来源非回环）的远程候选直接跳过，且不会出现在候选提示里。
@@ -172,6 +172,8 @@ curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
   http://127.0.0.1:4020/zhentu/v1/nodes
 curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
   "http://127.0.0.1:4020/zhentu/v1/candidates?capability=chat"
+curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"capability":"chat"}' http://127.0.0.1:4020/zhentu/v1/route
 ```
 
 - 注册 / 心跳 / 注销全部是**出站请求**；节点不新增任何入站端点，契约 v1.0 的四个端点语义不变。

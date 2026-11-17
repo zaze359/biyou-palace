@@ -48,7 +48,7 @@ from .errors import (
 )
 from .health import build_health
 from .ollama_client import OllamaClient
-from .registry import RegistryCandidateClient, RegistryReporter
+from .registry import RegistryReporter, RegistryRouteClient
 from .upstream import (
     UpstreamRuntime,
     read_upstream_error,
@@ -360,7 +360,9 @@ class _ChatTarget:
     native_model: str  # 真正发给后端的模型名
     runtime: UpstreamRuntime | None = None
     upstream_model: UpstreamModel | None = None
-    origin: str = "static"  # 候选来源：static（配置链条）| registry（阵图查询）
+    origin: str = "static"  # 候选来源：static（配置链条）| registry（阵图决策）
+    decision_id: str | None = None  # 阵图 /route 的 decision_id（仅 registry）
+    route_node_id: str | None = None  # 阵图选中的节点（仅用于审计）
 
 
 @dataclass
@@ -563,17 +565,17 @@ def _fallback_candidates(
     return targets
 
 
-def _registry_candidate_client(request: Request) -> RegistryCandidateClient | None:
-    client = getattr(request.app.state, "registry_candidates", None)
+def _registry_route_client(request: Request) -> RegistryRouteClient | None:
+    client = getattr(request.app.state, "registry_routes", None)
     if client is not None:
         return client
     settings: Settings = request.app.state.settings
     if settings.fallback_source != "registry":
         return None
-    client = RegistryCandidateClient(
+    client = RegistryRouteClient(
         settings, transport=getattr(request.app.state, "registry_transport", None)
     )
-    request.app.state.registry_candidates = client
+    request.app.state.registry_routes = client
     return client
 
 
@@ -585,23 +587,23 @@ def _gateway_runtime(request: Request) -> UpstreamRuntime | None:
 
 
 async def _registry_candidates(request: Request, first: _ChatTarget) -> list[_ChatTarget]:
-    """查阵图候选，只保留 NewAPI 快照中确实存在的 chat 模型。
+    """查阵图单跳决策，只保留 NewAPI 快照中确实存在的 chat 模型。
 
     执行仍走 NewAPI：候选统一拼成 `newapi/<model>`，不做节点间直连。
-    阵图查询失败、无候选或模型不在快照时返回空列表，由调用方退回静态链条。
+    查询失败、无候选或模型不在快照时返回空列表，由调用方退回静态链条。
     """
     runtime = _gateway_runtime(request)
-    client = _registry_candidate_client(request)
+    client = _registry_route_client(request)
     if runtime is None or client is None:
         return []
     if not _remote_visible(request, runtime.cfg):
         return []
-    models, _error = await client.models()
-    if not models:
+    decision = await client.decision()
+    if not decision.candidates:
         return []
     seen = {(first.kind, first.native_model)}
     targets: list[_ChatTarget] = []
-    for name in models:
+    for name, node_id in decision.candidates:
         model = runtime.model_for(name)
         if model is None or "chat" not in model.capabilities:
             continue  # 阵图有、但 NewAPI 上游快照没有：丢弃
@@ -617,9 +619,21 @@ async def _registry_candidates(request: Request, first: _ChatTarget) -> list[_Ch
                 runtime=runtime,
                 upstream_model=model,
                 origin="registry",
+                decision_id=decision.decision_id,
+                route_node_id=node_id,
             )
         )
     return targets
+
+
+def _candidate_detail(target: _ChatTarget) -> str:
+    """registry 模式的审计后缀：来源 + 决策 + 节点，不含 endpoint/凭据。"""
+    parts = [f"候选来源 {target.origin}"]
+    if target.decision_id:
+        parts.append(f"决策 {target.decision_id}")
+    if target.route_node_id:
+        parts.append(f"节点 {target.route_node_id}")
+    return "（" + " · ".join(parts) + "）"
 
 
 async def _candidate_targets(
@@ -665,10 +679,12 @@ async def _run_auto_fallback(
                 result.headers["X-Node-Fallback-Source"] = target.entry
                 if settings.fallback_source == "registry":
                     result.headers["X-Node-Fallback-Origin"] = target.origin
+                    if target.decision_id:
+                        result.headers["X-Node-Route-Decision"] = target.decision_id
                 metrics.fallback_result(first.entry, target.entry)
                 reason = attempted[0]["reason"] if attempted else "unknown"
                 suffix = (
-                    f"（候选来源 {target.origin}）"
+                    _candidate_detail(target)
                     if settings.fallback_source == "registry"
                     else ""
                 )
@@ -703,7 +719,7 @@ async def _run_auto_fallback(
     status = attempted[-1]["status"] if attempted and attempted[-1]["status"] >= 500 else 502
     detail = "；".join(f"{item['model']}（{item['reason']}）" for item in attempted)
     suffix = (
-        f"（候选来源 {candidates[0].origin}）"
+        _candidate_detail(candidates[0])
         if settings.fallback_source == "registry" and candidates
         else ""
     )
@@ -1174,9 +1190,9 @@ async def lifespan(app: FastAPI):
     app.state.registry = reporter
     app.state.registry_task = reporter.start()
 
-    # 回退候选查询客户端：仅在 registry 模式启用；查询超时/缓存见 registry.py
+    # 选路决策客户端：仅在 registry 模式启用；超时/缓存见 registry.py
     if settings.fallback_source == "registry":
-        app.state.registry_candidates = RegistryCandidateClient(
+        app.state.registry_routes = RegistryRouteClient(
             settings, transport=getattr(app.state, "registry_transport", None)
         )
         gateway = next(
@@ -1254,9 +1270,9 @@ async def lifespan(app: FastAPI):
         if reporter is not None:
             # 停机注销最多等 1s，不拖长 shutdown_timeout
             await reporter.stop()
-        candidate_client = getattr(app.state, "registry_candidates", None)
-        if candidate_client is not None:
-            await candidate_client.close()
+        route_client = getattr(app.state, "registry_routes", None)
+        if route_client is not None:
+            await route_client.close()
         drained = await app.state.gate.wait_idle(settings.shutdown_timeout)
         if drained:
             logger.info("在途请求已清空，节点退出")
