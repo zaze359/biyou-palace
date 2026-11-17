@@ -5,8 +5,11 @@
 """
 from __future__ import annotations
 
+import logging
 import secrets
+import sqlite3
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable
@@ -23,12 +26,16 @@ from .models import (
     HeartbeatRequest,
     NodeStatus,
     RegisterRequest,
+    RouteRequest,
     capability_union,
     models_revision,
     normalize_capability,
     ttl_for,
 )
+from .route import MAX_ALLOWED_MODELS, STRATEGIES, RouteQuery, bare_model, decide
 from .store import RegistryStore
+
+logger = logging.getLogger("zhentu")
 
 _MAX_LIMIT = 500
 _NODE_STATUSES = {"ready", "loading", "degraded", "down"}
@@ -486,6 +493,93 @@ def create_app(
             "capability": capability,
             "candidates": [item for _, item in scored[:capped]],
         }
+
+    # ---------------------------------------------------------------- 编排
+
+    @app.post("/zhentu/v1/route", dependencies=[Depends(require_auth)])
+    async def route_decision(request: Request, body: RouteRequest):
+        """单跳选路：只返回决策，不代理请求、不持有任何凭据。"""
+        try:
+            capability = normalize_capability(body.capability)
+        except ValueError as exc:
+            raise RegistryError(400, "invalid_capability", str(exc)) from None
+        if body.strategy not in STRATEGIES:
+            raise RegistryError(
+                400, "invalid_strategy", f"strategy 只能是 {list(STRATEGIES)}"
+            )
+        if body.allowed_models is not None and len(body.allowed_models) > MAX_ALLOWED_MODELS:
+            raise RegistryError(
+                400,
+                "too_many_models",
+                f"allowed_models 最多 {MAX_ALLOWED_MODELS} 项",
+            )
+
+        query = RouteQuery(
+            capability=capability,
+            model=body.model,
+            context_len=body.context_len,
+            strategy=body.strategy,
+            max_candidates=body.max_candidates,
+            exclude_nodes=frozenset(
+                item.strip() for item in body.exclude_nodes if item.strip()
+            ),
+            exclude_models=frozenset(
+                bare_model(item) for item in body.exclude_models if item.strip()
+            ),
+            allowed_models=(
+                frozenset(bare_model(item) for item in body.allowed_models if item.strip())
+                if body.allowed_models
+                else None
+            ),
+            allow_loading=body.allow_loading,
+            allow_shedding=body.allow_shedding,
+        )
+
+        now_ms = request.app.state.clock()
+        try:
+            rows = list(request.app.state.store.list_all())
+        except sqlite3.Error as exc:
+            raise RegistryError(
+                503,
+                "registry_unavailable",
+                "注册表存储不可用，暂无法给出路由决策",
+                type_="server_error",
+            ) from exc
+        started = time.perf_counter()
+        decision = decide(
+            ((row, _node_view(row, now_ms)) for row in rows),
+            query,
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        decision_id = "dec-" + uuid.uuid4().hex[:16]
+        selected = decision.selected
+        logger.info(
+            "route %s capability=%s strategy=%s selected=%s score=%s alternates=%d "
+            "rejected=%d elapsed_ms=%.2f",
+            decision_id,
+            capability,
+            body.strategy,
+            f"{selected['node_id']}/{selected['model']}" if selected else "-",
+            f"{selected['score']:.4f}" if selected else "-",
+            len(decision.alternates),
+            len(decision.rejected),
+            elapsed_ms,
+        )
+
+        payload: dict[str, Any] = {
+            "registry_version": REGISTRY_VERSION,
+            "server_time": _iso(now_ms),
+            "decision_id": decision_id,
+            "decided_at": _iso(now_ms),
+            "ttl_ms": cfg.route_ttl_ms,
+            "strategy": body.strategy,
+            "selected": selected,
+            "alternates": decision.alternates,
+            "rejected": decision.rejected,
+        }
+        if decision.reason:
+            payload["reason"] = decision.reason
+        return payload
 
     return app
 

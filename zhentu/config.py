@@ -13,6 +13,7 @@ DEFAULT_PORT = 4020
 DEFAULT_DB = Path(__file__).parent / "data" / "registry.db"
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
 DEFAULT_TTL_MAX_S = 600
+DEFAULT_ROUTE_TTL_MS = 5000
 
 
 class ConfigError(ValueError):
@@ -60,6 +61,7 @@ class RegistrySettings:
     token_env: str = TOKEN_ENV
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
     ttl_max_s: int = DEFAULT_TTL_MAX_S
+    route_ttl_ms: int = DEFAULT_ROUTE_TTL_MS
     started_ms: int = field(default=0)
 
     def validate(self) -> None:
@@ -67,6 +69,8 @@ class RegistrySettings:
             raise ConfigError(f"ZHENTU_PORT={self.port} 非法：必须在 1..65535")
         if self.max_body_bytes < 1024:
             raise ConfigError("ZHENTU_MAX_BODY_BYTES 不能小于 1024")
+        if self.route_ttl_ms <= 0:
+            raise ConfigError("ZHENTU_ROUTE_TTL_MS 必须大于 0")
         if not is_loopback(self.host) and not self.token:
             raise ConfigError(
                 f"监听地址 host={self.host!r} 不是回环地址，但 {self.token_env} 为空。"
@@ -85,4 +89,5 @@ def load_settings() -> RegistrySettings:
         token_env=TOKEN_ENV,
         max_body_bytes=int(os.environ.get("ZHENTU_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)),
         ttl_max_s=int(os.environ.get("ZHENTU_TTL_MAX_S", DEFAULT_TTL_MAX_S)),
+        route_ttl_ms=int(os.environ.get("ZHENTU_ROUTE_TTL_MS", DEFAULT_ROUTE_TTL_MS)),
     )

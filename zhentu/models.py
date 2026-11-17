@@ -169,6 +169,49 @@ class DeregisterRequest(BaseModel):
     boot_id: str
 
 
+class RouteRequest(BaseModel):
+    """单跳选路请求；字段全部可选，默认只按 chat 能力做一次决策。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    capability: str = "chat"
+    model: str | None = None
+    context_len: int | None = None
+    strategy: str = "balanced"
+    max_candidates: int = 3
+    exclude_nodes: list[str] = Field(default_factory=list)
+    exclude_models: list[str] = Field(default_factory=list)
+    allowed_models: list[str] | None = None
+    allow_loading: bool = False
+    allow_shedding: bool = False
+    request_id: str | None = None
+
+    @field_validator("model")
+    @classmethod
+    def _strip_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("context_len")
+    @classmethod
+    def _check_context_len(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("context_len 必须大于 0")
+        return value
+
+    @field_validator("max_candidates")
+    @classmethod
+    def _check_max_candidates(cls, value: int) -> int:
+        return max(1, min(int(value), 10))
+
+    @field_validator("strategy")
+    @classmethod
+    def _strip_strategy(cls, value: str) -> str:
+        return str(value or "").strip().lower()
+
+
 def models_revision(models: Sequence[ModelEntry]) -> str:
     """模型/能力集合的稳定摘要；loaded 不参与（心跳里单独上报）。
 
