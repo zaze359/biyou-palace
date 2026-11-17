@@ -33,6 +33,7 @@ bash scripts/run_zhentu.sh
 | GET | `/zhentu/v1/capabilities` | Bearer | 按能力聚合在线节点与模型 |
 | GET | `/zhentu/v1/candidates` | Bearer | 按能力/模型返回回退候选 |
 | POST | `/zhentu/v1/route` | Bearer | 单跳选路决策：`selected` + `alternates` + `rejected` |
+| GET | `/zhentu/v1/metrics` | Bearer | Prometheus 文本指标（进程内，重启归零） |
 
 ```bash
 TOKEN='<cluster-token>'
@@ -66,12 +67,25 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 硬过滤：租约非 `online`、`status=down`、能力/模型不匹配、上下文不足、显式排除、
 `thermal_shedding=true`、并发上限显式为 0。软评分：负载 0.35、新鲜度 0.15、
 已加载 0.20、热状态 0.15、角色 0.10、余量 0.05；`degraded` 乘 0.85、`loading`
-乘 0.70。缺字段取中性值或保守估算并在 `reasons` 标注，不会 500。
+乘 0.70。缺字段取中性值或保守估算并在 `reasons` 标注，不会 500。散仙自契约 v1.2
+起上报真实 `resources.active`；缺失时按 `queue_len` 估算并标 `estimated_load`。
 
 排序固定为 `score` 降序 → `queue_len` 升序 → `last_seen` 降序 → `node_id` → `model`，
 同一输入多次调用结果一致。无候选返回 200 + `selected=null` + `reason=no_route`
 （不是 5xx）；参数错误返回 `invalid_capability` / `invalid_strategy` / `too_many_models`，
 存储不可用时返回 503 `registry_unavailable`。
+
+## 指标
+
+`GET /zhentu/v1/metrics` 输出 Prometheus 文本格式，沿用 Bearer 鉴权，不新增鉴权例外：
+
+| 指标 | 说明 |
+|---|---|
+| `zhentu_route_total{strategy,result}` | 决策总数，`result=selected\|no_route` |
+| `zhentu_route_rejected_total{reason}` | 被拒候选数，按原因码累计 |
+| `zhentu_route_duration_seconds` | 决策耗时直方图（1ms ~ 2.5s，含 `+Inf`） |
+
+指标只保存在进程内、重启归零；刻意不记录 `node_id` / `model` 标签，避免高基数与拓扑泄漏。
 
 ## 租约
 

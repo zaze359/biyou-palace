@@ -223,8 +223,9 @@ def _candidate(
         queue_len = 0.0
     active = _number(resources.get("active"))
     if active is None:
-        # 散仙当前只上报 queue_len：按 queue_len 估算在途并发。
-        active = queue_len
+        # 契约 v1.1 节点可能把在途并发放在 queue_len 里：退回按 queue_len 估算，
+        # 且不能再与 queue_len 相加，否则在途数会被重复计数。
+        active = 0.0
         estimated = True
 
     effective = _number(limits.get("effective_max_concurrency"))

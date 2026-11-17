@@ -16,10 +16,11 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import REGISTRY_VERSION, ConfigError, RegistrySettings, load_settings
+from .metrics import RouteMetrics
 from .models import (
     CANONICAL_CAPABILITIES,
     DeregisterRequest,
@@ -177,6 +178,7 @@ def create_app(
     app.state.settings = cfg
     app.state.store = store
     app.state.clock = now
+    app.state.route_metrics = RouteMetrics()
 
     async def require_auth(
         request: Request,
@@ -565,6 +567,12 @@ def create_app(
             len(decision.rejected),
             elapsed_ms,
         )
+        request.app.state.route_metrics.observe(
+            strategy=body.strategy,
+            selected=selected is not None,
+            rejected=decision.rejected,
+            duration_s=elapsed_ms / 1000,
+        )
 
         payload: dict[str, Any] = {
             "registry_version": REGISTRY_VERSION,
@@ -580,6 +588,14 @@ def create_app(
         if decision.reason:
             payload["reason"] = decision.reason
         return payload
+
+    @app.get("/zhentu/v1/metrics", dependencies=[Depends(require_auth)])
+    async def metrics_endpoint(request: Request):
+        """Prometheus 文本指标；与其它 /v1 端点一样要求 Bearer 鉴权。"""
+        return PlainTextResponse(
+            request.app.state.route_metrics.render(),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     return app
 

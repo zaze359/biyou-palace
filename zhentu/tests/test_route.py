@@ -224,6 +224,36 @@ def test_route_missing_resources_and_limits_still_decides(ctx):
     assert "cold" in selected["reasons"]
 
 
+def test_route_missing_active_falls_back_without_double_counting(ctx):
+    """v1.2：in_flight = active + queue_len；旧节点缺 active 时按 queue_len 估算，不得重复相加。"""
+    client, _ = ctx
+    limits = {"max_concurrency": 10}
+    _register(
+        client,
+        node_id="modern-01",
+        resources={"queue_len": 0, "active": 2},
+        limits=limits,
+    )
+    _register(
+        client,
+        node_id="legacy-01",
+        resources={"queue_len": 2},
+        limits=limits,
+    )
+
+    data = _route(client).json()
+    entries = {
+        item["node_id"]: item
+        for item in [data["selected"], *data["alternates"]]
+        if item is not None
+    }
+
+    assert set(entries) == {"modern-01", "legacy-01"}
+    assert entries["modern-01"]["score"] == entries["legacy-01"]["score"]
+    assert "estimated_load" in entries["legacy-01"]["reasons"]
+    assert "estimated_load" not in entries["modern-01"]["reasons"]
+
+
 def test_route_thermal_shedding_and_limit_zero(ctx):
     client, _ = ctx
     _register(client, models=[_chat_model("shedding", loaded=True)])
