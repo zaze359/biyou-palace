@@ -3,7 +3,7 @@
   "name": "sanxian-vision",
   "title": "散仙视觉 / OCR 能力接入",
   "description": "在散仙节点接入 llama.cpp mtmd：Qwen2.5-VL-3B + mmproj，OpenAI 兼容 content 数组承载图像，独立视觉引擎与能力分流；真机跑通图像理解/OCR，完成 1024/512/256 三档调参并定默认 512。",
-  "status": "done",
+  "status": "completed",
   "dev_type": "feature",
   "scope": "nodes/sanxian",
   "package": null,
@@ -11,8 +11,8 @@
   "creator": "zaze",
   "assignee": "zaze",
   "createdAt": "2026-11-13",
-  "completedAt": "2026-11-13",
-  "branch": "main",
+  "completedAt": "2026-11-19",
+  "branch": "null",
   "base_branch": "main",
   "worktree_path": null,
   "commit": "d38f1b1bfa292f6133440b348f8bac3e5cd20953",
@@ -43,7 +43,9 @@
         "nodes/sanxian/shared/src/commonMain/kotlin/com/biyou/sanxian/contract/Models.kt"
       ],
       "acceptance": "content 兼容字符串与数组；图像加载/缩放/体积校验；未声明能力 501、未加载 503、超限 400",
-      "depends_on": ["V1"],
+      "depends_on": [
+        "V1"
+      ],
       "parallel": false,
       "size": "M"
     },
@@ -60,7 +62,9 @@
         "nodes/sanxian/README.md"
       ],
       "acceptance": "vision/ocr 能力在 health/models 真实声明；vision_image_max_tokens 默认 512 三处对齐；README 含配置与实测",
-      "depends_on": ["V2"],
+      "depends_on": [
+        "V2"
+      ],
       "parallel": false,
       "size": "M"
     },
@@ -75,7 +79,9 @@
         "nodes/sanxian/shared/src/commonTest/kotlin/com/biyou/sanxian/contract/ChatContentTest.kt"
       ],
       "acceptance": "真机图像理解/OCR 跑通；修复 UTF-8 截断 SIGABRT 与缺失权重 501；三档×三次调参并记录耗时、内存、温度与漏读",
-      "depends_on": ["V3"],
+      "depends_on": [
+        "V3"
+      ],
       "parallel": false,
       "size": "L"
     },
@@ -88,7 +94,9 @@
         "nodes/sanxian/shared/src/commonMain/kotlin/com/biyou/sanxian/llm/VisionConfig.kt"
       ],
       "acceptance": "已完成线程数 4/6/8、连续请求升温、Q8_0 mmproj 三组测量；结论为收益不足，暂停继续投入，数据留档",
-      "depends_on": ["V4"],
+      "depends_on": [
+        "V4"
+      ],
       "parallel": false,
       "size": "M"
     }
