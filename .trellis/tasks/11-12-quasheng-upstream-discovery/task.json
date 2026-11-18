@@ -92,4 +92,3 @@
     "realChecks": "真实 NewAPI：白名单 2 项 ∩ 上游 2 个模型 → 对外 1 个；health 暴露 discover/last_discovery_at/discovery_error；死端口场景启动不阻塞、快照保留白名单、错误 upstream_unavailable；日志与响应无 key/base_url"
   }
 }
-}

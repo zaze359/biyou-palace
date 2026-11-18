@@ -91,4 +91,3 @@
     "realChecks": "真实本机 Ollama：auto 下 dead 上游连接失败 → local/qwen2.5:0.5b 返回 200，X-Node-Fallback-Source 正确，/v1/logs 有 fallback 事件；manual 下同场景 503 + fallback_candidates=['local/qwen2.5:0.5b']；链条引用 local/not-installed 启动退出 3 并点名；日志/响应无上游 base_url"
   }
 }
-}

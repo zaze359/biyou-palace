@@ -59,4 +59,3 @@
     "realChecks": "本地 chat/流式/embeddings 后 /metrics 200，包含 model/duration/first_byte/gate/upstream 指标；events.jsonl 正常落盘；key 与上游地址在指标和日志中命中 0"
   }
 }
-}

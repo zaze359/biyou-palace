@@ -87,4 +87,3 @@
     "realChecks": "本机 Ollama 0.40.11：list 成功、unload 成功、unload 不存在模型 404 非零、delete 非交互拒绝非零；pull 因沙箱网络拒绝 registry 重定向而退出 1（错误可读，非 CLI 缺陷）"
   }
 }
-}
