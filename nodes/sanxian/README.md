@@ -2,7 +2,7 @@
 
 把一台手机变成 **自治双模单元**：本地用 llama.cpp 跑轻量模型，对外暴露与准圣（PC/Ollama）**完全一致**的 OpenAI 兼容服务，同时 App 保留本地聊天能力。
 
-协议基准：[`docs/node-agent-contract.md`](../../docs/node-agent-contract.md) v1.0 ｜ 实施细化：[`../.trellis/tasks/10-14-sanxian-node-agent/implement.md`](../.trellis/tasks/10-14-sanxian-node-agent/implement.md) ｜ 参照样板：准圣（[`../nodes/quasheng`](../nodes/quasheng)）
+协议基准：[`docs/node-agent-contract.md`](../../docs/node-agent-contract.md) v1.0 ｜ 实施细化：[`.trellis/tasks/archive/2026-11/10-14-sanxian-node-agent/implement.md`](../../.trellis/tasks/archive/2026-11/10-14-sanxian-node-agent/implement.md) ｜ 参照样板：准圣（[`../nodes/quasheng`](../nodes/quasheng)）
 
 > **本目录现已自包含**：散仙 底座（KMP 骨架、llama.cpp JNI、`LlmEngine`、`ModelDownload`、Compose 聊天 UI）已于 2026-10-18 **完整并入本目录**（`shared/`、`composeApp/`、`nativelib/` 即底座本体，`com.biyou.sanxian` 增量源码并存），不再依赖外部 散仙 仓库，也无运行时 patch 步骤。本目录下的 `com.biyou.sanxian` 包为散仙节点智能体新增源码；构建集成细节与已落地的补丁见 [`NATIVE_INTEGRATION.md`](./NATIVE_INTEGRATION.md)。
 
