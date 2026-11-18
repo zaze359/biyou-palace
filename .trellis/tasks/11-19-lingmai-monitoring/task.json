@@ -1,0 +1,31 @@
+{
+  "id": "lingmai-monitoring",
+  "name": "lingmai-monitoring",
+  "title": "灵脉监控接入（Prometheus + Grafana）",
+  "description": "为散仙补 Prometheus /metrics，新增 monitoring/ 编排（Prometheus + Grafana + 告警），接入准圣/散仙/阵图三源，产出第一版灵脉看板与真机验收记录；不改变节点入站契约与既有端点形状",
+  "status": "in_progress",
+  "dev_type": "feature",
+  "scope": "nodes/sanxian,monitoring,docs",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-19",
+  "completedAt": null,
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-13-biyou-v1-blueprint",
+  "relatedFiles": [
+    "docs/node-agent-contract.md",
+    "nodes/sanxian/shared/src/androidMain/kotlin/com/biyou/sanxian/node/NodeApi.kt",
+    "nodes/quasheng/metrics.py",
+    "zhentu/metrics.py"
+  ],
+  "notes": "",
+  "meta": {}
+}

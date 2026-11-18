@@ -237,7 +237,9 @@ curl -N -X POST http://127.0.0.1:4011/v1/chat/completions \
 biyou-palace/
 ├── start.sh                       # 节点统一启动入口（菜单 / 无交互）
 ├── docs/
-│   └── node-agent-contract.md     # 节点智能体统一契约 v1.0（协议基准）
+│   └── node-agent-contract.md     # 节点智能体统一契约 v1.2（协议基准）
+├── monitoring/                    # 灵脉：Prometheus + Grafana 编排与看板
+├── zhentu/                        # 阵图：注册表 / 选路 / 指标（旁路控制面）
 ├── nodes/
 │   ├── quasheng/                  # 准圣节点（PC · Python + Ollama）
 │   │   ├── app.py                 # FastAPI 装配（薄代理 + 契约专属表面）
@@ -258,17 +260,40 @@ biyou-palace/
 
 ---
 
-## 八、已知限制
+## 八、灵脉：集群监控（Prometheus + Grafana）
+
+准圣、散仙、阵图各自暴露 Prometheus 文本指标，`monitoring/` 提供一键编排：
+
+```bash
+cd monitoring
+printf '%s' "$ZHENTU_REGISTRY_TOKEN" > prometheus/zhentu_token   # 阵图 Bearer
+docker compose up -d
+# Prometheus http://127.0.0.1:9090   Grafana http://127.0.0.1:3001（看板「灵脉 · 碧游宫集群」）
+```
+
+| 源 | 端点 |
+|---|---|
+| 准圣 | `GET /metrics`（鉴权策略与节点一致） |
+| 散仙 | `GET /metrics`（同上；`adb forward` 后用本机端口抓取） |
+| 阵图 | `GET /zhentu/v1/metrics`（Bearer，与注册用同一 token） |
+
+`/metrics` 属运维端点，**不属于 `/v1` 契约**：不改响应头、不改既有响应形状、不占用并发名额。
+指标清单、抓取地址改法、6 条告警规则见 [`monitoring/README.md`](monitoring/README.md)。
+
+---
+
+## 九、已知限制
 
 - **准圣 `/v1/models` 的 `owned_by`（已对齐契约）**：节点将每项 `owned_by` 统一改写为契约值 `biyou-node`，其余字段原样透传。
 - **准圣 `show()` 未实现**：无调用方，模型详情与能力来自 `/api/tags` + `capabilities_map`。
 - **散仙 `embeddings` 真实向量化（已落地）**：Plan A chat/embedding 双句柄 + JNI `embed` 桥，pooling 跟随模型元数据；未配置 `embedding_model` 或 embedding 句柄加载失败时返回 `503`，能力未声明时返回 `501`。
-- 散仙本地聊天 UI 走 localhost 同端点：⚠️ 待改（见 `NATIVE_INTEGRATION.md` 本地模式一节）。
+- 散仙本地聊天 UI 走 localhost 同端点：已完成（`NodeChatClient` 请求 `http://127.0.0.1:<port>/v1/chat/completions`，与集群消费同一路径；见 `NATIVE_INTEGRATION.md` §7）。
 
 ---
 
-## 九、参考文档
+## 十、参考文档
 
 - 协议基准：[`docs/node-agent-contract.md`](docs/node-agent-contract.md)
+- 灵脉监控：[`monitoring/README.md`](monitoring/README.md)
 - 准圣节点：[`nodes/quasheng/README.md`](nodes/quasheng/README.md)
 - 散仙节点：[`nodes/sanxian/README.md`](nodes/sanxian/README.md) · [`NATIVE_INTEGRATION.md`](nodes/sanxian/NATIVE_INTEGRATION.md)

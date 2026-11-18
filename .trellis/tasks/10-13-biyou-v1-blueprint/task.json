@@ -20,7 +20,8 @@
   "subtasks": [],
   "children": [
     "10-14-quasheng-node-agent",
-    "10-14-sanxian-node-agent"
+    "10-14-sanxian-node-agent",
+    "11-19-lingmai-monitoring"
   ],
   "parent": null,
   "relatedFiles": [

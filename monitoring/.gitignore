@@ -1,0 +1,5 @@
+# 阵图 Bearer token（本机生成，禁止入库）
+prometheus/zhentu_token
+
+# Prometheus / Grafana 本地运行数据（用 docker volume 时不会出现在这里）
+prometheus/data/

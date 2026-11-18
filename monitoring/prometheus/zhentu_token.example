@@ -1,0 +1,1 @@
+在此写入与 ZHENTU_REGISTRY_TOKEN 完全一致的 token（printf '%s' "$ZHENTU_REGISTRY_TOKEN" > prometheus/zhentu_token）

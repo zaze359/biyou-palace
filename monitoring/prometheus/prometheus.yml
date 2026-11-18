@@ -1,0 +1,63 @@
+# 灵脉 · Prometheus 抓取配置
+#
+# 三个源：
+#   quasheng  PC 节点       http://<host>:4010/metrics        （免鉴权）
+#   sanxian   安卓节点       http://<host>:14011/metrics      （adb forward 的本机口）
+#   zhentu    阵图注册表     http://<host>:4020/zhentu/v1/metrics（Bearer 鉴权）
+#
+# 宿主机地址：
+#   - Docker Desktop（macOS/Windows）用 host.docker.internal
+#   - Linux 上把 extra_hosts 的 host-gateway 映射去掉，直接用宿主机内网 IP
+#
+# 设备 IP 会变（安卓真机）：最稳的做法是 `adb forward tcp:14011 tcp:4011`
+# （端口以设备上 sanxian.json 的 port 为准），让 Prometheus 抓 127.0.0.1:14011。
+# 若设备固定局域网 IP，也可直接写 http://192.168.x.y:4011。
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: biyou-palace
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # 鉴权：两个节点的 /metrics 与其它端点走同一套 bearer 策略。
+  #   auth_enabled: false → 下面的 authorization 块保持注释即可
+  #   auth_enabled: true  → 取消注释，并把 token 写进对应文件（不要带换行）
+  - job_name: quasheng
+    metrics_path: /metrics
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/quasheng_token
+    static_configs:
+      - targets: ["host.docker.internal:4010"]
+        labels:
+          node_role: quasheng
+          node_id: quasheng-01
+
+  - job_name: sanxian
+    metrics_path: /metrics
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/sanxian_token
+    static_configs:
+      - targets: ["host.docker.internal:14011"]
+        labels:
+          node_role: sanxian
+          node_id: sanxian-01
+
+  - job_name: zhentu
+    metrics_path: /zhentu/v1/metrics
+    authorization:
+      type: Bearer
+      # 与 ZHENTU_REGISTRY_TOKEN 保持一致；文件内容不含换行以外的任何字符。
+      # 首次使用：printf '%s' "$ZHENTU_REGISTRY_TOKEN" > prometheus/zhentu_token
+      credentials_file: /etc/prometheus/zhentu_token
+    static_configs:
+      - targets: ["host.docker.internal:4020"]
+        labels:
+          node_role: zhentu
+          node_id: zhentu-01

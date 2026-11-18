@@ -30,6 +30,8 @@ import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.request.httpMethod
+import io.ktor.server.request.path
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.ApplicationSendPipeline
 import io.ktor.server.response.respondText
@@ -68,12 +70,14 @@ internal fun Application.installNodeApi(
     imageLoader: VisionImageLoader = UnsupportedVisionImageLoader,
     /** 把与 /v1/health 同源的快照提供给阵图注册 reporter；不新增任何入站端点。 */
     onHealth: ((suspend () -> HealthResponse) -> Unit)? = null,
+    /** 进程内指标；由 [NodeServer] 注入同一个实例，便于测试断言。 */
+    metrics: NodeMetrics = NodeMetrics(),
 ) {
     // 日志脱敏需要一个稳定的 token 值：节点安装路由时登记，避免启动早于 /v1/logs 的事件漏脱敏。
     NodeLogBuffer.configure(config.sharedToken)
     NodeApi(
         config, engine, embeddingEngine, gate, health, governor, thermalProbe,
-        visionEngine, imageLoader, onHealth,
+        visionEngine, imageLoader, onHealth, metrics,
     ).configure(this)
 }
 
@@ -89,6 +93,7 @@ private class NodeApi(
     private val visionEngine: VisionEngine?,
     private val imageLoader: VisionImageLoader,
     private val onHealth: ((suspend () -> HealthResponse) -> Unit)?,
+    private val metrics: NodeMetrics,
 ) {
     private val json = Json { encodeDefaults = true }
 
@@ -98,17 +103,17 @@ private class NodeApi(
         application.install(StatusPages) {
             exception<kotlinx.serialization.SerializationException> { call, e ->
                 val (status, body) = badRequest("请求体格式错误：${e.message}").toOpenAIError()
-                call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
+                call.respondTracked(HttpStatusCode.fromValue(status), body, ContentType.Application.Json)
             }
             exception<LlmError> { call, e ->
                 NodeLogBuffer.record("ERROR", "upstream", "推理引擎错误：${e.message}")
                 val (status, body) = upstreamUnavailable("推理引擎错误：${e.message}").toOpenAIError()
-                call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
+                call.respondTracked(HttpStatusCode.fromValue(status), body, ContentType.Application.Json)
             }
             exception<VisionRequestException> { call, e ->
                 NodeLogBuffer.record("WARNING", "vision", e.message ?: "视觉请求失败")
                 val (status, body) = badRequest(e.message ?: "视觉请求失败").toOpenAIError()
-                call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
+                call.respondTracked(HttpStatusCode.fromValue(status), body, ContentType.Application.Json)
             }
             exception<NodeException> { call, e ->
                 val (status, body) = e.toOpenAIError()
@@ -120,14 +125,14 @@ private class NodeApi(
                     NodeLogBuffer.record("WARNING", "concurrency", "发热降载：拒绝新请求（${e.message}）")
                 }
                 e.retryAfterSeconds?.let { call.response.headers.append("Retry-After", it.toString()) }
-                call.respondText(body, ContentType.Application.Json, HttpStatusCode.fromValue(status))
+                call.respondTracked(HttpStatusCode.fromValue(status), body, ContentType.Application.Json)
             }
             exception<Throwable> { call, e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 NodeLogBuffer.record("ERROR", "exception", "内部错误：${e.message}")
                 val (_, body) =
                     NodeException("内部错误：${e.message}", 500, "server_error", "internal_error").toOpenAIError()
-                call.respondText(body, ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                call.respondTracked(HttpStatusCode.InternalServerError, body, ContentType.Application.Json)
             }
         }
 
@@ -153,7 +158,11 @@ private class NodeApi(
             call.response.headers.append(Contract.HEADER_NODE_ID, config.nodeId)
             call.response.headers.append(Contract.HEADER_NODE_ROLE, Contract.ROLE)
             call.response.headers.append(Contract.HEADER_CONTRACT_VERSION, Contract.VERSION)
-        }
+            }
+        // 端点级计数放在统一的响应出口 respondTracked / respondJson：
+        // 实测 Ktor 2.3 在 sendPipeline 与 onCallRespond 里 status() 均为 null（会记成 0），
+        // 因此不依赖内部时序，由调用点显式给出状态码。endpoint 归一化到固定集合，
+        // 避免任意 URI 变成标签。未命中的路由（404）不计入，避免额外改响应体。
 
         application.routing {
             get("/v1/health") {
@@ -171,6 +180,8 @@ private class NodeApi(
             post("/v1/chat/completions") { handleChat(call) }
             post("/v1/embeddings") { handleEmbeddings(call) }
             get("/v1/logs") { handleLogs(call) }
+            // 运维端点：不属于 /v1 契约面，返回 Prometheus 文本，供灵脉 scrape。
+            get("/metrics") { handleMetrics(call) }
         }
     }
 
@@ -194,17 +205,7 @@ private class NodeApi(
         // 注意：引擎暴露的 info.name 是 llama_model_desc（如 "Qwen3 0.6B"），并非文件名，
         // 因此这里统一用 basename 做身份，capabilities_map 按文件名声明即可精确命中。
         val loadedPath = if (engineLoaded) config.preloadModels.firstOrNull() else null
-        val loadedIds = buildSet {
-            loadedPath?.let { add(java.io.File(it).name) }
-            // embedding 是独立句柄：配置里声明了不代表加载成功，必须问引擎真实状态
-            if (embeddingEngine?.isLoaded == true) {
-                config.embeddingModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
-            }
-            // vision 同样是独立句柄：只有 mmproj + 视觉模型都加载成功才把模型标为 loaded
-            if (visionEngine?.isLoaded == true) {
-                config.visionModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
-            }
-        }
+        val loadedIds = loadedModelIds()
         val engineOk = true // 引擎单例已构造（libllama_jni 已 load）；真正不可用由 generate→LlmError→503
         val preloadOk = NodeStatus.preloadSatisfied(
             config.preloadModels, loadedPath?.let { setOf(it) } ?: emptySet())
@@ -243,9 +244,18 @@ private class NodeApi(
 
     // ----------------------------- /v1/models -----------------------------
 
-    private suspend fun buildModels(): ModelList {
-        val engineLoaded = engine.isModelLoaded()
-        val loadedIds = buildSet {
+    /**
+     * 当前真正加载成功的模型标识（路径 basename）。
+     *
+     * 单句柄 chat 引擎：已加载的必是 preload 首项（`info.name` 是 llama_model_desc，
+     * 不是文件名，故统一用 basename 做身份）；embedding / vision 是独立句柄，
+     * **配置里声明不等于加载成功**，必须问引擎真实状态，否则会列出幽灵条目。
+     * `/v1/health`、`/v1/models` 与 `/metrics` 共用这一份判定，避免三处漂移。
+     */
+    private fun loadedModelIds(): Set<String> {
+        val info = runCatching { engine.getModelInfo() }.getOrNull()
+        val engineLoaded = engine.isModelLoaded() && info != null
+        return buildSet {
             if (engineLoaded) {
                 config.preloadModels.firstOrNull()?.let { add(java.io.File(it).name) }
             }
@@ -256,6 +266,10 @@ private class NodeApi(
                 config.visionModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
             }
         }
+    }
+
+    private suspend fun buildModels(): ModelList {
+        val loadedIds = loadedModelIds()
         val names = (config.capabilitiesMap.keys + loadedIds).toSet()
         return ModelList(data = names.map { ModelRef(id = it, ownedBy = "biyou-node") })
     }
@@ -314,82 +328,183 @@ private class NodeApi(
         val session = buildSession(req, marker)
         val prompt = lastUserContent(req, marker)
         NodeLogBuffer.record("INFO", "vision", "视觉请求：model=$model，图像=${images.size} 张")
-        respondChat(call, req, id) { stats ->
+        respondChat(call, req, id, capability = "vision") { stats ->
             vision.generate(session, prompt, images, req.maxTokens ?: 0, stats)
         }
     }
 
-    /** 流式/非流式共用的响应拼装；[generate] 是唯一的引擎差异点。 */
+    /**
+     * 流式/非流式共用的响应拼装；[generate] 是唯一的引擎差异点。
+     *
+     * [capability] 只用于指标标签（chat / vision），不参与任何路由或契约语义。
+     * 指标落点在 finally：成功、失败、客户端断连都会记一条，断连记为 `cancelled`。
+     */
     private suspend fun respondChat(
         call: ApplicationCall,
         req: ChatRequest,
         id: String,
+        capability: String = "chat",
         generate: (GenerateStats?) -> kotlinx.coroutines.flow.Flow<String>,
     ) {
-        admitInference()
-        if (req.stream) {
-            gate.acquire(governor.effectiveLimit) // 满载立即 429（在进入流式前抢占名额）
-            try {
-                call.respondTextWriter(ContentType.Text.EventStream) {
-                    val w = this // 捕获 Writer，供 launch 内部使用
-                    coroutineScope {
-                        // 首帧声明 assistant 角色（契约要求，客户端据此初始化消息气泡）
-                        w.write(Sse.emit(Sse.roleBlock(id, req.model)))
-                        w.flush()
-                        val flow = generate(null)
-                        val job = launch {
-                            flow.collect { piece ->
-                                try {
-                                    w.write(Sse.emit(Sse.contentBlock(id, req.model, piece)))
-                                    w.flush()
-                                } catch (_: java.io.IOException) {
-                                    NodeLogBuffer.record("INFO", "disconnect", "客户端断开连接，已停止生成")
-                                    cancel() // 客户端断开：取消收集 → 触发 engine finally 调 stopGeneration
-                                    return@collect
+        val observation = ModelObservation(metrics, modelLabel(req.model), capability)
+        var failure: Throwable? = null
+        try {
+            admitInference()
+            if (req.stream) {
+                gate.acquire(governor.effectiveLimit) // 满载立即 429（在进入流式前抢占名额）
+                try {
+                    call.respondTextWriter(ContentType.Text.EventStream) {
+                        val w = this // 捕获 Writer，供 launch 内部使用
+                        coroutineScope {
+                            // 首帧声明 assistant 角色（契约要求，客户端据此初始化消息气泡）
+                            w.write(Sse.emit(Sse.roleBlock(id, req.model)))
+                            w.flush()
+                            val flow = generate(null)
+                            // 首个 content 分片才是「首字节」；role 帧只是初始化消息气泡，不算内容。
+                            var firstContent = true
+                            val job = launch {
+                                flow.collect { piece ->
+                                    try {
+                                        w.write(Sse.emit(Sse.contentBlock(id, req.model, piece)))
+                                        w.flush()
+                                        if (firstContent) {
+                                            firstContent = false
+                                            observation.firstByte()
+                                        }
+                                    } catch (_: java.io.IOException) {
+                                        NodeLogBuffer.record("INFO", "disconnect", "客户端断开连接，已停止生成")
+                                        cancel() // 客户端断开：取消收集 → 触发 engine finally 调 stopGeneration
+                                        return@collect
+                                    }
                                 }
                             }
-                        }
-                        job.join()
-                        if (!job.isCancelled) {
-                            w.write(Sse.emit(Sse.stopBlock(id, req.model)))
-                            w.flush()
-                            w.write(Sse.emit(Sse.DONE))
-                            w.flush()
+                            job.join()
+                            if (!job.isCancelled) {
+                                w.write(Sse.emit(Sse.stopBlock(id, req.model)))
+                                w.flush()
+                                w.write(Sse.emit(Sse.DONE))
+                                w.flush()
+                            }
                         }
                     }
+                    // 流式响应在 writer 正常返回后才落计数；中途失败走 StatusPages 的错误路径
+                    metrics.observeHttp(endpointLabel(call.request.path()), "POST", 200)
+                } finally {
+                    gate.release()
                 }
-            } finally {
-                gate.release()
-            }
-        } else {
-            gate.acquire(governor.effectiveLimit)
-            try {
-                val sb = StringBuilder()
-                val stats = GenerateStats()
-                generate(stats).collect { sb.append(it) }
-                val content = sb.toString()
-                call.respondJson(
-                    HttpStatusCode.OK,
-                    json.encodeToString(
-                        ChatCompletion.serializer(),
-                        ChatCompletion(
-                            id = id,
-                            model = req.model,
-                            choices = listOf(
-                                ChatChoice(
-                                    index = 0,
-                                    message = ContractChatMessage(role = "assistant", content = ChatContent.Text(content)),
-                                    finishReason = "stop",
-                                )
-                            ),
-                            usage = usageOf(stats.promptTokens, stats.completionTokens),
+            } else {
+                gate.acquire(governor.effectiveLimit)
+                try {
+                    val sb = StringBuilder()
+                    val stats = GenerateStats()
+                    generate(stats).collect { sb.append(it) }
+                    val content = sb.toString()
+                    call.respondJson(
+                        HttpStatusCode.OK,
+                        json.encodeToString(
+                            ChatCompletion.serializer(),
+                            ChatCompletion(
+                                id = id,
+                                model = req.model,
+                                choices = listOf(
+                                    ChatChoice(
+                                        index = 0,
+                                        message = ContractChatMessage(role = "assistant", content = ChatContent.Text(content)),
+                                        finishReason = "stop",
+                                    )
+                                ),
+                                usage = usageOf(stats.promptTokens, stats.completionTokens),
+                            )
                         )
                     )
+                } finally {
+                    gate.release()
+                }
+            }
+        } catch (e: Throwable) {
+            failure = e
+            throw e
+        } finally {
+            observation.finishWith(failure)
+        }
+    }
+
+    // ----------------------------- /metrics（运维端点） -----------------------------
+
+    /**
+     * Prometheus 文本指标。**不属于 `/v1` 契约**：免鉴权、不改响应头、不影响任何既有端点。
+     *
+     * 即时值（并发、温度、模型加载态）在抓取时现算，其余计数/直方图由请求路径累加。
+     * 采集失败不能让监控端点本身 5xx：健康采集抛错时只省略对应 gauge，仍返回已完成的部分。
+     */
+    private suspend fun handleMetrics(call: ApplicationCall) {
+        val collected = runCatching { health(gate.active) }.getOrNull()
+        collected?.let { governor.update(ThermalSignal(it.thermalStatusLevel, it.tempC)) }
+        val gauges = buildList {
+            add(NodeMetrics.Gauge("sanxian_up", "节点进程存活并成功响应抓取（1=是）。", value = 1.0))
+            add(NodeMetrics.Gauge("sanxian_inflight_requests", "当前在途请求数（并发闸门占用）。", value = gate.active.toDouble()))
+            add(NodeMetrics.Gauge("sanxian_queue_len", "真实排队数；满载立即 429，故恒为 0。", value = 0.0))
+            add(
+                NodeMetrics.Gauge(
+                    "sanxian_effective_max_concurrency",
+                    "当前生效并发上限（降载时为 1）。",
+                    value = governor.effectiveLimit.toDouble(),
                 )
-            } finally {
-                gate.release()
+            )
+            add(
+                NodeMetrics.Gauge(
+                    "sanxian_thermal_shedding",
+                    "是否因发热降载（1=是）。",
+                    value = if (governor.isShedding) 1.0 else 0.0,
+                )
+            )
+            collected?.tempC?.let {
+                add(NodeMetrics.Gauge("sanxian_temperature_celsius", "电池温度（摄氏度）。", value = it))
+            }
+            collected?.resources?.batteryPct?.let {
+                add(NodeMetrics.Gauge("sanxian_battery_percent", "电量百分比。", value = it))
+            }
+            collected?.resources?.memUsedMb?.let {
+                add(NodeMetrics.Gauge("sanxian_mem_used_mb", "已用内存（MB）。", value = it.toDouble()))
+            }
+            val loaded = loadedModelIds()
+            for (model in config.capabilitiesMap.keys.sorted()) {
+                add(
+                    NodeMetrics.Gauge(
+                        "sanxian_model_loaded",
+                        "模型是否已加载（1=是）。",
+                        labels = listOf("model" to model),
+                        value = if (model in loaded) 1.0 else 0.0,
+                    )
+                )
             }
         }
+        call.respondTracked(
+            HttpStatusCode.OK,
+            metrics.render(gauges),
+            ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
+        )
+    }
+
+    /** 已知端点归一化：未登记路径统一记 `other`，避免任意 URI 变成标签（时间序列爆炸）。 */
+    private fun endpointLabel(path: String): String = when (path) {
+        "/v1/health", "/v1/models", "/v1/chat/completions", "/v1/embeddings", "/v1/logs", "/metrics" -> path
+        else -> "other"
+    }
+
+    /**
+     * 指标里的模型标签：只接受配置白名单内的名字（capabilities_map 或已配置的模型文件名），
+     * 其余一律 `unknown`。请求体里的任意字符串绝不进标签。
+     */
+    private fun modelLabel(requested: String): String {
+        if (requested.isBlank()) return "unknown"
+        val known = buildSet {
+            addAll(config.capabilitiesMap.keys)
+            config.preloadModels.forEach { add(java.io.File(it).name) }
+            config.embeddingModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
+            config.visionModel?.takeIf { it.isNotBlank() }?.let { add(java.io.File(it).name) }
+        }
+        return if (requested in known) requested else "unknown"
     }
 
     // ----------------------------- /v1/logs -----------------------------
@@ -422,6 +537,8 @@ private class NodeApi(
             ?: throw capabilityNotSupported("该节点未启用 embedding 后端（请在 native 层实现 embed 桥）")
         admitInference()
         gate.acquire(governor.effectiveLimit)
+        val observation = ModelObservation(metrics, modelLabel(req.model), "embedding")
+        var failure: Throwable? = null
         try {
             val result = withContext(Dispatchers.IO) { eng.embed(inputs) }
             call.respondJson(
@@ -435,8 +552,12 @@ private class NodeApi(
                     )
                 )
             )
+        } catch (e: Throwable) {
+            failure = e
+            throw e
         } finally {
             gate.release()
+            observation.finishWith(failure)
         }
     }
 
@@ -483,7 +604,22 @@ private class NodeApi(
     }
 
     private suspend fun ApplicationCall.respondJson(status: HttpStatusCode, jsonString: String) {
-        respondText(jsonString, ContentType.Application.Json, status)
+        respondTracked(status, jsonString, ContentType.Application.Json)
+    }
+
+    /**
+     * 统一响应出口：先落端点级指标再写响应。
+     *
+     * 不依赖 Ktor 内部 status 时序（实测 `sendPipeline`/`onCallRespond` 阶段
+     * `call.response.status()` 仍为 null），状态码由调用点显式给出，因而计数永远准确。
+     */
+    private suspend fun ApplicationCall.respondTracked(
+        status: HttpStatusCode,
+        body: String,
+        contentType: ContentType,
+    ) {
+        metrics.observeHttp(endpointLabel(request.path()), request.httpMethod.value, status.value)
+        respondText(body, contentType, status)
     }
 
     private companion object {

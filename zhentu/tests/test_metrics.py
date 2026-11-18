@@ -89,3 +89,30 @@ def test_metrics_does_not_leak_topology_or_credentials(ctx):
     assert "192.168.1.20" not in text
     assert "endpoint" not in text
     assert TOKEN not in text
+
+
+def test_metrics_exposes_node_gauges(ctx):
+    """节点存量 gauge：注册一个在线节点后 total/online 都为 1，注销后 online 归零。"""
+    _register(ctx, node_id="qs-1")
+
+    text = _metrics(ctx).text
+    assert "zhentu_nodes_total 1" in text
+    assert "zhentu_nodes_online 1" in text
+
+    ctx.post(
+        "/zhentu/v1/nodes/qs-1/deregister",
+        headers=auth(),
+        json={"boot_id": "boot-12345678"},
+    )
+    text = _metrics(ctx).text
+    assert "zhentu_nodes_total 1" in text
+    assert "zhentu_nodes_online 0" in text
+
+
+def test_metrics_node_gauges_absent_of_high_cardinality(ctx):
+    """gauge 不得携带 node_id/model 等标签（灵脉只做计数）。"""
+    _register(ctx, node_id="qs-1")
+    text = _metrics(ctx).text
+    for line in text.splitlines():
+        if line.startswith("zhentu_nodes_"):
+            assert "{" not in line, line

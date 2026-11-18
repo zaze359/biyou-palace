@@ -1,0 +1,63 @@
+# 灵脉 · 告警规则（仙侠命名，便于与看板/文档统一）
+#
+# 约定：
+#   - 只用节点与阵图已经暴露的指标，不引入额外采集器。
+#   - 标签保持低基数：不按 node_id/model 拆告警实例，避免告警风暴。
+groups:
+  - name: lingmai-nodes
+    rules:
+      - alert: LingMaiNodeDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} 仙徒失联"
+          description: "{{ $labels.job }}（{{ $labels.node_id }}）已 1 分钟无法抓取，检查进程/端口/网络。"
+
+      - alert: LingMaiModelNotLoaded
+        expr: sanxian_model_loaded == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "散仙模型 {{ $labels.model }} 未加载"
+          description: "模型声明了但引擎未加载，相关能力会返回 503；请在 App「模型管理」重新导入。"
+
+      - alert: LingMaiThermalShedding
+        expr: sanxian_thermal_shedding == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "散仙因发热降载"
+          description: "设备温度过高，有效并发已压到 1，新请求返回 503 thermal_shedding。"
+
+      - alert: LingMaiConcurrencySaturated
+        expr: sanxian_inflight_requests > 0 and sanxian_inflight_requests >= sanxian_effective_max_concurrency
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "散仙并发持续满载"
+          description: "在途请求已顶到有效并发上限并持续 2 分钟，调用方会收到 429；考虑扩容或降峰。"
+
+  - name: lingmai-registry
+    rules:
+      - alert: LingMaiNoOnlineNode
+        expr: zhentu_nodes_online == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "阵图无在线节点"
+          description: "注册表在线节点数为 0 已 3 分钟：所有仙徒心跳均已过期，阵图选路将无候选。"
+
+      - alert: LingMaiRouteNoCandidate
+        expr: increase(zhentu_route_total{result="no_route"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "阵图持续选不出候选"
+          description: "最近 5 分钟出现 no_route 决策：检查节点能力声明、负载余量与排除规则。"

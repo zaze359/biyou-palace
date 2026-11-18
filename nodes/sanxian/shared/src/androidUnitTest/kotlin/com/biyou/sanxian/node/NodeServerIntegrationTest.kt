@@ -162,11 +162,12 @@ class NodeServerIntegrationTest {
         thermalProbe: () -> ThermalSignal = { ThermalSignal() },
         vision: VisionEngine? = null,
         imageLoader: VisionImageLoader = UnsupportedVisionImageLoader,
+        metrics: NodeMetrics = NodeMetrics(),
     ) {
         application {
             installNodeApi(
                 config, engine, embedding, gate, health, governor, thermalProbe,
-                vision, imageLoader,
+                vision, imageLoader, metrics = metrics,
             )
         }
     }
@@ -238,6 +239,21 @@ class NodeServerIntegrationTest {
         assertEquals("invalid_api_key", error["code"]!!.jsonPrimitive.content)
         assertEquals("invalid_request_error", error["type"]!!.jsonPrimitive.content)
         assertEquals(JsonNull, error["param"])
+    }
+
+    @Test
+    fun `metrics 与契约端点采用同一鉴权策略`() = testApplication {
+        installTestApi(config = baseConfig.copy(authEnabled = true, sharedToken = "test-token-only"))
+
+        // 未带 token：/metrics 同样 401，不额外开放运维面
+        val denied = client.get("/metrics")
+        assertEquals(HttpStatusCode.Unauthorized, denied.status)
+
+        val allowed = client.get("/metrics") {
+            header(HttpHeaders.Authorization, "Bearer test-token-only")
+        }
+        assertEquals(HttpStatusCode.OK, allowed.status)
+        assertTrue(allowed.bodyAsText().contains("sanxian_up 1"))
     }
 
     @Test
@@ -729,5 +745,79 @@ class NodeServerIntegrationTest {
             setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"hi"}],"stream":false}""")
         }
         assertEquals(HttpStatusCode.OK, after.status)
+    }
+    // ----------------------------- /metrics（运维端点） -----------------------------
+
+    @Test
+    fun `metrics 返回 Prometheus 文本且含即时值与模型加载态`() = testApplication {
+        // preload 首项才会被单句柄引擎标记为 loaded，这里显式配置以断言 model_loaded=1
+        installTestApi(config = baseConfig.copy(preloadModels = listOf("qwen.gguf")))
+
+        val res = client.get("/metrics")
+        assertEquals(HttpStatusCode.OK, res.status)
+        assertTrue(res.headers[HttpHeaders.ContentType]!!.startsWith("text/plain"))
+        val text = res.bodyAsText()
+        assertTrue(text.contains("sanxian_up 1"), text)
+        assertTrue(text.contains("sanxian_inflight_requests 0"), text)
+        assertTrue(text.contains("sanxian_queue_len 0"), text)
+        assertTrue(text.contains("sanxian_effective_max_concurrency 2"), text)
+        assertTrue(text.contains("sanxian_thermal_shedding 0"), text)
+        assertTrue(text.contains("sanxian_temperature_celsius 30"), text)
+        assertTrue(text.contains("sanxian_model_loaded{model=\"qwen.gguf\"} 1"), text)
+        // 契约端点行为不变：/metrics 也带三件套响应头（发送管线统一附加）
+        assertContractHeaders(res)
+    }
+
+    @Test
+    fun `metrics 记录 HTTP 与模型请求计数且首字节直方图有样本`() = testApplication {
+        val metrics = NodeMetrics()
+        installTestApi(metrics = metrics)
+
+        assertEquals(HttpStatusCode.OK, client.get("/v1/health").status)
+        val chat = client.post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"model":"qwen.gguf","messages":[{"role":"user","content":"hi"}],"max_tokens":8}""")
+        }
+        assertEquals(HttpStatusCode.OK, chat.status)
+
+        val text = metrics.render(emptyList())
+        assertTrue(
+            text.contains("""sanxian_http_requests_total{endpoint="/v1/chat/completions",method="POST",status="200"} 1"""),
+            text,
+        )
+        assertTrue(
+            text.contains("""sanxian_http_requests_total{endpoint="/v1/health",method="GET",status="200"} 1"""),
+            text,
+        )
+        assertTrue(
+            text.contains("""sanxian_model_requests_total{model="qwen.gguf",capability="chat",status="ok"} 1"""),
+            text,
+        )
+        assertTrue(text.contains("sanxian_request_duration_seconds_count{model=\"qwen.gguf\",capability=\"chat\"} 1"), text)
+        assertTrue(text.contains("sanxian_first_byte_seconds_count"), text)
+    }
+
+    @Test
+    fun `metrics 对未知模型与满载 429 记到受控标签`() = testApplication {
+        val metrics = NodeMetrics()
+        // 满载语义由 config.maxConcurrency 决定（acquire 用 effectiveLimit），所以配置也要改成 1
+        val config = baseConfig.copy(maxConcurrency = 1)
+        val gate = ConcurrencyGate(1)
+        gate.acquire() // 先占满唯一名额
+        try {
+            installTestApi(config = config, gate = gate, metrics = metrics)
+            val res = client.post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"not-in-config","messages":[{"role":"user","content":"hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.TooManyRequests, res.status)
+
+            val text = metrics.render(emptyList())
+            assertTrue(text.contains("""sanxian_http_requests_total{endpoint="/v1/chat/completions",method="POST",status="429"} 1"""), text)
+            // 未在白名单里的模型名不得进入标签
+            assertTrue(!text.contains("not-in-config"), text)
+        } finally {
+            gate.release()
+        }
     }
 }

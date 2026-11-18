@@ -591,9 +591,23 @@ def create_app(
 
     @app.get("/zhentu/v1/metrics", dependencies=[Depends(require_auth)])
     async def metrics_endpoint(request: Request):
-        """Prometheus 文本指标；与其它 /v1 端点一样要求 Bearer 鉴权。"""
+        """Prometheus 文本指标；与其它 /v1 端点一样要求 Bearer 鉴权。
+
+        除 `/route` 决策指标外，补充两个节点存量 gauge（总数 / 在线数），
+        让灵脉无需额外适配层就能画「在线节点」并告警「全员失联」。
+        只暴露计数，不暴露 node_id / model / endpoint（避免高基数与拓扑泄露）。
+        """
+        total, online = request.app.state.store.counts(request.app.state.clock())
+        gauges = (
+            "# HELP zhentu_nodes_total 注册表中的节点总数（含离线）。\n"
+            "# TYPE zhentu_nodes_total gauge\n"
+            f"zhentu_nodes_total {total}\n"
+            "# HELP zhentu_nodes_online 在线节点数（租约有效）。\n"
+            "# TYPE zhentu_nodes_online gauge\n"
+            f"zhentu_nodes_online {online}\n"
+        )
         return PlainTextResponse(
-            request.app.state.route_metrics.render(),
+            request.app.state.route_metrics.render() + gauges,
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 

@@ -12,16 +12,19 @@ shared_token: ""
 auth_enabled: false
 
 # 启动即预热常驻的模型 —— 消除"首次请求阻塞 30s+"
+# 必须是 `ollama list` 里的真实名称（本机装的是 0.5b；换 7B 机器时改成对应 tag）
 preload_models:
-  - "qwen2.5:7b-instruct-q4_K_M"
+  - "qwen2.5:0.5b"
 
 # 能力声明。**未登记的模型默认只有 ["chat"]**——
-# 能力必须显式声明，不声明就不会被路由到（embeddings 会直接 501）
+# 能力必须显式声明，不声明就不会被路由到（embeddings 会直接 501）。
+# 键名与 `ollama list` 的真实名称**精确匹配**：`ollama pull nomic-embed-text`
+# 落库后带 `:latest`，写成裸名会被当成 chat-only，embeddings 返回 501。
 capabilities_map:
-  "qwen2.5:7b-instruct-q4_K_M":
+  "qwen2.5:0.5b":
     capabilities: ["chat"]
     context_len: 32768
-  "nomic-embed-text":
+  "nomic-embed-text:latest":
     capabilities: ["embedding"]
     context_len: 8192
 

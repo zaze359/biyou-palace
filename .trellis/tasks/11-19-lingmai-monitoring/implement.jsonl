@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "阵图/准圣控制面与观测一致性约定，新增端点不得改变既有行为"}
+{"file": "docs/node-agent-contract.md", "reason": "v1.2 契约：/metrics 属运维端点，不得改动 /v1 行为与响应头"}
+{"file": ".trellis/tasks/11-19-lingmai-monitoring/prd.md", "reason": "验收标准与指标清单"}
