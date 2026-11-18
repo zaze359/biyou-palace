@@ -3,7 +3,7 @@
   "name": "sanxian-node-agent",
   "title": "散仙安卓节点智能体（smallphone 改造 KMP + llama.cpp）",
   "description": "自底向上第一步的子任务：从旧项目 smallphone 派生散仙节点智能体，剥离 iOS 目标、保留本地对话并用 Ktor 暴露节点智能体统一契约 v1.0 的四个端点",
-  "status": "implementing",
+  "status": "completed",
   "dev_type": "feature",
   "scope": null,
   "package": null,
@@ -11,19 +11,21 @@
   "creator": "zaze",
   "assignee": "zaze",
   "createdAt": "2026-10-14",
-  "completedAt": null,
+  "completedAt": "2026-11-19",
   "branch": null,
   "base_branch": null,
   "worktree_path": null,
   "commit": "ca35e83ce277895777468ffb794d16093fcd6ca6",
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "11-18-sanxian-device-acceptance"
+  ],
   "parent": "10-13-biyou-v1-blueprint",
   "relatedFiles": [
     "docs/node-agent-contract.md",
     "nodes/sanxian/"
   ],
-  "notes": "依赖外部旧项目 /Users/zaze/Documents/smallphone（KMP+Compose+llama.cpp JNI），勘察结论见 research/smallphone-assessment.md；建议准圣子任务跑通后再开工以对齐契约。进度：统一契约四端点与 embeddings 真实向量化（Plan A chat/embedding 双句柄、JNI embed 桥、pooling 跟随模型元数据、按分词结果截断到 llama_n_ubatch）已落地并提交于 ca35e83，代码文档已追平；status 保持 implementing，因真机尚未验收。剩余真机验证：① 启动后 /v1/health、/v1/models、/v1/chat/completions、/v1/embeddings 冒烟；② >1024 tokens 长文本 embedding 确认出现截断 WARN 且进程不崩；③ logcat 确认 pooling 采用模型默认值（Qwen3-Embedding 应为 LAST）而非回退；④ 客户端断连取消与后台长跑；⑤ embedding 模型 GGUF 推送后 200 向量维度正确。",
+  "notes": "依赖外部旧项目 /Users/zaze/Documents/smallphone（KMP+Compose+llama.cpp JNI），勘察结论见 research/smallphone-assessment.md。进度：统一契约四端点与 embeddings 真实向量化（Plan A chat/embedding 双句柄、JNI embed 桥、pooling 跟随模型元数据、按分词结果截断到 llama_n_ubatch）已落地于 ca35e83；视觉/OCR 见 11-13-sanxian-vision（d38f1b1）。真机五项验收已于 2026-11-19 在 XQ-AT72 完成，证据见 11-18-sanxian-device-acceptance/prd.md：① 四端点 + 视觉冒烟全 200；② 14k 字符长文本 embedding 截断到 1024 tokens 且进程不崩；③ pooling 取模型默认值 LAST(3)；④ 断连取消 active 归零、前台插电常亮 15 分钟零中断；⑤ embedding 200 维度 1024 且语义相似度符合预期。平台限制（非缺陷）：按 HOME 退到后台后约 1.6–17.8 分钟被系统以 app idle 停服，看护 Worker 只能提醒不能自愈，稳定恢复路径为回到 App 或重启设备。",
   "meta": {}
 }

@@ -1,0 +1,39 @@
+{
+  "id": "sanxian-device-acceptance",
+  "name": "sanxian-device-acceptance",
+  "title": "散仙节点真机验收",
+  "description": "在 XQ-AT72 真机上补齐 10-14-sanxian-node-agent 剩余五项验收：四端点冒烟、长文本 embedding 截断、pooling 日志、断连取消与后台长跑、embedding GGUF 就绪，并记录系统 app idle 停服缺陷与缓解措施",
+  "status": "completed",
+  "dev_type": "verification",
+  "scope": "nodes/sanxian,docs",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-18",
+  "completedAt": "2026-11-19",
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-14-sanxian-node-agent",
+  "relatedFiles": [
+    "nodes/sanxian/README.md",
+    "docs/node-agent-contract.md",
+    "composeApp/src/androidMain/kotlin/com/biyou/sanxian/NodeForegroundService.kt"
+  ],
+  "notes": "真机五项验收全部通过；额外记录 HOME 后台被 app idle 停服与看护通知链路。未改业务代码。",
+  "meta": {
+    "device": "XQ-AT72 / Android 12 / arm64-v8a / 12GB",
+    "port": "4031",
+    "tests": "shared 70 + composeApp 6 = 76 passed",
+    "smoke": "health/models/chat/embeddings/logs/vision 全 200",
+    "longEmbedding": "14011 字符 → 12009 tokens → 截断 1024，200 且进程存活",
+    "pooling": "模型默认值 3 (LAST)",
+    "soak": "前台+常亮 15 分钟零中断；HOME 后台 1m36s–17m50s 内被停服",
+    "watchdog": "停服后 15 分钟节拍发出 id=1002 通知，回前台后清除"
+  }
+}
