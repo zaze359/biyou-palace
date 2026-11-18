@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "项目后端约定：阵图是控制面、契约头与错误形状不可变、registry 审计头要求"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性检查：节点契约端点和观测字段的联动"}
+{"file": ".trellis/tasks/11-18-quasheng-hardening/design.md", "reason": "六项修复的根因、方案与测试策略"}
+{"file": ".trellis/tasks/11-18-quasheng-hardening/implement.md", "reason": "执行顺序、验证命令与回滚点"}

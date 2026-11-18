@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "检查契约头、错误形状、控制面边界是否被破坏"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量与测试要求基线"}
+{"file": ".trellis/tasks/11-18-quasheng-hardening/prd.md", "reason": "验收标准逐条核对"}
+{"file": ".trellis/tasks/11-18-quasheng-hardening/design.md", "reason": "核对实现是否与设计一致、是否引入行为漂移"}
