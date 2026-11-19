@@ -45,13 +45,15 @@ groups:
   - name: lingmai-registry
     rules:
       - alert: LingMaiNoOnlineNode
-        expr: zhentu_nodes_online == 0
+        # 只有在册节点存在却全员离线时才告警；0 个在册节点是「尚未接入注册」的
+        # 部署形态，属于配置阶段，不应长期红着（此时由 LingMaiNodeDown 覆盖抓取层）。
+        expr: zhentu_nodes_online == 0 and zhentu_nodes_total > 0
         for: 3m
         labels:
           severity: critical
         annotations:
-          summary: "阵图无在线节点"
-          description: "注册表在线节点数为 0 已 3 分钟：所有仙徒心跳均已过期，阵图选路将无候选。"
+          summary: "阵图在册节点全部离线"
+          description: "阵图有 {{ $value }} 个在册节点，但在线数为 0 已 3 分钟：所有仙徒心跳均已过期，选路将无候选。"
 
       - alert: LingMaiRouteNoCandidate
         expr: increase(zhentu_route_total{result="no_route"}[5m]) > 0

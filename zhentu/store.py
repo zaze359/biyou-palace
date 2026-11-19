@@ -212,14 +212,20 @@ class RegistryStore:
         return [self._row(row) for row in rows]
 
     def counts(self, now_ms: int) -> tuple[int, int]:
+        """返回 (total, online)：total = 未注销的节点数（含租约过期但未注销），
+        online = 其中租约仍有效的数量。
+
+        **已注销的行不计入 total**：节点优雅下线后若仍被统计，灵脉看板上的
+        「节点总数」会只增不减，与「在册节点」语义不符；历史行保留在库中供审计。
+        """
         rows = self.list_all()
+        active = [row for row in rows if row.get("deregistered_at_ms") is None]
         online = sum(
             1
-            for row in rows
-            if row.get("deregistered_at_ms") is None
-            and now_ms - row["last_seen_ms"] <= row["ttl_s"] * 1000
+            for row in active
+            if now_ms - row["last_seen_ms"] <= row["ttl_s"] * 1000
         )
-        return len(rows), online
+        return len(active), online
 
     def ping(self) -> bool:
         try:

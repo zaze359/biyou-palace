@@ -105,7 +105,8 @@ def test_metrics_exposes_node_gauges(ctx):
         json={"boot_id": "boot-12345678"},
     )
     text = _metrics(ctx).text
-    assert "zhentu_nodes_total 1" in text
+    # 已注销的行不再计入总数：否则看板上的「节点总数」只增不减
+    assert "zhentu_nodes_total 0" in text
     assert "zhentu_nodes_online 0" in text
 
 
