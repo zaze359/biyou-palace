@@ -1,0 +1,4 @@
+# 道鉴检定生成的中间结果（JSON 数据、日志）——报告由 report.py 渲染后入库
+out/
+__pycache__/
+*.pyc

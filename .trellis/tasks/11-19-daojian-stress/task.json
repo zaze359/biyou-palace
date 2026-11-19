@@ -1,0 +1,30 @@
+{
+  "id": "daojian-stress",
+  "name": "daojian-stress",
+  "title": "道鉴：压测与故障注入检定",
+  "description": "补齐蓝图第四步剩余部分：节点与阵图压测脚本、故障注入（进程停止/端口占用/降载）与长时耐久用例，产出 Markdown 检定报告；不改节点契约与既有端点行为",
+  "status": "in_progress",
+  "dev_type": "test",
+  "scope": "scripts/daojian,docs/reports",
+  "package": null,
+  "priority": "P2",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-19",
+  "completedAt": null,
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-13-biyou-v1-blueprint",
+  "relatedFiles": [
+    "docs/node-agent-contract.md",
+    "monitoring/README.md",
+    "nodes/quasheng/README.md"
+  ],
+  "notes": "",
+  "meta": {}
+}
