@@ -75,8 +75,11 @@
    - **进度（2026-11-21）**：**编排链路服务端已端到端实测** —— `scripts/daojian/orchestration_e2e.py`
      7 用例（提交/事件流/两步计划/聚合/幂等/越权/取消/选路降级）在临时阵图实例 + 桩网关上连续 3 次 7/7，
      报告 `docs/reports/daojian-orchestration-2026-11-21.md`。**注意**：网关是桩，真实 NewAPI 链路待第二阶段。
-     实测暴露三处待处理问题：① `planner_model` 默认空 → 默认部署不拆步；② 取消为批次边界语义，在途步骤不中断；
+     实测暴露三处问题：① `planner_model` 默认空 → 默认部署不拆步；② 取消为批次边界语义，在途步骤不中断；
      ③ PlannerClient 拿不到能力快照，能力不可用要到执行时才失败。
+   - **进度（2026-11-21 补）**：三处问题已修复（提交 `99b2f77`）—— `task/planned` 带 `planner_source`/`planner_note`；
+     `task/canceled` 带 `cancel_scope`/`pending_steps`；注入 `capability_snapshot.available` 并在计划阶段剔除无人可用能力。
+     契约 2.1/4.2/4.3 同步补充（向后兼容）。**第三步剩余**：真实 NewAPI 网关下的编排重测（阻塞于第二阶段）。
    - **进度（2026-11-20）**：编排边界设计完成 —— `11-20-daoguo-node-autonomy` 确定「节点本地完整闭环 + 中心集群编排」双层架构，
      阵图/道果同服务分阶段；请求/计划/事件/结果契约见 `docs/orchestration-contract.md`；
      阵图 `/candidates` 已暴露 `effective_max_concurrency`。运行时实现（LocalOrchestrator、集群编排、道果）待后续任务。
