@@ -1,0 +1,2 @@
+{"file": "docs/orchestration-contract.md", "reason": "检查并行、取消、deadline 与 partial 语义未偏离契约"}
+{"file": ".trellis/tasks/11-21-zhentu-observability-parallel/design.md", "reason": "检查批次规则、指标形状与测试覆盖"}

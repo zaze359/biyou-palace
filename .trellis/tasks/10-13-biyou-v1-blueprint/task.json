@@ -25,7 +25,8 @@
     "11-19-daojian-stress",
     "11-20-daoguo-node-autonomy",
     "11-20-zhentu-task-ledger",
-    "11-20-daoguo-aggregator"
+    "11-20-daoguo-aggregator",
+    "11-21-zhentu-observability-parallel"
   ],
   "parent": null,
   "relatedFiles": [
