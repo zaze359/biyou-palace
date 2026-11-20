@@ -118,7 +118,70 @@ python3 scripts/daojian/stub_gateway.py --port 18080
 
 **未修**：发现 5（`sources` 可能少于结果数）—— 需要在真实 NewAPI 执行器上确认，归入第二阶段。
 
-## 八、结论
+## 八、真实网关重测（2026-11-21 04:09，`stub=false`）
+
+拿到 NewAPI token 后，用真实网关（`http://127.0.0.1:3000/v1`）+ 准圣节点重跑了编排链路。
+
+### 第一次尝试：失败，根因是 Ollama 卡死
+
+| 事件 | 时间 | 内容 |
+|---|---|---|
+| `task/planned` | +30.0s | `planner_source=fallback`、`planner_error：TimeoutError` |
+| `step/failed` | +120.0s | `step_timeout` |
+| `task/failed` | +120.0s | `required_step_failed` |
+
+排查发现 Ollama 进程（PID 81644，运行 13 天）处于**假活**状态：`/api/tags`、`/api/ps` 秒回，
+但任何生成请求（`/v1/chat/completions` 与 `/api/generate`）都永久挂起；`/api/ps` 显示模型"已加载"
+且 `expires_at=2319 年`，实际已僵死。重启 Ollama 后冷加载生成 1.5s 返回。
+
+> 这一条**不是因为昨天的三个修复才发现** —— 正是 `planner_source`/`planner_note` 让
+> "规划阶段 30 秒超时" 从不可见变成一行可读事件，否则只会看到一个 "steps: 1"。
+
+### 第二次尝试：链路通，但没拆步
+
+| 项 | 结果 |
+|---|---|
+| 任务终态 | `completed`，总耗时 **4.6s** |
+| `answer` | 「负载均衡是通过分配和管理服务器资源，实现不同访问请求的均衡处理…」 |
+| `sources` | 1 条（s1 / sanxian-01 / qwen2.5:0.5b） |
+| `usage` | prompt 36 / completion 26 / steps 1 |
+| `task/planned` | `planner_source=fallback`、`planner_invalid：plan.max_steps 必须在 2..12` |
+
+**结论：真实链路（提交→规划→选路→执行→聚合→结果）已打通**，但「自动拆多子任务」仍然没有发生。
+
+### 拆步失败的真实原因：规划模型太小
+
+直接呼叫 `qwen2.5:0.5b` 让它输出 Plan JSON，得到：
+
+```json
+{"plan_id":1,"intent":"说明","max_steps":1,"max_parallel":1,
+ "steps":[{id:1,"goal":"负载均衡","model_hint":"负载均衡是一种网络技术…",
+           "input":{"messages":["请告诉我服务器上的负载平衡",…]},
+           "depends_on":[],"parallel_group":[],"required":[],
+           "failure_policy":"重试", …}],
+ "aggregate:{mode:"step","input_step_ids":["1"]}}
+```
+
+问题清单：JSON 键名未加引号（非法 JSON）、`id` 是数字、`max_steps` 小于步骤数、`failure_policy`
+是中文"重试"、`aggregate.mode` 是 `step`（非法）、输出中文文本塞进 `messages`。
+`validate_plan` 正确地拒绝了它并回退单步——**校验逻辑是对的，模型能力不够**。
+
+### 对第三步验收的影响
+
+蓝图第三步验收「复杂请求自动拆多子任务并行」在当前环境**尚不成立**，因为：
+
+1. 本机只有 `qwen2.5:0.5b` 与 `nomic-embed-text` 两个模型，前者不具备稳定的结构化输出能力；
+2. `PlannerClient` 已有能力快照与严格校验，但没有针对弱模型的引导（few-shot 示例或重试）。
+
+**建议**（未实施，需要决策）：
+
+- 方案 A：换一个 7B 级模型做规划（如 `qwen2.5:7b`），最直接，但本机需下载 4.7GB；
+- 方案 B：给 `PlannerClient` 加 1–2 次「格式纠错重试」——把校验错误回喂给模型再试，弱模型也可能成功；
+- 方案 C：接受单步，把「拆步」降级为可选能力，蓝图验收改写为「具备拆步能力，依赖规划模型规格」。
+
+我倾向 **B + A 组合**：先加纠错重试（代码小、对所有模型都有益），再由你决定要不要拉 7B 模型。
+
+## 九、结论
 
 编排链路**服务端部分是通的**：提交、事件流、两步计划的顺序执行、聚合、幂等、越权、取消、选路降级
 全部符合预期，连续 3 次稳定 7/7。
