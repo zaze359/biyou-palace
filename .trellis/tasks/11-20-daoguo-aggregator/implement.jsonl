@@ -1,0 +1,4 @@
+{"file": "docs/orchestration-contract.md", "reason": "聚合阶段、来源与 partial 的契约"}
+{"file": "zhentu/runner.py", "reason": "现有聚合落点与终态判定"}
+{"file": "zhentu/orchestration.py", "reason": "NewAPI 调用与超时/回退风格"}
+{"file": "zhentu/config.py", "reason": "配置项与环境变量约定"}

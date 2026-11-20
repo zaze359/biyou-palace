@@ -1,0 +1,2 @@
+{"file": "docs/orchestration-contract.md", "reason": "检查聚合失败与 partial 语义"}
+{"file": ".trellis/tasks/11-20-daoguo-aggregator/design.md", "reason": "检查接口、配置与回退是否符合设计"}

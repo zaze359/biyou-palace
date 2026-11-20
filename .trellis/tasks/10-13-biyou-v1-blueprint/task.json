@@ -24,7 +24,8 @@
     "11-19-lingmai-monitoring",
     "11-19-daojian-stress",
     "11-20-daoguo-node-autonomy",
-    "11-20-zhentu-task-ledger"
+    "11-20-zhentu-task-ledger",
+    "11-20-daoguo-aggregator"
   ],
   "parent": null,
   "relatedFiles": [
