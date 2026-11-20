@@ -43,6 +43,7 @@ def register_body(
     boot_id: str = "boot-12345678",
     endpoint: str = "http://192.168.1.20:4010",
     queue_len: int = 0,
+    limits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "node": {
@@ -72,7 +73,9 @@ def register_body(
                 "loaded": True,
             },
         ],
-        "limits": {"max_concurrency": 4, "max_context_len": 32768},
+        "limits": limits
+        if limits is not None
+        else {"max_concurrency": 4, "max_context_len": 32768},
         "resources": {"queue_len": queue_len, "active": 0, "cpu_pct": 12.5},
         "heartbeat_interval_s": interval,
         "boot_id": boot_id,
@@ -304,6 +307,36 @@ def test_candidates_order_and_exclude(ctx):
         headers=auth(),
     ).json()["candidates"]
     assert len(exact) == 2
+
+
+def test_candidates_effective_max_concurrency(ctx):
+    client, _, _ = ctx
+    client.post(
+        "/zhentu/v1/nodes/register",
+        json=register_body(
+            node_id="sanxian-01",
+            role="sanxian",
+            limits={
+                "max_concurrency": 2,
+                "effective_max_concurrency": 1,
+                "max_context_len": 4096,
+            },
+        ),
+        headers=auth("sanxian-01", "sanxian"),
+    )
+    client.post(
+        "/zhentu/v1/nodes/register",
+        json=register_body(node_id="quasheng-01"),
+        headers=auth(),
+    )
+    candidates = client.get(
+        "/zhentu/v1/candidates", params={"capability": "chat"}, headers=auth()
+    ).json()["candidates"]
+    by_id = {item["node_id"]: item for item in candidates}
+    assert by_id["sanxian-01"]["max_concurrency"] == 2
+    assert by_id["sanxian-01"]["effective_max_concurrency"] == 1
+    assert by_id["quasheng-01"]["max_concurrency"] == 4
+    assert by_id["quasheng-01"]["effective_max_concurrency"] == 4
 
 
 def test_sanxian_ttl_floor(ctx):

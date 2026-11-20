@@ -461,8 +461,17 @@ def create_app(
             limits = view["limits"] or {}
             queue_len = int(resources.get("queue_len") or 0)
             max_concurrency = int(limits.get("max_concurrency") or 0)
+            effective_max_concurrency = int(
+                limits.get("effective_max_concurrency") or 0
+            )
+            if effective_max_concurrency <= 0:
+                effective_max_concurrency = max_concurrency
             active = int(resources.get("active") or 0)
-            ratio = (active / max_concurrency) if max_concurrency > 0 else 0.0
+            ratio = (
+                active / effective_max_concurrency
+                if effective_max_concurrency > 0
+                else 0.0
+            )
             for entry in view["models"]:
                 if capability not in entry["capabilities"]:
                     continue
@@ -483,6 +492,7 @@ def create_app(
                             "status": view["status"],
                             "queue_len": queue_len,
                             "max_concurrency": max_concurrency,
+                            "effective_max_concurrency": effective_max_concurrency,
                             "active": active,
                         },
                     )
