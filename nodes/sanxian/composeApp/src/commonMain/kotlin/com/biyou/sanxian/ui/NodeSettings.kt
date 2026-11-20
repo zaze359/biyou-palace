@@ -9,6 +9,40 @@ import androidx.compose.ui.graphics.ImageBitmap
  * 修改后通过重启前台服务生效，不需要重新打包 APK。
  */
 
+/** 前端对话模式。集群相关字段只影响前端，不参与节点服务启动。 */
+enum class ChatMode {
+    LOCAL,
+    AUTO,
+    CLUSTER,
+    ;
+
+    /** 发给阵图的 `requested_mode` 只能是 local|auto|cluster 的小写形式。 */
+    val wire: String get() = name.lowercase()
+
+    /** 界面展示名。 */
+    val label: String
+        get() = when (this) {
+            LOCAL -> "本地"
+            AUTO -> "自动"
+            CLUSTER -> "集群"
+        }
+
+    companion object {
+        fun fromWire(value: String?): ChatMode =
+            entries.firstOrNull { it.wire == value?.trim()?.lowercase() } ?: LOCAL
+    }
+}
+
+/** 阵图连接配置；[baseUrl] 为空表示未接入集群。 */
+data class ClusterSettings(
+    val baseUrl: String = "",
+    val token: String = "",
+    val originNodeId: String = "",
+    val defaultMode: ChatMode = ChatMode.LOCAL,
+) {
+    val configured: Boolean get() = baseUrl.isNotBlank()
+}
+
 /** 用户在设置页可编辑的配置项。模型字段为模型目录下的文件名（GGUF），null 表示不启用。 */
 data class NodeSettingsValues(
     val port: Int,
@@ -17,6 +51,12 @@ data class NodeSettingsValues(
     val maxConcurrency: Int,
     val chatModel: String?,
     val embeddingModel: String?,
+    /** 阵图根地址（如 `http://192.168.1.10:8100`）；空=未配置集群 */
+    val zhentuBaseUrl: String = "",
+    val zhentuToken: String = "",
+    /** 本节点身份；空则回退 NodeConfig.node_id */
+    val originNodeId: String = "",
+    val defaultMode: ChatMode = ChatMode.LOCAL,
 )
 
 /** 当前生效配置 + 模型目录中可供选择的 GGUF 文件（仅文件名）。 */
@@ -66,6 +106,9 @@ expect suspend fun probeNodeHealth(port: Int): Boolean
  * 聊天改走节点 HTTP 接口后，端口与 token 必须与设备配置保持一致。
  */
 expect suspend fun loadNodeChatEndpoint(): NodeChatEndpoint
+
+/** 读取阵图连接配置（DataStore）；[NodeSettingsValues.originNodeId] 为空时回退节点 id。 */
+expect suspend fun loadClusterSettings(): ClusterSettings
 
 /**
  * 受控切换节点 chat 模型：写入 DataStore 并重启前台服务，由服务在 onCreate 里重新加载模型。

@@ -19,6 +19,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +59,10 @@ fun SettingsScreen(
     onConcurrencyChange: (String) -> Unit,
     onChatModelChange: (String) -> Unit,
     onEmbeddingModelChange: (String) -> Unit,
+    onZhentuBaseUrlChange: (String) -> Unit,
+    onZhentuTokenChange: (String) -> Unit,
+    onOriginNodeIdChange: (String) -> Unit,
+    onDefaultModeChange: (ChatMode) -> Unit,
     onRegenerateToken: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -193,6 +198,61 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
+                }
+            }
+
+            item { SectionTitle("集群（阵图）") }
+
+            item {
+                Text(
+                    "地址留空表示只在本机运行。配置后可在对话页选择「自动 / 集群」把任务交给阵图。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+
+            item {
+                OutlinedTextField(
+                    value = state.zhentuBaseUrl,
+                    onValueChange = onZhentuBaseUrlChange,
+                    label = { Text("阵图地址（如 http://192.168.1.10:8100）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            item {
+                OutlinedTextField(
+                    value = state.zhentuToken,
+                    onValueChange = onZhentuTokenChange,
+                    label = { Text("阵图 token") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            item {
+                OutlinedTextField(
+                    value = state.originNodeId,
+                    onValueChange = onOriginNodeIdChange,
+                    label = { Text("本节点 id（需与阵图 node_tokens 一致）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("默认模式", style = MaterialTheme.typography.bodyLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ChatMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = state.defaultMode == mode,
+                                onClick = { onDefaultModeChange(mode) },
+                                label = { Text(mode.label) },
+                            )
+                        }
+                    }
                 }
             }
 

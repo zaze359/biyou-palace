@@ -21,6 +21,10 @@ data class SettingsUiState(
     val concurrencyText: String = "",
     val chatModel: String = "",
     val embeddingModel: String = "",
+    val zhentuBaseUrl: String = "",
+    val zhentuToken: String = "",
+    val originNodeId: String = "",
+    val defaultMode: ChatMode = ChatMode.LOCAL,
     val availableModels: List<String> = emptyList(),
     val savedValues: NodeSettingsValues? = null,
     val saving: Boolean = false,
@@ -50,6 +54,10 @@ class SettingsViewModel : ViewModel() {
                     concurrencyText = v.maxConcurrency.toString(),
                     chatModel = v.chatModel.orEmpty(),
                     embeddingModel = v.embeddingModel.orEmpty(),
+                    zhentuBaseUrl = v.zhentuBaseUrl,
+                    zhentuToken = v.zhentuToken,
+                    originNodeId = v.originNodeId,
+                    defaultMode = v.defaultMode,
                     availableModels = snapshot.availableModels,
                     savedValues = v,
                     errorMessage = null,
@@ -67,6 +75,11 @@ class SettingsViewModel : ViewModel() {
     fun onChatModelChange(name: String) = _state.update { it.copy(chatModel = name) }
     fun onEmbeddingModelChange(name: String) =
         _state.update { it.copy(embeddingModel = name) }
+
+    fun onZhentuBaseUrlChange(text: String) = _state.update { it.copy(zhentuBaseUrl = text.trim()) }
+    fun onZhentuTokenChange(text: String) = _state.update { it.copy(zhentuToken = text.trim()) }
+    fun onOriginNodeIdChange(text: String) = _state.update { it.copy(originNodeId = text.trim()) }
+    fun onDefaultModeChange(mode: ChatMode) = _state.update { it.copy(defaultMode = mode) }
 
     fun regenerateToken() = _state.update { it.copy(token = generateSharedToken()) }
 
@@ -92,6 +105,22 @@ class SettingsViewModel : ViewModel() {
             return
         }
 
+        val zhentuBaseUrl = s.zhentuBaseUrl.trim().trimEnd('/')
+        if (zhentuBaseUrl.isNotEmpty()) {
+            if (!zhentuBaseUrl.startsWith("http://") && !zhentuBaseUrl.startsWith("https://")) {
+                _state.update { it.copy(errorMessage = "阵图地址需以 http:// 或 https:// 开头") }
+                return
+            }
+            if (s.zhentuToken.isBlank()) {
+                _state.update { it.copy(errorMessage = "配置阵图地址时，阵图 token 不能为空") }
+                return
+            }
+            if (s.originNodeId.isBlank()) {
+                _state.update { it.copy(errorMessage = "配置阵图地址时，本节点 id 不能为空") }
+                return
+            }
+        }
+
         val values = NodeSettingsValues(
             port = port,
             sharedToken = s.token,
@@ -99,8 +128,41 @@ class SettingsViewModel : ViewModel() {
             maxConcurrency = concurrency,
             chatModel = s.chatModel,
             embeddingModel = s.embeddingModel.ifBlank { null },
+            zhentuBaseUrl = zhentuBaseUrl,
+            zhentuToken = s.zhentuToken,
+            originNodeId = s.originNodeId,
+            defaultMode = s.defaultMode,
         )
         val before = s.savedValues
+
+        // 集群字段只影响前端，改动它们不需要重启节点服务。
+        val nodeChanged = before == null || before.copy(
+            zhentuBaseUrl = zhentuBaseUrl,
+            zhentuToken = s.zhentuToken,
+            originNodeId = s.originNodeId,
+            defaultMode = s.defaultMode,
+        ) != values
+
+        if (!nodeChanged) {
+            viewModelScope.launch {
+                _state.update { it.copy(saving = true, errorMessage = null, statusMessage = null) }
+                val saved = runCatching { saveNodeSettings(values) }.getOrElse { e ->
+                    _state.update {
+                        it.copy(saving = false, errorMessage = "保存失败：${e.message}")
+                    }
+                    return@launch
+                }
+                _state.update {
+                    it.copy(
+                        saving = false,
+                        savedValues = saved.values,
+                        availableModels = saved.availableModels,
+                        statusMessage = "集群配置已保存（无需重启节点服务）",
+                    )
+                }
+            }
+            return
+        }
 
         viewModelScope.launch {
             _state.update { it.copy(saving = true, errorMessage = null, statusMessage = "正在保存并重启服务…") }

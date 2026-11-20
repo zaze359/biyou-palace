@@ -35,6 +35,7 @@ fun SanXianApp(
                     accessRefreshKey = accessRefreshKey,
                     banner = banner,
                     onInputChange = chatViewModel::onInputChange,
+                    onModeChange = chatViewModel::onModeChange,
                     onSend = chatViewModel::onSend,
                     onStop = chatViewModel::onStop,
                     onOpenModels = { screen = Screen.Models },
@@ -76,6 +77,10 @@ fun SanXianApp(
                     onConcurrencyChange = settingsViewModel::onConcurrencyChange,
                     onChatModelChange = settingsViewModel::onChatModelChange,
                     onEmbeddingModelChange = settingsViewModel::onEmbeddingModelChange,
+                    onZhentuBaseUrlChange = settingsViewModel::onZhentuBaseUrlChange,
+                    onZhentuTokenChange = settingsViewModel::onZhentuTokenChange,
+                    onOriginNodeIdChange = settingsViewModel::onOriginNodeIdChange,
+                    onDefaultModeChange = settingsViewModel::onDefaultModeChange,
                     onRegenerateToken = settingsViewModel::regenerateToken,
                     onSave = settingsViewModel::save,
                 )

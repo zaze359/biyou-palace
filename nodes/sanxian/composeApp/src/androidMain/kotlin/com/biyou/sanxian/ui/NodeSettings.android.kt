@@ -26,6 +26,7 @@ import java.net.URL
 
 actual suspend fun loadNodeSettings(): NodeSettingsSnapshot {
     val config = NodeConfigStore.effectiveConfig(SanXianApplication.appContext)
+    val cluster = NodeConfigStore.clusterConfig(SanXianApplication.appContext)
     return NodeSettingsSnapshot(
         values = NodeSettingsValues(
             port = config.port,
@@ -34,6 +35,10 @@ actual suspend fun loadNodeSettings(): NodeSettingsSnapshot {
             maxConcurrency = config.maxConcurrency,
             chatModel = config.preloadModels.firstOrNull()?.let { File(it).name },
             embeddingModel = config.embeddingModel?.let { File(it).name },
+            zhentuBaseUrl = cluster.baseUrl,
+            zhentuToken = cluster.token,
+            originNodeId = cluster.originNodeId,
+            defaultMode = ChatMode.fromWire(cluster.defaultMode),
         ),
         availableModels = scanLocalModels().map { it.fileName }.sorted(),
     )
@@ -48,6 +53,13 @@ actual suspend fun saveNodeSettings(values: NodeSettingsValues): NodeSettingsSna
         maxConcurrency = values.maxConcurrency,
         chatModel = values.chatModel,
         embeddingModel = values.embeddingModel,
+    )
+    NodeConfigStore.saveCluster(
+        context = SanXianApplication.appContext,
+        baseUrl = values.zhentuBaseUrl,
+        token = values.zhentuToken,
+        originNodeId = values.originNodeId,
+        defaultMode = values.defaultMode.wire,
     )
     return loadNodeSettings()
 }
@@ -124,6 +136,16 @@ actual suspend fun loadNodeChatEndpoint(): NodeChatEndpoint {
     return NodeChatEndpoint(
         baseUrl = "http://127.0.0.1:${config.port}/v1",
         token = config.sharedToken,
+    )
+}
+
+actual suspend fun loadClusterSettings(): ClusterSettings {
+    val cluster = NodeConfigStore.clusterConfig(SanXianApplication.appContext)
+    return ClusterSettings(
+        baseUrl = cluster.baseUrl,
+        token = cluster.token,
+        originNodeId = cluster.originNodeId,
+        defaultMode = ChatMode.fromWire(cluster.defaultMode),
     )
 }
 

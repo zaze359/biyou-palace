@@ -1,6 +1,7 @@
 package com.biyou.sanxian.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +46,7 @@ fun ChatScreen(
     accessRefreshKey: Int,
     banner: (@Composable () -> Unit)? = null,
     onInputChange: (String) -> Unit,
+    onModeChange: (ChatMode) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onOpenModels: () -> Unit,
@@ -88,10 +91,18 @@ fun ChatScreen(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
             )
             banner?.invoke()
+            ModeSelector(
+                mode = state.mode,
+                clusterConfigured = state.clusterConfigured,
+                onModeChange = onModeChange,
+            )
             NodeModelBar(
                 state = state,
                 onOpenSettings = onOpenSettings,
             )
+            state.clusterTask?.let { task ->
+                ClusterTaskBar(task = task, onCancel = onStop)
+            }
             if (state.messages.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
                     Text(
@@ -166,6 +177,90 @@ private fun NodeModelBar(
             }
         }
     }
+}
+
+/**
+ * 对话模式：本地 / 自动 / 集群。
+ * 集群只影响前端路径，不改变节点 `/v1/` 接口契约。
+ */
+@Composable
+private fun ModeSelector(
+    mode: ChatMode,
+    clusterConfigured: Boolean,
+    onModeChange: (ChatMode) -> Unit,
+) {
+    Surface(tonalElevation = 1.dp) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChatMode.entries.forEach { item ->
+                    FilterChip(
+                        selected = mode == item,
+                        onClick = { onModeChange(item) },
+                        label = { Text(item.label) },
+                    )
+                }
+            }
+            if (mode != ChatMode.LOCAL && !clusterConfigured) {
+                Text(
+                    text = "尚未配置阵图地址：请到「节点设置 · 集群」填写后再发送。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+/** 集群任务状态条：只展示进度与 task_id，不展开完整事件。 */
+@Composable
+private fun ClusterTaskBar(task: ClusterTaskUiState, onCancel: () -> Unit) {
+    Surface(tonalElevation = 2.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "集群任务 ${task.shortId} · ${clusterStatusLabel(task.status)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = buildString {
+                        append("开始 ${task.startedSteps} · 完成 ${task.completedSteps}")
+                        if (task.failedSteps > 0) append(" · 失败 ${task.failedSteps}")
+                        task.runningStep?.let { append(" · 当前 $it") }
+                        task.lastEventType?.let { append(" · $it") }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                task.error?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            if (!task.terminal) {
+                TextButton(onClick = onCancel) { Text("取消") }
+            }
+        }
+    }
+}
+
+private fun clusterStatusLabel(status: String): String = when (status) {
+    "submitted" -> "已提交"
+    "running" -> "执行中"
+    "aggregating" -> "聚合中"
+    "canceling" -> "取消中"
+    "completed" -> "已完成"
+    "partial" -> "部分完成"
+    "failed" -> "失败"
+    "canceled" -> "已取消"
+    "interrupted" -> "连接中断"
+    else -> status
 }
 
 @Composable

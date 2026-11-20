@@ -34,6 +34,18 @@ object NodeConfigStore {
     private val KEY_CHAT_MODEL = stringPreferencesKey("chat_model")
     private val KEY_EMBEDDING_MODEL = stringPreferencesKey("embedding_model")
 
+    // 集群（阵图）配置：仅节点前端使用，不参与节点服务启动
+    private val KEY_ZHENTU_URL = stringPreferencesKey("zhentu_base_url")
+    private val KEY_ZHENTU_TOKEN = stringPreferencesKey("zhentu_token")
+    private val KEY_ORIGIN_NODE_ID = stringPreferencesKey("origin_node_id")
+    private val KEY_DEFAULT_MODE = stringPreferencesKey("default_mode")
+
+    // 集群任务摘要：断线重连只需 task_id + 事件游标 + 终态答案
+    private val KEY_CLUSTER_TASK_ID = stringPreferencesKey("cluster_task_id")
+    private val KEY_CLUSTER_TASK_EVENT_ID = stringPreferencesKey("cluster_task_event_id")
+    private val KEY_CLUSTER_TASK_STATUS = stringPreferencesKey("cluster_task_status")
+    private val KEY_CLUSTER_TASK_ANSWER = stringPreferencesKey("cluster_task_answer")
+
     /** 合并后的生效配置（模型仍为文件名或 assets 里的相对路径，由服务解析为绝对路径）。 */
     suspend fun effectiveConfig(context: Context): NodeConfig {
         val app = context.applicationContext
@@ -87,6 +99,64 @@ object NodeConfigStore {
         return generated
     }
 
+    /** 阵图连接配置；`originNodeId` 为空时回退 assets/NodeConfig 的 node_id。 */
+    suspend fun clusterConfig(context: Context): StoredClusterConfig {
+        val app = context.applicationContext
+        val prefs = app.nodeConfigDataStore.data.first()
+        val defaultNodeId = readAssetsConfig(app).nodeId
+        return StoredClusterConfig(
+            baseUrl = prefs[KEY_ZHENTU_URL].orEmpty().trimEnd('/'),
+            token = prefs[KEY_ZHENTU_TOKEN].orEmpty(),
+            originNodeId = prefs[KEY_ORIGIN_NODE_ID]?.takeIf { it.isNotBlank() } ?: defaultNodeId,
+            defaultMode = prefs[KEY_DEFAULT_MODE] ?: "local",
+        )
+    }
+
+    suspend fun saveCluster(
+        context: Context,
+        baseUrl: String,
+        token: String,
+        originNodeId: String,
+        defaultMode: String,
+    ) {
+        context.applicationContext.nodeConfigDataStore.edit { prefs ->
+            prefs[KEY_ZHENTU_URL] = baseUrl.trim().trimEnd('/')
+            prefs[KEY_ZHENTU_TOKEN] = token.trim()
+            prefs[KEY_ORIGIN_NODE_ID] = originNodeId.trim()
+            prefs[KEY_DEFAULT_MODE] = defaultMode
+        }
+    }
+
+    /** 读取上次集群任务摘要；没有任务返回 null。 */
+    suspend fun clusterTask(context: Context): StoredClusterTask? {
+        val prefs = context.applicationContext.nodeConfigDataStore.data.first()
+        val taskId = prefs[KEY_CLUSTER_TASK_ID]?.takeIf { it.isNotBlank() } ?: return null
+        return StoredClusterTask(
+            taskId = taskId,
+            lastEventId = prefs[KEY_CLUSTER_TASK_EVENT_ID]?.takeIf { it.isNotBlank() },
+            status = prefs[KEY_CLUSTER_TASK_STATUS].orEmpty(),
+            answer = prefs[KEY_CLUSTER_TASK_ANSWER],
+        )
+    }
+
+    suspend fun saveClusterTask(context: Context, task: StoredClusterTask) {
+        context.applicationContext.nodeConfigDataStore.edit { prefs ->
+            prefs[KEY_CLUSTER_TASK_ID] = task.taskId
+            prefs[KEY_CLUSTER_TASK_EVENT_ID] = task.lastEventId.orEmpty()
+            prefs[KEY_CLUSTER_TASK_STATUS] = task.status
+            prefs[KEY_CLUSTER_TASK_ANSWER] = task.answer.orEmpty()
+        }
+    }
+
+    suspend fun clearClusterTask(context: Context) {
+        context.applicationContext.nodeConfigDataStore.edit { prefs ->
+            prefs.remove(KEY_CLUSTER_TASK_ID)
+            prefs.remove(KEY_CLUSTER_TASK_EVENT_ID)
+            prefs.remove(KEY_CLUSTER_TASK_STATUS)
+            prefs.remove(KEY_CLUSTER_TASK_ANSWER)
+        }
+    }
+
     private fun readAssetsConfig(context: Context): NodeConfig = runCatching {
         context.assets.open("sanxian.json").bufferedReader().use { loadNodeConfig(it.readText()) }
     }.getOrElse { NodeConfig() }
@@ -98,3 +168,19 @@ object NodeConfigStore {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 }
+
+/** 阵图连接配置的存储形状（纯字符串，UI 层再映射为 ChatMode）。 */
+data class StoredClusterConfig(
+    val baseUrl: String,
+    val token: String,
+    val originNodeId: String,
+    val defaultMode: String,
+)
+
+/** 集群任务摘要：断线重连所需的最小状态。 */
+data class StoredClusterTask(
+    val taskId: String,
+    val lastEventId: String?,
+    val status: String,
+    val answer: String?,
+)
