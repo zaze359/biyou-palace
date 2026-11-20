@@ -181,7 +181,57 @@ python3 scripts/daojian/stub_gateway.py --port 18080
 
 我倾向 **B + A 组合**：先加纠错重试（代码小、对所有模型都有益），再由你决定要不要拉 7B 模型。
 
-## 九、结论
+## 九、方案 B + A 实施结果（2026-11-21 05:00–07:30）
+
+### B：规划格式纠错重试
+
+`PlannerClient` 现在把校验错误回喂给模型重试（默认 1 次，`ZHENTU_PLANNER_RETRIES` 可配 0–3）：
+
+- 校验失败/JSON 解析失败 → 带「上一次错误」重试；`HTTPError` 与网络异常不重试（重试无意义）；
+- 规划超时独立可配（`ZHENTU_PLANNER_TIMEOUT_S`，默认 30s），CPU 上的 7B 需要更长；
+- 提示词补齐硬性约束：键名必须加双引号、`failure_policy` 只能是 `fail_task|partial`、
+  `aggregate.mode` 只能是 `concat|llm`、`max_steps >= 实际步骤数`。
+
+**实测（0.5B + 2 次重试）**：
+
+```json
+{"steps": 2, "planner_source": "planner", "planner_note": "第 2 次尝试成功"}
+```
+
+0.5B 首次输出必然非法，**靠重试救回并成功拆出 2 步**，任务 14 秒完成。
+修复前的行为是「一次失败即回退单步」，这条链路现在才真正可用。
+
+### A：换 7B 规划模型
+
+`ollama pull qwen2.5:7b`（4.7GB）完成后：
+
+| 场景 | 结果 |
+|---|---|
+| 7B 直出 Plan JSON | 一次通过，合法 JSON，拆出 4 步 |
+| 经阵图编排（超时 300s） | `planner_source=planner`，**2 步全部成功**，109s，`completed` |
+| 事件流 | `planned(2) → s1 ok → s2 ok → aggregate → completed` |
+
+**蓝图第三步验收「复杂请求自动拆多子任务并行」在 7B 上首次真正达成。**
+
+### 仍未打通的：NewAPI 渠道没有 7B
+
+```
+{"code":"model_not_found","message":"No available channel for model qwen2.5:7b under group default"}
+```
+
+NewAPI 只配置了 `qwen2.5:0.5b` 与 `nomic-embed-text:latest` 两个渠道。本次 7B 验证是**阵图直连 Ollama**
+（`ZHENTU_NEWAPI_BASE_URL=http://127.0.0.1:11434/v1`）完成的，绕过了 NewAPI。
+要在完整拓扑（阵图→NewAPI→节点）下验证，需要在 NewAPI 后台把 `qwen2.5:7b` 加入渠道——需要 admin 权限。
+
+### 配置参考
+
+```bash
+ZHENTU_PLANNER_MODEL=qwen2.5:7b        # 规划模型；0.5B 需配合重试
+ZHENTU_PLANNER_TIMEOUT_S=300           # CPU 上的 7B 生成整段计划需要更长时间
+ZHENTU_PLANNER_RETRIES=1               # 格式纠错重试次数（0-3）
+```
+
+## 十、结论
 
 编排链路**服务端部分是通的**：提交、事件流、两步计划的顺序执行、聚合、幂等、越权、取消、选路降级
 全部符合预期，连续 3 次稳定 7/7。
@@ -193,3 +243,8 @@ python3 scripts/daojian/stub_gateway.py --port 18080
 - 规划器拿不到能力快照，能力不可用要到执行时才失败（发现 4）。
 
 真实网关接入后，E1–E7 应该用 `--gateway-base-url` 指向 NewAPI 重跑一遍，届时 `stub=false`。
+
+---
+
+**更新（B+A 之后）**：拆步能力已可用。7B 一次通过、0.5B 靠重试也能成功。剩余缺口是 NewAPI 渠道未配置 7B，
+导致「阵图→NewAPI→节点」完整链路下仍只能走 0.5B。补齐渠道配置后应重跑本报告第二节的 E1–E7。

@@ -184,8 +184,11 @@ def create_app(
         base_url=cfg.newapi_base_url,
         token=cfg.newapi_token,
         model=cfg.planner_model,
-        timeout_s=min(30.0, cfg.newapi_timeout_s),
+        # 规划超时独立配置：CPU 上的 7B 生成整段计划 JSON 可能远超 30s，
+        # 但也不能无限等，仍以上游总超时为上限。
+        timeout_s=min(cfg.planner_timeout_s, cfg.newapi_timeout_s),
         fallback=SingleStepPlanner(),
+        max_retries=cfg.planner_retries,
     )
     selected_executor: Executor = executor or NewApiExecutor(
         base_url=cfg.newapi_base_url,

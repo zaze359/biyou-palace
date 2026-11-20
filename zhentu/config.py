@@ -80,6 +80,8 @@ class RegistrySettings:
     newapi_timeout_s: float = DEFAULT_NEWAPI_TIMEOUT_S
     newapi_connect_timeout_s: float = DEFAULT_NEWAPI_CONNECT_TIMEOUT_S
     planner_model: str = ""
+    planner_retries: int = 1
+    planner_timeout_s: float = 30.0
     aggregator_mode: str = "concat"
     aggregator_model: str = ""
     aggregator_timeout_s: float = DEFAULT_AGGREGATOR_TIMEOUT_S
@@ -105,6 +107,10 @@ class RegistrySettings:
             raise ConfigError("ZHENTU_TASK_EVENT_MAX_PER_TASK 不能小于 100")
         if self.newapi_timeout_s <= 0 or self.newapi_connect_timeout_s <= 0:
             raise ConfigError("NewAPI 超时配置必须大于 0")
+        if self.planner_timeout_s <= 0:
+            raise ConfigError("ZHENTU_PLANNER_TIMEOUT_S 必须大于 0")
+        if self.planner_retries < 0 or self.planner_retries > 3:
+            raise ConfigError("ZHENTU_PLANNER_RETRIES 必须在 0..3")
         if self.aggregator_mode not in ("concat", "llm"):
             raise ConfigError("ZHENTU_AGGREGATOR_MODE 只能是 concat 或 llm")
         if self.aggregator_timeout_s <= 0:
@@ -172,6 +178,8 @@ def load_settings() -> RegistrySettings:
             )
         ),
         planner_model=os.environ.get("ZHENTU_PLANNER_MODEL") or "",
+        planner_retries=int(os.environ.get("ZHENTU_PLANNER_RETRIES") or 1),
+        planner_timeout_s=float(os.environ.get("ZHENTU_PLANNER_TIMEOUT_S") or 30.0),
         aggregator_mode=(os.environ.get("ZHENTU_AGGREGATOR_MODE") or "concat").lower(),
         aggregator_model=os.environ.get("ZHENTU_AGGREGATOR_MODEL") or "",
         aggregator_timeout_s=float(

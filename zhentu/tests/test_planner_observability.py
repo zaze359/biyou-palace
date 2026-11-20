@@ -44,7 +44,7 @@ def test_planner_client_invalid_output_marks_fallback(monkeypatch):
         base_url="http://127.0.0.1:1", token=Secret("t"), model="m"
     )
 
-    def boom(request, snapshot):
+    def boom(request, snapshot, last_error=None):
         return {"steps": []}  # 空步骤 → validate_plan 抛 PlanError
 
     monkeypatch.setattr(client, "_request_plan", boom)
@@ -58,7 +58,7 @@ def test_planner_client_network_error_marks_fallback(monkeypatch):
         base_url="http://127.0.0.1:1", token=Secret("t"), model="m"
     )
 
-    def boom(request, snapshot):
+    def boom(request, snapshot, last_error=None):
         raise ConnectionError("refused")
 
     monkeypatch.setattr(client, "_request_plan", boom)
@@ -181,3 +181,126 @@ def test_planner_without_snapshot_tells_model_to_stay_single_step(monkeypatch):
     asyncio.run(client.plan({"input": {"messages": []}}))
     system_prompt = captured["body"]["messages"][0]["content"]
     assert "没有可用的能力快照" in system_prompt
+
+
+# ---------------------------------------------------------------- 格式纠错重试
+
+
+def _plan_json_str() -> str:
+    plan = single_step_plan({"input": {"messages": []}})
+    plan.pop("planner_source", None)
+    plan.pop("planner_note", None)
+    return json.dumps(plan)
+
+
+def test_retry_recovers_from_invalid_first_attempt(monkeypatch):
+    """第一次输出非法、第二次（带着错误反馈）合法：应标记为 planner 且记录重试。"""
+    calls: list[str | None] = []
+
+    class FakeResp:
+        def __init__(self, content: str) -> None:
+            self._content = content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": self._content}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        body = json.loads(req.data.decode())
+        system_msg = body["messages"][0]["content"]
+        # 重试时提示里会带上上一次的校验错误
+        calls.append(system_msg)
+        if "上一次输出未通过校验" in system_msg:
+            return FakeResp(_plan_json_str())
+        return FakeResp("这不是 JSON")
+
+    monkeypatch.setattr(orchestration.urllib.request, "urlopen", fake_urlopen)
+    client = PlannerClient(base_url="http://127.0.0.1:1", token=Secret("t"), model="m", max_retries=1)
+    plan = asyncio.run(client.plan({"input": {"messages": []}}))
+    assert plan["planner_source"] == "planner"
+    assert "第 2 次尝试成功" in plan.get("planner_note", "")
+    assert len(calls) == 2
+
+
+def test_retry_exhausted_falls_back_with_last_error(monkeypatch):
+    calls: list[str | None] = []
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "仍然不是 JSON"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(json.loads(req.data.decode())["messages"][0]["content"])
+        return FakeResp()
+
+    monkeypatch.setattr(orchestration.urllib.request, "urlopen", fake_urlopen)
+    client = PlannerClient(base_url="http://127.0.0.1:1", token=Secret("t"), model="m", max_retries=2)
+    plan = asyncio.run(client.plan({"input": {"messages": []}}))
+    assert plan["planner_source"] == "fallback"
+    assert "planner_invalid" in plan["planner_note"]
+    assert "3 次尝试" in plan["planner_note"]
+    assert len(calls) == 3
+
+
+def test_retry_disabled_makes_single_attempt(monkeypatch):
+    calls: list[str | None] = []
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "bad"}}]}).encode()
+
+    monkeypatch.setattr(
+        orchestration.urllib.request, "urlopen",
+        lambda req, timeout=None: (calls.append(1), FakeResp())[1],
+    )
+    client = PlannerClient(base_url="http://127.0.0.1:1", token=Secret("t"), model="m", max_retries=0)
+    plan = asyncio.run(client.plan({"input": {"messages": []}}))
+    assert plan["planner_source"] == "fallback"
+    assert len(calls) == 1
+
+
+def test_prompt_contains_format_constraints():
+    """提示词必须明确键名引号/failure_policy/aggregate.mode，否则弱模型无从遵守。"""
+    captured: dict[str, Any] = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": _plan_json_str()}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return FakeResp()
+
+    client = PlannerClient(base_url="http://127.0.0.1:1", token=Secret("t"), model="m")
+    orchestration.urllib.request.urlopen = fake_urlopen  # noqa: 直接替换以便读取
+    try:
+        asyncio.run(client.plan({"input": {"messages": []}}))
+    finally:
+        pass
+    system_prompt = captured["body"]["messages"][0]["content"]
+    assert "双引号" in system_prompt
+    assert "fail_task" in system_prompt
+    assert "concat" in system_prompt

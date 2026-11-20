@@ -190,12 +190,15 @@ class PlannerClient:
         model: str = "",
         timeout_s: float = 30.0,
         fallback: Planner | None = None,
+        max_retries: int = 1,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._model = model
         self._timeout_s = timeout_s
         self._fallback = fallback or SingleStepPlanner()
+        # 校验失败后把错误回喂重试的次数（0 表示不重试）；上限 3 防止弱模型无限打转
+        self._max_retries = max(0, min(int(max_retries), 3))
 
     async def plan(self, request: dict[str, Any]) -> dict[str, Any]:
         if not self._base_url or not self._model or not self._token:
@@ -203,18 +206,45 @@ class PlannerClient:
                 request, "planner_not_configured", "未配置规划模型或凭据（ZHENTU_PLANNER_MODEL）"
             )
         snapshot = request.get("capability_snapshot") or {}
-        try:
-            raw = await asyncio.to_thread(self._request_plan, request, snapshot)
-            plan = validate_plan(raw)
+        # 弱模型（0.5B 级）首次几乎必然产出非法 JSON。把校验错误回喂再试，
+        # 对上位模型只是多一次机会，对弱模型才是能不能用的差别。
+        last_error: str | None = None
+        attempts = max(1, self._max_retries + 1)
+        for attempt in range(attempts):
+            try:
+                raw = await asyncio.to_thread(
+                    self._request_plan, request, snapshot, last_error
+                )
+            except urllib.error.HTTPError as exc:
+                # 服务端错误重试没意义（鉴权/限流/额度），直接回退并说明原因
+                return await self._fallback_plan(
+                    request, "planner_error", f"HTTPError {exc.code}"
+                )
+            except json.JSONDecodeError as exc:
+                # 模型输出的不是 JSON：这是**可纠错**的格式问题，交给下一轮重试
+                last_error = f"输出不是合法 JSON：{exc}"[:200]
+                continue
+            except Exception as exc:  # 网络/超时
+                return await self._fallback_plan(
+                    request, "planner_error", f"{type(exc).__name__}: {exc}"[:200]
+                )
+            try:
+                plan = validate_plan(raw)
+            except PlanError as exc:
+                last_error = str(exc)
+                continue
+            except json.JSONDecodeError as exc:
+                last_error = f"输出不是合法 JSON：{exc}"
+                continue
+            note = None if attempt == 0 else f"第 {attempt + 1} 次尝试成功"
             # 规划器可能返回无人可用的能力：在计划阶段就把这类步骤剔掉，
             # 否则要等执行时选路失败，任务白跑一轮。
-            return _tag_plan(_drop_unavailable_steps(plan, snapshot), "planner", None)
-        except PlanError as exc:
-            return await self._fallback_plan(request, "planner_invalid", str(exc))
-        except Exception as exc:  # 网络/超时/解析
-            return await self._fallback_plan(
-                request, "planner_error", f"{type(exc).__name__}: {exc}"[:200]
-            )
+            return _tag_plan(_drop_unavailable_steps(plan, snapshot), "planner", note)
+        return await self._fallback_plan(
+            request,
+            "planner_invalid",
+            f"{attempts} 次尝试均未通过校验，最后一次错误：{last_error}"[:300],
+        )
 
     async def _fallback_plan(
         self, request: dict[str, Any], reason: str, detail: str
@@ -226,7 +256,10 @@ class PlannerClient:
         return plan
 
     def _request_plan(
-        self, request: dict[str, Any], snapshot: dict[str, Any]
+        self,
+        request: dict[str, Any],
+        snapshot: dict[str, Any],
+        last_error: str | None = None,
     ) -> dict[str, Any]:
         messages = request.get("input", {}).get("messages") or []
         available = snapshot.get("available") or []
@@ -237,14 +270,26 @@ class PlannerClient:
             else "当前没有可用的能力快照，请保守地只做单步 chat 计划。"
         )
         prompt = (
-            "你是阵图编排器。只输出 JSON 计划，不要解释。"
-            "计划结构：{plan_id, intent, max_steps, max_parallel, steps:["
-            "{id, goal, capability, input:{messages}, depends_on, parallel_group,"
-            " exclusive, required, failure_policy, model_hint, input_ref, output_schema}],"
-            " aggregate:{mode, input_step_ids, include_partial, instructions}}。"
-            f"最多 {MAX_STEPS} 步；capability 只能是 {list(CANONICAL_CAPABILITIES)}。"
-            f"{capability_hint}"
+            "你是阵图编排器。只输出一个 JSON 对象，不要解释、不要 markdown 代码块。\n"
+            "硬性要求（违反即作废）：\n"
+            "1. 所有键名必须用双引号；字符串值必须用双引号；不允许注释、不允许尾逗号。\n"
+            "2. steps[].id 必须是字符串（如 \"s1\"）；max_steps 必须 >= 实际步骤数；max_parallel 在 1..8。\n"
+            "3. failure_policy 只能是 \"fail_task\" 或 \"partial\"；required 必须是 true/false。\n"
+            "4. aggregate.mode 只能是 \"concat\" 或 \"llm\"；input_step_ids 必须引用存在的 step id。\n"
+            "5. capability 只能取自 " + json.dumps(list(CANONICAL_CAPABILITIES), ensure_ascii=False) + "。\n"
+            "6. 单步即可回答时就用 1 步，不要为了凑数拆分。\n"
+            "结构：{\"plan_id\":string, \"intent\":string, \"max_steps\":int, \"max_parallel\":int, "
+            "\"steps\":[{\"id\":string, \"goal\":string, \"capability\":string, "
+            "\"input\":{\"messages\":[{\"role\":\"user\",\"content\":string}]}, "
+            "\"depends_on\":[string], \"required\":bool, \"failure_policy\":string}], "
+            "\"aggregate\":{\"mode\":string, \"input_step_ids\":[string]}}。\n"
+            f"最多 {MAX_STEPS} 步。{capability_hint}"
         )
+        if last_error:
+            prompt += (
+                "\n\n上一次输出未通过校验，错误是：" + last_error[:200]
+                + "\n请严格按上述格式重新输出，只给 JSON。"
+            )
         payload = {
             "model": self._model,
             "messages": [
