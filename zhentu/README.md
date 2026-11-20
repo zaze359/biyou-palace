@@ -84,8 +84,12 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 | `zhentu_route_total{strategy,result}` | 决策总数，`result=selected\|no_route` |
 | `zhentu_route_rejected_total{reason}` | 被拒候选数，按原因码累计 |
 | `zhentu_route_duration_seconds` | 决策耗时直方图（1ms ~ 2.5s，含 `+Inf`） |
+| `zhentu_tasks_created_total` | 任务账本中创建过的任务总数 |
+| `zhentu_tasks_terminal_total{status}` | 按终态统计：`completed` / `partial` / `failed` / `canceled` |
+| `zhentu_tasks_active` | 活跃任务数（`queued` / `running` / `aggregating`） |
 
-指标只保存在进程内、重启归零；刻意不记录 `node_id` / `model` 标签，避免高基数与拓扑泄漏。
+选路指标只保存在进程内、重启归零；任务指标在 scrape 时由账本现状计算，重启不丢。
+两类指标都刻意不记录 `task_id` / `node_id` / `model` / prompt，避免高基数与信息泄漏。
 
 ## 租约
 

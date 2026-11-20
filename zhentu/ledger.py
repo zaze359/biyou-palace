@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 ACTIVE_STATUSES = ("queued", "running", "aggregating")
-TERMINAL_STATUSES = ("completed", "failed", "canceled")
+TERMINAL_STATUSES = ("completed", "partial", "failed", "canceled")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -220,6 +220,14 @@ class TaskStore:
                 ACTIVE_STATUSES,
             ).fetchone()
         return int(row["n"])
+
+    def counts_by_status(self) -> dict[str, int]:
+        """全表按状态分组计数，供只读观测使用。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) AS n FROM tasks GROUP BY status"
+            ).fetchall()
+        return {str(row["status"]): int(row["n"]) for row in rows}
 
     def request_cancel(self, task_id: str, *, now_ms: int) -> bool:
         """置取消位；返回是否更新了未终态任务。"""

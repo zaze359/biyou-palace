@@ -7,6 +7,7 @@ from typing import Any, Callable
 from .aggregator import Aggregator, ConcatAggregator
 from .ledger import TaskStore
 from .orchestration import (
+    MAX_PARALLEL,
     Executor,
     Planner,
     single_step_plan,
@@ -39,6 +40,8 @@ class TaskRunner:
         self._retention_ms = retention_ms
         self._step_timeout_s = step_timeout_s
         self._aggregator_timeout_s = aggregator_timeout_s
+        # 跨任务共享的全局 step 并发上限：单任务另有 plan.max_parallel 约束。
+        self._step_semaphore = asyncio.Semaphore(MAX_PARALLEL)
 
     async def run(self, task_id: str) -> None:
         task = self._ledger.get_task(task_id)
@@ -81,7 +84,9 @@ class TaskRunner:
         deadline_hit = False
 
         steps = plan["steps"]
-        for index, step in enumerate(steps):
+        max_parallel = min(int(plan.get("max_parallel") or 1), MAX_PARALLEL)
+        index = 0
+        while index < len(steps):
             current = self._ledger.get_task(task_id) or task
             if current["cancel_requested"]:
                 canceled = True
@@ -93,6 +98,7 @@ class TaskRunner:
                 self._cancel_remaining(task_id, steps[index:], reason="deadline")
                 break
 
+            step = steps[index]
             failed_dep = next(
                 (
                     dep
@@ -115,146 +121,48 @@ class TaskRunner:
                     partials.append(
                         {"step_id": step["id"], "reason": "dependency_failed", "output_ref": None}
                     )
+                index += 1
                 continue
 
-            route = self._router(step)
-            decision_id = None
-            if route and route.get("selected"):
-                decision_id = self._ledger.record_route_decision(
-                    task_id=task_id,
-                    step_id=step["id"],
-                    request=route.get("request") or {},
-                    selected=route["selected"],
-                    rejected=route.get("rejected") or [],
-                    now_ms=self._clock(),
-                )
-            else:
-                results[step["id"]] = {
-                    "status": "failed",
-                    "error_code": "no_candidate",
-                }
-                self._fail_step(task_id, step, "no_candidate", "没有可路由的节点")
-                if step.get("required", True):
-                    required_failed = True
-                else:
-                    partials.append(
-                        {"step_id": step["id"], "reason": "no_candidate", "output_ref": None}
-                    )
-                continue
-
-            selected = route["selected"]
-            self._ledger.update_step(
-                task_id, step["id"], status="running", now_ms=self._clock()
+            batch = self._build_batch(steps, index, results, max_parallel)
+            outcomes = await asyncio.gather(
+                *(self._execute_step(task_id, item, remaining_s) for item in batch)
             )
-            self._event(
-                task_id,
-                "step/started",
-                {
-                    "step_id": step["id"],
-                    "node_id": selected.get("node_id"),
-                    "model": selected.get("model"),
-                    "route_decision_id": decision_id,
-                },
-            )
-
-            timeout_s = min(self._step_timeout_s, remaining_s)
-            try:
-                outcome = await asyncio.wait_for(
-                    self._executor.execute(step, selected, timeout_s=timeout_s),
-                    timeout=timeout_s,
-                )
-            except asyncio.TimeoutError:
-                outcome = {
-                    "status": "failed",
-                    "content": None,
-                    "output_ref": None,
-                    "usage": None,
-                    "latency_ms": int(timeout_s * 1000),
-                    "error_code": "step_timeout",
-                }
-            except Exception as exc:
-                outcome = {
-                    "status": "failed",
-                    "content": None,
-                    "output_ref": None,
-                    "usage": None,
-                    "latency_ms": 0,
-                    "error_code": "executor_error",
-                    "error_message": str(exc),
-                }
-
-            if outcome.get("status") == "ok":
-                results[step["id"]] = {"status": "ok"}
-                self._ledger.update_step(
-                    task_id,
-                    step["id"],
-                    status="ok",
-                    now_ms=self._clock(),
-                    output_ref=outcome.get("output_ref"),
-                )
-                source = {
-                    "step_id": step["id"],
-                    "node_id": selected.get("node_id"),
-                    "model": selected.get("model"),
-                    "route_decision_id": decision_id,
-                    "output_ref": outcome.get("output_ref"),
-                }
-                sources.append(source)
-                content = outcome.get("content")
-                if content:
-                    contents.append((step["id"], content))
-                step_usage = outcome.get("usage") or {}
-                usage["prompt_tokens"] += int(step_usage.get("prompt_tokens") or 0)
-                usage["completion_tokens"] += int(
-                    step_usage.get("completion_tokens") or 0
-                )
-                self._event(
-                    task_id,
-                    "step/result",
-                    {
-                        "step_id": step["id"],
-                        "node_id": selected.get("node_id"),
-                        "model": selected.get("model"),
-                        "route_decision_id": decision_id,
-                        "status": "ok",
-                        "output_ref": outcome.get("output_ref"),
-                    },
-                )
-            else:
-                code = str(outcome.get("error_code") or "step_failed")
-                results[step["id"]] = {"status": "failed", "error_code": code}
-                self._ledger.update_step(
-                    task_id,
-                    step["id"],
-                    status="failed",
-                    now_ms=self._clock(),
-                    error_code=code,
-                )
-                self._event(
-                    task_id,
-                    "step/failed",
-                    {
-                        "step_id": step["id"],
-                        "status": "failed",
-                        "error_code": code,
-                        "message": outcome.get("error_message"),
-                    },
-                )
-                if step.get("required", True):
-                    required_failed = True
-                else:
-                    partials.append(
-                        {
-                            "step_id": step["id"],
-                            "reason": code,
-                            "output_ref": outcome.get("output_ref"),
-                        }
+            for item, outcome in zip(batch, outcomes):
+                if outcome["status"] == "ok":
+                    results[item["id"]] = {"status": "ok"}
+                    source = outcome.get("source")
+                    if source is not None:
+                        sources.append(source)
+                    content = outcome.get("content")
+                    if content:
+                        contents.append((item["id"], content))
+                    step_usage = outcome.get("usage") or {}
+                    usage["prompt_tokens"] += int(
+                        step_usage.get("prompt_tokens") or 0
                     )
+                    usage["completion_tokens"] += int(
+                        step_usage.get("completion_tokens") or 0
+                    )
+                else:
+                    code = str(outcome.get("error_code") or "step_failed")
+                    results[item["id"]] = {"status": "failed", "error_code": code}
+                    if item.get("required", True):
+                        required_failed = True
+                    else:
+                        partials.append(
+                            {
+                                "step_id": item["id"],
+                                "reason": code,
+                                "output_ref": outcome.get("output_ref"),
+                            }
+                        )
+            index += len(batch)
 
             current = self._ledger.get_task(task_id) or task
             if current["cancel_requested"]:
                 canceled = True
-                self._cancel_remaining(task_id, steps[index + 1 :])
+                self._cancel_remaining(task_id, steps[index:])
                 break
 
         if canceled:
@@ -361,6 +269,164 @@ class TaskRunner:
             "step/failed",
             {"step_id": step["id"], "status": "failed", "error_code": code, "message": message},
         )
+
+    @staticmethod
+    def _build_batch(
+        steps: list[dict[str, Any]],
+        index: int,
+        results: dict[str, dict[str, Any]],
+        max_parallel: int,
+    ) -> list[dict[str, Any]]:
+        """从当前步骤起收集可并发的同组连续步骤。
+
+        无 `parallel_group` 或 `exclusive` 的步骤单独成批；同组步骤必须依赖
+        已全部成功，遇到第一个不满足者即停止，保持计划顺序可预测。
+        """
+        head = steps[index]
+        group = head.get("parallel_group")
+        if not group or head.get("exclusive"):
+            return [head]
+        batch = [head]
+        for candidate in steps[index + 1 :]:
+            if len(batch) >= max_parallel:
+                break
+            if candidate.get("parallel_group") != group or candidate.get("exclusive"):
+                break
+            if any(
+                results.get(dep, {}).get("status") != "ok"
+                for dep in candidate.get("depends_on") or []
+            ):
+                break
+            batch.append(candidate)
+        return batch
+
+    async def _execute_step(
+        self,
+        task_id: str,
+        step: dict[str, Any],
+        remaining_s: float,
+    ) -> dict[str, Any]:
+        """选路并执行单步，返回归并所需的最小结果。"""
+        route = self._router(step)
+        decision_id = None
+        if route and route.get("selected"):
+            decision_id = self._ledger.record_route_decision(
+                task_id=task_id,
+                step_id=step["id"],
+                request=route.get("request") or {},
+                selected=route["selected"],
+                rejected=route.get("rejected") or [],
+                now_ms=self._clock(),
+            )
+        else:
+            self._fail_step(task_id, step, "no_candidate", "没有可路由的节点")
+            return {
+                "status": "failed",
+                "error_code": "no_candidate",
+                "output_ref": None,
+            }
+
+        selected = route["selected"]
+        timeout_s = min(self._step_timeout_s, remaining_s)
+        async with self._step_semaphore:
+            self._ledger.update_step(
+                task_id, step["id"], status="running", now_ms=self._clock()
+            )
+            self._event(
+                task_id,
+                "step/started",
+                {
+                    "step_id": step["id"],
+                    "node_id": selected.get("node_id"),
+                    "model": selected.get("model"),
+                    "route_decision_id": decision_id,
+                },
+            )
+            try:
+                outcome = await asyncio.wait_for(
+                    self._executor.execute(step, selected, timeout_s=timeout_s),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                outcome = {
+                    "status": "failed",
+                    "content": None,
+                    "output_ref": None,
+                    "usage": None,
+                    "latency_ms": int(timeout_s * 1000),
+                    "error_code": "step_timeout",
+                }
+            except Exception as exc:
+                outcome = {
+                    "status": "failed",
+                    "content": None,
+                    "output_ref": None,
+                    "usage": None,
+                    "latency_ms": 0,
+                    "error_code": "executor_error",
+                    "error_message": str(exc),
+                }
+
+        if outcome.get("status") == "ok":
+            output_ref = outcome.get("output_ref")
+            self._ledger.update_step(
+                task_id,
+                step["id"],
+                status="ok",
+                now_ms=self._clock(),
+                output_ref=output_ref,
+            )
+            source = {
+                "step_id": step["id"],
+                "node_id": selected.get("node_id"),
+                "model": selected.get("model"),
+                "route_decision_id": decision_id,
+                "output_ref": output_ref,
+            }
+            self._event(
+                task_id,
+                "step/result",
+                {
+                    "step_id": step["id"],
+                    "node_id": selected.get("node_id"),
+                    "model": selected.get("model"),
+                    "route_decision_id": decision_id,
+                    "status": "ok",
+                    "output_ref": output_ref,
+                },
+            )
+            return {
+                "status": "ok",
+                "error_code": None,
+                "output_ref": output_ref,
+                "source": source,
+                "content": outcome.get("content"),
+                "usage": outcome.get("usage") or {},
+            }
+
+        code = str(outcome.get("error_code") or "step_failed")
+        self._ledger.update_step(
+            task_id,
+            step["id"],
+            status="failed",
+            now_ms=self._clock(),
+            error_code=code,
+        )
+        self._event(
+            task_id,
+            "step/failed",
+            {
+                "step_id": step["id"],
+                "status": "failed",
+                "error_code": code,
+                "message": outcome.get("error_message"),
+            },
+        )
+        return {
+            "status": "failed",
+            "error_code": code,
+            "output_ref": outcome.get("output_ref"),
+        }
 
     def _finish_canceled(
         self, task: dict[str, Any], *, reason: str, steps: list[dict[str, Any]] | None = None

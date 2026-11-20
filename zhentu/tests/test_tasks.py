@@ -23,8 +23,11 @@ class Clock:
 
 
 class FakePlanner:
-    def __init__(self, steps: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self, steps: list[dict[str, Any]] | None = None, *, max_parallel: int = 1
+    ) -> None:
         self._steps = steps
+        self._max_parallel = max_parallel
 
     async def plan(self, request: dict[str, Any]) -> dict[str, Any]:
         steps = self._steps or [
@@ -41,7 +44,7 @@ class FakePlanner:
         return {
             "plan_id": "plan-test",
             "max_steps": len(steps),
-            "max_parallel": 1,
+            "max_parallel": self._max_parallel,
             "steps": steps,
             "aggregate": {
                 "mode": "concat",
@@ -66,32 +69,42 @@ class FakeExecutor:
         *,
         fail_steps: set[str] | None = None,
         delay_s: float = 0.0,
+        delays: dict[str, float] | None = None,
     ) -> None:
         self.calls: list[str] = []
+        self.max_active = 0
+        self._active = 0
         self._fail_steps = fail_steps or set()
         self._delay_s = delay_s
+        self._delays = delays or {}
 
     async def execute(self, step, route, *, timeout_s):
         self.calls.append(step["id"])
-        if self._delay_s:
-            await asyncio.sleep(self._delay_s)
-        if step["id"] in self._fail_steps:
+        self._active += 1
+        self.max_active = max(self.max_active, self._active)
+        try:
+            delay = self._delays.get(step["id"], self._delay_s)
+            if delay:
+                await asyncio.sleep(delay)
+            if step["id"] in self._fail_steps:
+                return {
+                    "status": "failed",
+                    "content": None,
+                    "output_ref": None,
+                    "usage": None,
+                    "latency_ms": 1,
+                    "error_code": "upstream_error",
+                }
             return {
-                "status": "failed",
-                "content": None,
+                "status": "ok",
+                "content": f"answer:{step['id']}",
                 "output_ref": None,
-                "usage": None,
+                "usage": {"prompt_tokens": 3, "completion_tokens": 5},
                 "latency_ms": 1,
-                "error_code": "upstream_error",
+                "error_code": None,
             }
-        return {
-            "status": "ok",
-            "content": f"answer:{step['id']}",
-            "output_ref": None,
-            "usage": {"prompt_tokens": 3, "completion_tokens": 5},
-            "latency_ms": 1,
-            "error_code": None,
-        }
+        finally:
+            self._active -= 1
 
 
 def auth(
@@ -383,6 +396,111 @@ def test_llm_aggregator_falls_back_without_config():
         )
     )
     assert answer == "第一段\n\n第二段"
+
+
+def test_parallel_group_runs_concurrently(client_factory):
+    executor = FakeExecutor(delay_s=0.1)
+    planner = FakePlanner(_parallel_steps(3), max_parallel=3)
+    client = client_factory(planner=planner, executor=executor)
+    register_node(client)
+
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    result = wait_terminal(client, created.json()["task_id"])
+
+    assert result["status"] == "completed"
+    assert set(executor.calls) == {"s1", "s2", "s3"}
+    assert executor.max_active >= 2
+
+
+def test_parallel_group_respects_max_parallel(client_factory):
+    executor = FakeExecutor(delay_s=0.05)
+    planner = FakePlanner(_parallel_steps(3), max_parallel=2)
+    client = client_factory(planner=planner, executor=executor)
+    register_node(client)
+
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    result = wait_terminal(client, created.json()["task_id"])
+
+    assert result["status"] == "completed"
+    assert executor.max_active == 2
+
+
+def test_parallel_group_aggregates_in_input_order(client_factory):
+    aggregator = FakeAggregator()
+    executor = FakeExecutor(delays={"s1": 0.1, "s2": 0.01})
+    planner = FakePlanner(_parallel_steps(2), max_parallel=2)
+    client = client_factory(planner=planner, executor=executor, aggregator=aggregator)
+    register_node(client)
+
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    result = wait_terminal(client, created.json()["task_id"])
+
+    assert result["status"] == "completed"
+    assert result["answer"] == "polished:answer:s1|answer:s2"
+    assert aggregator.calls == [["answer:s1", "answer:s2"]]
+
+
+def test_parallel_group_optional_failure_is_partial(client_factory):
+    steps = _parallel_steps(2)
+    steps[1]["required"] = False
+    steps[1]["failure_policy"] = "partial"
+    planner = FakePlanner(steps, max_parallel=2)
+    executor = FakeExecutor(fail_steps={"s2"})
+    client = client_factory(planner=planner, executor=executor)
+    register_node(client)
+
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    result = wait_terminal(client, created.json()["task_id"])
+
+    assert result["status"] == "partial"
+    assert result["answer"] == "answer:s1"
+    assert result["partials"][0]["step_id"] == "s2"
+
+
+def test_task_metrics_counts_terminal_and_active(client_factory):
+    client = client_factory()
+    register_node(client)
+
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    wait_terminal(client, created.json()["task_id"])
+
+    text = client.get("/zhentu/v1/metrics", headers=auth()).text
+
+    assert "zhentu_tasks_created_total 1" in text
+    assert 'zhentu_tasks_terminal_total{status="completed"} 1' in text
+    assert 'zhentu_tasks_terminal_total{status="failed"} 0' in text
+    assert "zhentu_tasks_active 0" in text
+    assert "你好" not in text
+
+
+def test_task_metrics_active_while_running(client_factory):
+    client = client_factory(executor=FakeExecutor(delay_s=0.5))
+    register_node(client)
+
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    running_text = client.get("/zhentu/v1/metrics", headers=auth()).text
+    assert "zhentu_tasks_active 1" in running_text
+
+    wait_terminal(client, created.json()["task_id"])
+    done_text = client.get("/zhentu/v1/metrics", headers=auth()).text
+    assert "zhentu_tasks_active 0" in done_text
+
+
+def _parallel_steps(count: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": f"s{index}",
+            "goal": f"并行 {index}",
+            "capability": "chat",
+            "input": {"messages": [{"role": "user", "content": f"task-{index}"}]},
+            "depends_on": [],
+            "parallel_group": "g1",
+            "exclusive": False,
+            "required": True,
+            "failure_policy": "fail_task",
+        }
+        for index in range(1, count + 1)
+    ]
 
 
 def _first_event_id(body: str) -> str | None:

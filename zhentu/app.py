@@ -24,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .aggregator import Aggregator, ConcatAggregator, LlmAggregator
 from .config import REGISTRY_VERSION, ConfigError, RegistrySettings, load_settings
 from .ledger import TaskStore
-from .metrics import RouteMetrics
+from .metrics import RouteMetrics, render_task_metrics
 from .models import (
     CANONICAL_CAPABILITIES,
     DeregisterRequest,
@@ -692,11 +692,15 @@ def create_app(
     async def metrics_endpoint(request: Request):
         """Prometheus 文本指标；与其它 /v1 端点一样要求 Bearer 鉴权。
 
-        除 `/route` 决策指标外，补充两个节点存量 gauge（总数 / 在线数），
-        让灵脉无需额外适配层就能画「在线节点」并告警「全员失联」。
-        只暴露计数，不暴露 node_id / model / endpoint（避免高基数与拓扑泄露）。
+        除 `/route` 决策指标外，补充节点存量 gauge（总数 / 在线数）与任务指标
+        （创建总数 / 终态分布 / 活跃数），让灵脉无需额外适配层就能看节点与任务。
+        只暴露计数，不暴露 node_id / model / endpoint / prompt（避免高基数与拓扑泄露）。
         """
         total, online = request.app.state.store.counts(request.app.state.clock())
+        task_metrics = render_task_metrics(
+            ledger.counts_by_status(),
+            active=ledger.count_active_tasks(),
+        )
         gauges = (
             "# HELP zhentu_nodes_total 注册表中的节点总数（含离线）。\n"
             "# TYPE zhentu_nodes_total gauge\n"
@@ -706,7 +710,7 @@ def create_app(
             f"zhentu_nodes_online {online}\n"
         )
         return PlainTextResponse(
-            request.app.state.route_metrics.render() + gauges,
+            request.app.state.route_metrics.render() + gauges + task_metrics,
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
