@@ -22,6 +22,7 @@ DEFAULT_EVENT_RETENTION_DAYS = 30
 DEFAULT_EVENT_MAX_PER_TASK = 10_000
 DEFAULT_NEWAPI_TIMEOUT_S = 120.0
 DEFAULT_NEWAPI_CONNECT_TIMEOUT_S = 5.0
+DEFAULT_AGGREGATOR_TIMEOUT_S = 30.0
 
 
 class ConfigError(ValueError):
@@ -79,6 +80,9 @@ class RegistrySettings:
     newapi_timeout_s: float = DEFAULT_NEWAPI_TIMEOUT_S
     newapi_connect_timeout_s: float = DEFAULT_NEWAPI_CONNECT_TIMEOUT_S
     planner_model: str = ""
+    aggregator_mode: str = "concat"
+    aggregator_model: str = ""
+    aggregator_timeout_s: float = DEFAULT_AGGREGATOR_TIMEOUT_S
     started_ms: int = field(default=0)
 
     def validate(self) -> None:
@@ -101,6 +105,10 @@ class RegistrySettings:
             raise ConfigError("ZHENTU_TASK_EVENT_MAX_PER_TASK 不能小于 100")
         if self.newapi_timeout_s <= 0 or self.newapi_connect_timeout_s <= 0:
             raise ConfigError("NewAPI 超时配置必须大于 0")
+        if self.aggregator_mode not in ("concat", "llm"):
+            raise ConfigError("ZHENTU_AGGREGATOR_MODE 只能是 concat 或 llm")
+        if self.aggregator_timeout_s <= 0:
+            raise ConfigError("ZHENTU_AGGREGATOR_TIMEOUT_S 必须大于 0")
         for node_id, token in self.node_tokens.items():
             if not node_id.strip() or not token.strip():
                 raise ConfigError("ZHENTU_NODE_TOKENS 的节点 id 与 token 都不能为空")
@@ -164,4 +172,9 @@ def load_settings() -> RegistrySettings:
             )
         ),
         planner_model=os.environ.get("ZHENTU_PLANNER_MODEL") or "",
+        aggregator_mode=(os.environ.get("ZHENTU_AGGREGATOR_MODE") or "concat").lower(),
+        aggregator_model=os.environ.get("ZHENTU_AGGREGATOR_MODEL") or "",
+        aggregator_timeout_s=float(
+            os.environ.get("ZHENTU_AGGREGATOR_TIMEOUT_S", DEFAULT_AGGREGATOR_TIMEOUT_S)
+        ),
     )

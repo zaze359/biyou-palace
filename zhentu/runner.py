@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
+from .aggregator import Aggregator, ConcatAggregator
 from .ledger import TaskStore
 from .orchestration import (
     Executor,
@@ -22,18 +23,22 @@ class TaskRunner:
         executor: Executor,
         router: Callable[[dict[str, Any]], dict[str, Any] | None],
         clock: Callable[[], int],
+        aggregator: Aggregator | None = None,
         max_events: int | None = None,
         retention_ms: int | None = None,
         step_timeout_s: float = 120.0,
+        aggregator_timeout_s: float = 30.0,
     ) -> None:
         self._ledger = ledger
         self._planner = planner
         self._executor = executor
         self._router = router
         self._clock = clock
+        self._aggregator = aggregator or ConcatAggregator()
         self._max_events = max_events
         self._retention_ms = retention_ms
         self._step_timeout_s = step_timeout_s
+        self._aggregator_timeout_s = aggregator_timeout_s
 
     async def run(self, task_id: str) -> None:
         task = self._ledger.get_task(task_id)
@@ -283,13 +288,25 @@ class TaskRunner:
             for found_id, content in contents
             if found_id == step_id
         ]
-        answer = "\n\n".join(ordered) if ordered else None
+        try:
+            answer = await self._aggregator.aggregate(
+                ordered,
+                instructions=plan["aggregate"].get("instructions"),
+                timeout_s=self._aggregator_timeout_s,
+            )
+        except Exception:
+            answer = "\n\n".join(ordered) if ordered else None
         status = "partial" if (partials or deadline_hit) else "completed"
         terminal_reason = "deadline" if deadline_hit else None
         self._event(
             task_id,
             "aggregate/result",
-            {"status": status, "sources": len(sources), "partials": len(partials)},
+            {
+                "status": status,
+                "sources": len(sources),
+                "partials": len(partials),
+                "aggregator": type(self._aggregator).__name__,
+            },
         )
         result = self._result(
             task_id,

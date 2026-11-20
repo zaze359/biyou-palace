@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from zhentu.aggregator import LlmAggregator
 from zhentu.app import create_app
 from zhentu.config import RegistrySettings, Secret
 
@@ -48,6 +49,15 @@ class FakePlanner:
                 "include_partial": True,
             },
         }
+
+
+class FakeAggregator:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    async def aggregate(self, inputs, *, instructions, timeout_s):
+        self.calls.append(list(inputs))
+        return "polished:" + "|".join(inputs)
 
 
 class FakeExecutor:
@@ -152,6 +162,7 @@ def client_factory(tmp_path):
         executor=None,
         node_tokens: dict[str, str] | None = None,
         max_active_tasks: int = 4,
+        aggregator=None,
     ):
         settings = RegistrySettings(
             host="127.0.0.1",
@@ -166,6 +177,7 @@ def client_factory(tmp_path):
             clock=Clock(),
             planner=planner or FakePlanner(),
             executor=executor or FakeExecutor(),
+            aggregator=aggregator,
         )
         client = TestClient(app)
         client.__enter__()
@@ -351,6 +363,26 @@ def test_event_replay_and_unknown_last_event(client_factory):
         headers={**auth(), "Last-Event-ID": "evt-missing"},
     )
     assert missing.status_code == 410
+
+
+def test_custom_aggregator_used(client_factory):
+    aggregator = FakeAggregator()
+    client = client_factory(aggregator=aggregator)
+    register_node(client)
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    result = wait_terminal(client, created.json()["task_id"])
+    assert result["answer"] == "polished:answer:s1"
+    assert aggregator.calls == [["answer:s1"]]
+
+
+def test_llm_aggregator_falls_back_without_config():
+    aggregator = LlmAggregator(base_url="", token=None, model="")
+    answer = asyncio.run(
+        aggregator.aggregate(
+            ["第一段", "第二段"], instructions=None, timeout_s=1.0
+        )
+    )
+    assert answer == "第一段\n\n第二段"
 
 
 def _first_event_id(body: str) -> str | None:

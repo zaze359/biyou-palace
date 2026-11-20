@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .aggregator import Aggregator, ConcatAggregator, LlmAggregator
 from .config import REGISTRY_VERSION, ConfigError, RegistrySettings, load_settings
 from .ledger import TaskStore
 from .metrics import RouteMetrics
@@ -171,6 +172,7 @@ def create_app(
     *,
     planner: Planner | None = None,
     executor: Executor | None = None,
+    aggregator: Aggregator | None = None,
 ) -> FastAPI:
     cfg = settings or load_settings()
     cfg.validate()
@@ -190,6 +192,18 @@ def create_app(
         token=cfg.newapi_token,
         timeout_s=cfg.newapi_timeout_s,
     )
+    if aggregator is not None:
+        selected_aggregator: Aggregator = aggregator
+    elif cfg.aggregator_mode == "llm" and cfg.aggregator_model:
+        selected_aggregator = LlmAggregator(
+            base_url=cfg.newapi_base_url,
+            token=cfg.newapi_token,
+            model=cfg.aggregator_model,
+            timeout_s=cfg.aggregator_timeout_s,
+            fallback=ConcatAggregator(),
+        )
+    else:
+        selected_aggregator = ConcatAggregator()
 
     def route_step(step: dict[str, Any]) -> dict[str, Any] | None:
         now_ms = now()
@@ -218,9 +232,11 @@ def create_app(
         executor=selected_executor,
         router=route_step,
         clock=now,
+        aggregator=selected_aggregator,
         max_events=cfg.task_event_max_per_task,
         retention_ms=cfg.task_event_retention_days * 86_400_000,
         step_timeout_s=cfg.newapi_timeout_s,
+        aggregator_timeout_s=cfg.aggregator_timeout_s,
     )
 
     @asynccontextmanager
@@ -249,6 +265,7 @@ def create_app(
     app.state.route_metrics = RouteMetrics()
     app.state.planner = selected_planner
     app.state.executor = selected_executor
+    app.state.aggregator = selected_aggregator
     app.state.runner = runner
     app.state.background_tasks = set()
 

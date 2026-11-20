@@ -186,7 +186,7 @@ class PlannerClient:
         if self._token:
             headers["Authorization"] = f"Bearer {self._token.get()}"
         req = urllib.request.Request(
-            _chat_url(self._base_url),
+            chat_url(self._base_url),
             data=data,
             headers=headers,
             method="POST",
@@ -262,13 +262,13 @@ class NewApiExecutor:
             "Authorization": f"Bearer {self._token.get()}",
         }
         req = urllib.request.Request(
-            _chat_url(self._base_url), data=data, headers=headers, method="POST"
+            chat_url(self._base_url), data=data, headers=headers, method="POST"
         )
         with urllib.request.urlopen(req, timeout=timeout_s) as response:
             return json.loads(response.read().decode("utf-8"))
 
 
-def _chat_url(base_url: str) -> str:
+def chat_url(base_url: str) -> str:
     root = base_url.rstrip("/")
     if root.endswith("/v1"):
         return root + "/chat/completions"
