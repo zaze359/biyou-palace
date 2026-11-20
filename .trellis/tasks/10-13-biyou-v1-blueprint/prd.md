@@ -72,6 +72,11 @@
 3. **第三步 · 阵图编排 + 道果聚合**（原「阵图显化」）
    阵图 ZhenTu 服务：请求解析 / 任务拆解、并行子任务调度、结果（道果）合并润色、异常重试与降级；示例场景（图→OCR+Embedding+LLM 综合回答）。
    - 验收：复杂请求自动拆多子任务并行；单散仙掉线不中断整条推演。
+   - **进度（2026-11-21）**：**编排链路服务端已端到端实测** —— `scripts/daojian/orchestration_e2e.py`
+     7 用例（提交/事件流/两步计划/聚合/幂等/越权/取消/选路降级）在临时阵图实例 + 桩网关上连续 3 次 7/7，
+     报告 `docs/reports/daojian-orchestration-2026-11-21.md`。**注意**：网关是桩，真实 NewAPI 链路待第二阶段。
+     实测暴露三处待处理问题：① `planner_model` 默认空 → 默认部署不拆步；② 取消为批次边界语义，在途步骤不中断；
+     ③ PlannerClient 拿不到能力快照，能力不可用要到执行时才失败。
    - **进度（2026-11-20）**：编排边界设计完成 —— `11-20-daoguo-node-autonomy` 确定「节点本地完整闭环 + 中心集群编排」双层架构，
      阵图/道果同服务分阶段；请求/计划/事件/结果契约见 `docs/orchestration-contract.md`；
      阵图 `/candidates` 已暴露 `effective_max_concurrency`。运行时实现（LocalOrchestrator、集群编排、道果）待后续任务。
