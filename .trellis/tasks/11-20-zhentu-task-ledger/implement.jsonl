@@ -1,0 +1,5 @@
+{"file": "docs/orchestration-contract.md", "reason": "任务 API、Plan、TaskEvent、ResultEnvelope 的权威契约"}
+{"file": "docs/node-agent-contract.md", "reason": "节点 /v1/* 契约边界，编排不得修改节点入站端点"}
+{"file": ".trellis/spec/backend/index.md", "reason": "阵图既有端点行为与响应形状约束"}
+{"file": "zhentu/app.py", "reason": "现有鉴权、错误体、路由与 lifespan 落点"}
+{"file": "zhentu/store.py", "reason": "SQLite 连接、WAL 与行转换约定"}

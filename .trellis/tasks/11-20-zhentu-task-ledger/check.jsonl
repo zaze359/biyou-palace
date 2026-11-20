@@ -1,0 +1,2 @@
+{"file": "docs/orchestration-contract.md", "reason": "检查端点、状态码、事件与结果形状是否与契约一致"}
+{"file": ".trellis/tasks/11-20-zhentu-task-ledger/design.md", "reason": "检查实现落点、配置与回滚是否符合设计"}
