@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端约定与项目特定边界（阵图/节点/观测）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流与契约变更检查"}
+{"file": "docs/node-agent-contract.md", "reason": "节点 /v1/* 契约边界与能力语义"}
+{"file": ".trellis/tasks/10-13-biyou-v1-blueprint/prd.md", "reason": "蓝图对编排/道果的原始范围定义"}

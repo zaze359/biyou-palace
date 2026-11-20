@@ -72,6 +72,9 @@
 3. **第三步 · 阵图编排 + 道果聚合**（原「阵图显化」）
    阵图 ZhenTu 服务：请求解析 / 任务拆解、并行子任务调度、结果（道果）合并润色、异常重试与降级；示例场景（图→OCR+Embedding+LLM 综合回答）。
    - 验收：复杂请求自动拆多子任务并行；单散仙掉线不中断整条推演。
+   - **进度（2026-11-20）**：编排边界设计完成 —— `11-20-daoguo-node-autonomy` 确定「节点本地完整闭环 + 中心集群编排」双层架构，
+     阵图/道果同服务分阶段；请求/计划/事件/结果契约见 `docs/orchestration-contract.md`；
+     阵图 `/candidates` 已暴露 `effective_max_concurrency`。运行时实现（LocalOrchestrator、集群编排、道果）待后续任务。
 
 4. **第四步 · 灵脉监控 + 道鉴检定**（原「守阵试炼」）
    灵脉：分运行时采集器（准圣采 Ollama 指标 / 散仙采 llama.cpp 指标）+ Prometheus + Grafana 看板（仙侠命名）+ 告警规则。道鉴：压测与 Markdown 报告。故障注入与长时耐久。

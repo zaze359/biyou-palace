@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "文档与契约评审的质量检查口径"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对本地/集群/节点三层的契约一致性"}
