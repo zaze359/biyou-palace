@@ -1,0 +1,4 @@
+{"file": "docs/orchestration-contract.md", "reason": "RequestEnvelope、TaskEvent、ResultEnvelope、SSE 与错误状态码的权威契约"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Compose ViewModel 状态管理约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "界面组件与图标使用约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端单测与质量要求"}
