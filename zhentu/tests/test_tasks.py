@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Any
 
@@ -511,3 +512,49 @@ def _first_event_id(body: str) -> str | None:
             payload = json.loads(line[len("data: "):])
             return payload["event_id"]
     return None
+
+
+def test_planned_event_carries_planner_source(client_factory):
+    """`task/planned` 必须暴露计划来源，否则「为什么没拆步」无法从链路观察到。"""
+    client = client_factory()
+    register_node(client)
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    task_id = created.json()["task_id"]
+    wait_terminal(client, task_id)
+
+    with client.stream(
+        "GET", f"/zhentu/v1/requests/{task_id}/events", headers=auth()
+    ) as stream:
+        planned = [
+            json.loads(line[6:])
+            for line in stream.iter_lines()
+            if line.startswith("data: ") and '"task/planned"' in line
+        ]
+    assert planned, "缺少 task/planned 事件"
+    data = planned[0]["data"]
+    assert data["planner_source"] in {"planner", "fallback", "single_step", "invalid_plan", "unknown"}
+
+
+def test_canceled_event_describes_batch_boundary(client_factory):
+    """取消是批次边界语义，事件必须说明作用域，前端才能显示「正在停止」。"""
+    client = client_factory(executor=FakeExecutor(delay_s=0.2))
+    register_node(client)
+    created = client.post("/zhentu/v1/requests", json=request_body(), headers=auth())
+    task_id = created.json()["task_id"]
+    client.post(f"/zhentu/v1/requests/{task_id}/cancel", headers=auth())
+    result = wait_terminal(client, task_id)
+    assert result["status"] == "canceled"
+
+    with client.stream(
+        "GET", f"/zhentu/v1/requests/{task_id}/events", headers=auth()
+    ) as stream:
+        canceled = [
+            json.loads(line[6:])
+            for line in stream.iter_lines()
+            if line.startswith("data: ") and '"task/canceled"' in line
+        ]
+    terminal = [e for e in canceled if "cancel_scope" in e["data"]]
+    assert terminal, "缺少带 cancel_scope 的 task/canceled"
+    assert terminal[0]["data"]["cancel_scope"] == "batch_boundary"
+    assert "pending_steps" in terminal[0]["data"]
+    assert "in_flight_completed" in terminal[0]["data"]

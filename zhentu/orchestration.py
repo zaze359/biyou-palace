@@ -128,11 +128,55 @@ def validate_plan(plan: Any) -> dict[str, Any]:
     return plan
 
 
+def _tag_plan(plan: dict[str, Any], source: str, detail: str | None = None) -> dict[str, Any]:
+    """给计划打来源标记。
+
+    runner 把标记写进 `task/planned` 事件与账本，运维据此能回答
+    「这次为什么只有一步 / 为什么没有拆」——没有标记时只能翻代码。
+    """
+    marked = dict(plan)
+    marked["planner_source"] = source
+    if detail:
+        marked["planner_note"] = detail
+    return marked
+
+
 class SingleStepPlanner:
     """无规划模型时的默认计划器。"""
 
     async def plan(self, request: dict[str, Any]) -> dict[str, Any]:
-        return single_step_plan(request)
+        return _tag_plan(single_step_plan(request), "single_step", "未配置规划模型，单步执行")
+
+
+def _drop_unavailable_steps(plan: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+    """把能力在快照里没有可用节点的步骤摘掉。
+
+    只处理「能力完全无人可用」这一种确定情况；有节点但被拒绝（负载/租约）留给运行时选路，
+    那里有更准确的拒绝原因。若摘完没有步骤了，保留原计划由运行时报 no_candidate，
+    这样错误码仍然可读。
+    """
+    available = snapshot.get("available") or {}
+    if not isinstance(available, dict) or not available:
+        return plan
+    steps = [s for s in plan.get("steps") or [] if s.get("capability") in available]
+    if not steps or len(steps) == len(plan.get("steps") or []):
+        return plan
+    dropped = [
+        s.get("id") for s in plan.get("steps") or [] if s.get("capability") not in available
+    ]
+    kept_ids = {s.get("id") for s in steps}
+    for step in steps:
+        deps = [d for d in (step.get("depends_on") or []) if d in kept_ids]
+        step["depends_on"] = deps
+    aggregate = dict(plan.get("aggregate") or {})
+    aggregate["input_step_ids"] = [
+        sid for sid in (aggregate.get("input_step_ids") or []) if sid in kept_ids
+    ]
+    updated = dict(plan)
+    updated["steps"] = steps
+    updated["aggregate"] = aggregate
+    updated["dropped_steps"] = dropped
+    return updated
 
 
 class PlannerClient:
@@ -155,15 +199,43 @@ class PlannerClient:
 
     async def plan(self, request: dict[str, Any]) -> dict[str, Any]:
         if not self._base_url or not self._model or not self._token:
-            return await self._fallback.plan(request)
+            return await self._fallback_plan(
+                request, "planner_not_configured", "未配置规划模型或凭据（ZHENTU_PLANNER_MODEL）"
+            )
+        snapshot = request.get("capability_snapshot") or {}
         try:
-            raw = await asyncio.to_thread(self._request_plan, request)
-            return validate_plan(raw)
-        except Exception:
-            return await self._fallback.plan(request)
+            raw = await asyncio.to_thread(self._request_plan, request, snapshot)
+            plan = validate_plan(raw)
+            # 规划器可能返回无人可用的能力：在计划阶段就把这类步骤剔掉，
+            # 否则要等执行时选路失败，任务白跑一轮。
+            return _tag_plan(_drop_unavailable_steps(plan, snapshot), "planner", None)
+        except PlanError as exc:
+            return await self._fallback_plan(request, "planner_invalid", str(exc))
+        except Exception as exc:  # 网络/超时/解析
+            return await self._fallback_plan(
+                request, "planner_error", f"{type(exc).__name__}: {exc}"[:200]
+            )
 
-    def _request_plan(self, request: dict[str, Any]) -> dict[str, Any]:
+    async def _fallback_plan(
+        self, request: dict[str, Any], reason: str, detail: str
+    ) -> dict[str, Any]:
+        plan = await self._fallback.plan(request)
+        plan = dict(plan)
+        plan["planner_source"] = "fallback"
+        plan["planner_note"] = f"{reason}：{detail}"[:300]
+        return plan
+
+    def _request_plan(
+        self, request: dict[str, Any], snapshot: dict[str, Any]
+    ) -> dict[str, Any]:
         messages = request.get("input", {}).get("messages") or []
+        available = snapshot.get("available") or []
+        capability_hint = (
+            "当前可用能力快照（只能使用这些；没有可用节点的能力不要写进计划）："
+            + json.dumps(available, ensure_ascii=False)
+            if available
+            else "当前没有可用的能力快照，请保守地只做单步 chat 计划。"
+        )
         prompt = (
             "你是阵图编排器。只输出 JSON 计划，不要解释。"
             "计划结构：{plan_id, intent, max_steps, max_parallel, steps:["
@@ -171,6 +243,7 @@ class PlannerClient:
             " exclusive, required, failure_policy, model_hint, input_ref, output_schema}],"
             " aggregate:{mode, input_step_ids, include_partial, instructions}}。"
             f"最多 {MAX_STEPS} 步；capability 只能是 {list(CANONICAL_CAPABILITIES)}。"
+            f"{capability_hint}"
         )
         payload = {
             "model": self._model,

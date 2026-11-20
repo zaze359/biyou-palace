@@ -226,11 +226,40 @@ def create_app(
             "rejected": decision.rejected,
         }
 
+    def capability_snapshot() -> dict[str, Any]:
+        """把在线节点声明的能力/模型整理成规划器可用的快照。
+
+        只含能力→模型列表，**不含 endpoint 与凭据**（契约 2.1 要求）。
+        规划器据此避免写出「无人可用」的步骤；执行期仍以 `/route` 的实时决策为准。
+        """
+        now_ms = now()
+        available: dict[str, list[dict[str, Any]]] = {}
+        for row in store.list_all():
+            view = _node_view(row, now_ms)
+            lease = view.get("lease") or {}
+            if lease.get("state") != "online":
+                continue
+            status = view.get("status")
+            if status not in ("ready", "degraded"):
+                continue
+            for entry in view.get("models") or []:
+                name = str(entry.get("name") or "")
+                if not name:
+                    continue
+                for capability in entry.get("capabilities") or []:
+                    bucket = available.setdefault(str(capability), [])
+                    if all(item["model"] != name for item in bucket):
+                        bucket.append({"model": name})
+        for bucket in available.values():
+            bucket.sort(key=lambda item: item["model"])
+        return {"available": dict(sorted(available.items()))}
+
     runner = TaskRunner(
         ledger=ledger,
         planner=selected_planner,
         executor=selected_executor,
         router=route_step,
+        capability_snapshot=capability_snapshot,
         clock=now,
         aggregator=selected_aggregator,
         max_events=cfg.task_event_max_per_task,

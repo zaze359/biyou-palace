@@ -29,6 +29,7 @@ class TaskRunner:
         retention_ms: int | None = None,
         step_timeout_s: float = 120.0,
         aggregator_timeout_s: float = 30.0,
+        capability_snapshot: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._ledger = ledger
         self._planner = planner
@@ -40,6 +41,8 @@ class TaskRunner:
         self._retention_ms = retention_ms
         self._step_timeout_s = step_timeout_s
         self._aggregator_timeout_s = aggregator_timeout_s
+        # 规划时把「当前有哪些能力可用」一并交给 PlannerClient，避免规划出无人可用的步骤。
+        self._capability_snapshot = capability_snapshot
         # 跨任务共享的全局 step 并发上限：单任务另有 plan.max_parallel 约束。
         self._step_semaphore = asyncio.Semaphore(MAX_PARALLEL)
 
@@ -55,10 +58,22 @@ class TaskRunner:
             task_id, now_ms=self._clock(), status="running", started_at_ms=self._clock()
         )
         request = task["request_json"]
+        planned_request = dict(request)
+        if self._capability_snapshot is not None:
+            try:
+                planned_request["capability_snapshot"] = self._capability_snapshot()
+            except Exception:  # 快照失败不能拖垮任务，规划器会退回保守单步
+                planned_request["capability_snapshot"] = {}
         try:
-            plan = validate_plan(await self._planner.plan(request))
-        except Exception:
+            raw_plan = await self._planner.plan(planned_request)
+            plan = validate_plan(raw_plan)
+            source = str(raw_plan.get("planner_source") or "unknown") if isinstance(raw_plan, dict) else "unknown"
+            note = raw_plan.get("planner_note") if isinstance(raw_plan, dict) else None
+            dropped = raw_plan.get("dropped_steps") if isinstance(raw_plan, dict) else None
+        except Exception as exc:
+            # 计划器彻底抛错（例如返回非法结构）：退回单步，但必须留下原因
             plan = validate_plan(single_step_plan(request))
+            source, note, dropped = "invalid_plan", f"{type(exc).__name__}: {exc}"[:200], None
 
         self._ledger.update_task(
             task_id,
@@ -66,11 +81,16 @@ class TaskRunner:
             plan_json=plan,
             planner_model=self._planner.__class__.__name__,
         )
-        self._event(
-            task_id,
-            "task/planned",
-            {"plan_id": plan.get("plan_id"), "steps": len(plan["steps"])},
-        )
+        planned_event: dict[str, Any] = {
+            "plan_id": plan.get("plan_id"),
+            "steps": len(plan["steps"]),
+            "planner_source": source,
+        }
+        if note:
+            planned_event["planner_note"] = note
+        if dropped:
+            planned_event["dropped_steps"] = dropped
+        self._event(task_id, "task/planned", planned_event)
         for step in plan["steps"]:
             self._ledger.upsert_step(task_id, step, status="queued", now_ms=self._clock())
 
@@ -447,7 +467,20 @@ class TaskRunner:
         self._finish(
             task_id, status="canceled", terminal_reason=reason, result=result
         )
-        self._event(task_id, "task/canceled", {"reason": reason})
+        # 取消在批次边界生效：已开始的步骤会跑完，未开始的才标 canceled。
+        # 把这一语义写进事件，前端才能把「正在停止」与「已取消」区分开，
+        # 也避免用户以为点取消后推理会立刻中断（contract 4.3 的补充说明）。
+        pending = len(steps or [])
+        self._event(
+            task_id,
+            "task/canceled",
+            {
+                "reason": reason,
+                "cancel_scope": "batch_boundary",
+                "pending_steps": pending,
+                "in_flight_completed": pending == 0,
+            },
+        )
 
     def _finish(
         self,

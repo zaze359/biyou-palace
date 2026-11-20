@@ -38,6 +38,9 @@
 | `planner.max_parallel` | 计划并行上限 |
 
 - 输入：`RequestEnvelope` + 当前可用能力/模型/limits 快照 + 预算。
+  v1 实现在 `RequestEnvelope` 之外由 Orchestrator 注入 `capability_snapshot.available`（能力 → 可用模型列表，
+  只含在线且 `ready|degraded` 节点的声明，**不含 endpoint 与凭据**）。规划模型必须只使用快照中存在的能力；
+  若仍返回不存在的能力，Orchestrator 会在计划阶段剔除该步骤并记录 `dropped_steps`。
 - 快照来自注册表/候选查询，**不触发节点实时探活**，不包含节点 endpoint 或凭据。
 - 输出必须是过 `Plan` JSON Schema 的 JSON；非法、超时、无响应时退回单步计划。
 - 规划失败不对模型多次重试，直接降级。
@@ -193,6 +196,7 @@ PlannerClient 输出、ClusterOrchestrator 执行的计划。
 | `aggregate.input_step_ids` | string[] | 是 | 聚合器读取哪些步骤结果，顺序按列表 |
 | `aggregate.include_partial` | boolean | 否 | 是否包含 partial/failed 的结果引用 |
 | `aggregate.instructions` | string | 否 | 聚合提示 |
+| `planner_source` | string | 否 | 由 Orchestrator 附加，不来自规划模型；取值见 4.3 约束 |
 
 约束：
 
@@ -242,7 +246,7 @@ PlannerClient 输出、ClusterOrchestrator 执行的计划。
 | 类型 | 写入方 | 说明 |
 |---|---|---|
 | `task/created` | Orchestrator | 任务创建 |
-| `task/planned` | Orchestrator | 计划已校验并持久化 |
+| `task/planned` | Orchestrator | 计划已校验并持久化；`data` 含 `planner_source` 与可选 `planner_note` / `dropped_steps` |
 | `step/started` | Orchestrator | 记录 `input_hash`、`model`、`node_id` |
 | `step/result` | Orchestrator | 单步成功 |
 | `step/failed` | Orchestrator | 单步失败 |
@@ -263,6 +267,8 @@ PlannerClient 输出、ClusterOrchestrator 执行的计划。
 - 事件不得包含密钥、完整 prompt 原文；大结果用 `output_ref` 引用。
 - `task/completed` / `task/failed` / `task/canceled` 只由 Orchestrator 写入；Aggregator 只返回 `ResultEnvelope`，不碰任务状态。
 - `task/interrupted` 只在恢复扫描发现过期 lease 时写入；恢复执行写 `task/resumed`，随后必须写 `task/completed` / `task/failed` / 恢复事件，不能停在 `interrupted`。
+- **`task/planned` 必须带 `planner_source`**，取值 `planner`（规划模型产出）、`fallback`（规划失败/未配置，退回单步）、`single_step`（无规划模型）、`invalid_plan`（计划器抛错）。`planner_note` 给出可读原因，`dropped_steps` 列出因能力无人可用被剔除的步骤 id。运维据此判断「为什么只有一步」，不需要翻代码。
+- **取消是批次边界语义**：`POST /requests/{id}/cancel` 只置取消位，在途步骤**不会被打断**，在下一个批次边界生效。因此 `task/canceled` 的 `data` 固定带 `cancel_scope="batch_boundary"`，并用 `pending_steps`（未启动步骤数）与 `in_flight_completed`（是否在无在途步骤时取消）描述取消发生的位置；`step/canceled` 只对未启动步骤写入。前端应把取消按钮后的状态显示为「正在停止」，直到收到 `task/canceled`。
 - 事件默认保留 30 天或每任务 10,000 条（先到者为准）；超出窗口的 SSE 重放返回 `410 replay_unavailable`。
 
 ### 4.4 ResultEnvelope

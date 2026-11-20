@@ -97,7 +97,28 @@ python3 scripts/daojian/orchestration_e2e.py --json out/e2e.json --strict
 python3 scripts/daojian/stub_gateway.py --port 18080
 ```
 
-## 七、结论
+## 七、修复记录（2026-11-21 同一会话内完成）
+
+第四节的三处发现已修复，契约同步更新为补充说明（未升版本，均为可选字段与语义澄清）：
+
+| 发现 | 修复 | 落点 |
+|---|---|---|
+| 1 默认不拆步且不可观测 | `task/planned` 新增 `planner_source`（`planner`/`fallback`/`single_step`/`invalid_plan`）与 `planner_note` | `zhentu/orchestration.py`、`zhentu/runner.py`、契约 4.3 |
+| 2 取消语义不明确 | `task/canceled` 新增 `cancel_scope="batch_boundary"`、`pending_steps`、`in_flight_completed`；契约写明「在途步骤不中断」 | `zhentu/runner.py`、契约 4.3 |
+| 3 规划器拿不到能力快照 | Orchestrator 注入 `capability_snapshot.available`；规划提示带上可用能力；仍返回无人可用的能力时在计划阶段剔除并记录 `dropped_steps` | `zhentu/app.py`、`zhentu/orchestration.py`、契约 2.1/4.2 |
+
+验证：
+
+- 默认配置（不设 `ZHENTU_PLANNER_MODEL`）下 `task/planned` 现在明确给出
+  `{"planner_source": "fallback", "planner_note": "planner_not_configured：未配置规划模型或凭据（ZHENTU_PLANNER_MODEL）"}`，
+  不再需要翻代码判断为何只有一步。
+- 无人可用的能力步骤在计划阶段被剔除，`aggregate.input_step_ids` 同步收敛。
+- 新增测试 12 条（`zhentu/tests/test_planner_observability.py` 10 条 + `test_tasks.py` 2 条）。
+- 回归：zhentu+quasheng **283 passed**；散仙 shared 83 + composeApp 23 全绿；E2E 仍 7/7。
+
+**未修**：发现 5（`sources` 可能少于结果数）—— 需要在真实 NewAPI 执行器上确认，归入第二阶段。
+
+## 八、结论
 
 编排链路**服务端部分是通的**：提交、事件流、两步计划的顺序执行、聚合、幂等、越权、取消、选路降级
 全部符合预期，连续 3 次稳定 7/7。
