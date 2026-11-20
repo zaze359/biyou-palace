@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import secrets
 import sqlite3
@@ -16,10 +18,11 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import REGISTRY_VERSION, ConfigError, RegistrySettings, load_settings
+from .ledger import TaskStore
 from .metrics import RouteMetrics
 from .models import (
     CANONICAL_CAPABILITIES,
@@ -33,8 +36,17 @@ from .models import (
     normalize_capability,
     ttl_for,
 )
+from .orchestration import (
+    Executor,
+    NewApiExecutor,
+    Planner,
+    PlannerClient,
+    SingleStepPlanner,
+)
 from .route import MAX_ALLOWED_MODELS, STRATEGIES, RouteQuery, bare_model, decide
+from .runner import TaskRunner
 from .store import RegistryStore
+from .task_models import TaskCreateRequest
 
 logger = logging.getLogger("zhentu")
 
@@ -156,11 +168,60 @@ def _view_sort_key(view: dict[str, Any]) -> tuple:
 def create_app(
     settings: RegistrySettings | None = None,
     clock: Callable[[], int] | None = None,
+    *,
+    planner: Planner | None = None,
+    executor: Executor | None = None,
 ) -> FastAPI:
     cfg = settings or load_settings()
     cfg.validate()
     store = RegistryStore(cfg.db_path)
+    ledger = TaskStore(cfg.db_path)
     now = clock or (lambda: int(time.time() * 1000))
+
+    selected_planner: Planner = planner or PlannerClient(
+        base_url=cfg.newapi_base_url,
+        token=cfg.newapi_token,
+        model=cfg.planner_model,
+        timeout_s=min(30.0, cfg.newapi_timeout_s),
+        fallback=SingleStepPlanner(),
+    )
+    selected_executor: Executor = executor or NewApiExecutor(
+        base_url=cfg.newapi_base_url,
+        token=cfg.newapi_token,
+        timeout_s=cfg.newapi_timeout_s,
+    )
+
+    def route_step(step: dict[str, Any]) -> dict[str, Any] | None:
+        now_ms = now()
+        query = RouteQuery(
+            capability=step.get("capability") or "chat",
+            model=step.get("model_hint"),
+            context_len=None,
+            strategy="balanced",
+            max_candidates=3,
+        )
+        rows = list(store.list_all())
+        decision = decide(((row, _node_view(row, now_ms)) for row in rows), query)
+        return {
+            "request": {
+                "capability": query.capability,
+                "model": query.model,
+                "strategy": query.strategy,
+            },
+            "selected": decision.selected,
+            "rejected": decision.rejected,
+        }
+
+    runner = TaskRunner(
+        ledger=ledger,
+        planner=selected_planner,
+        executor=selected_executor,
+        router=route_step,
+        clock=now,
+        max_events=cfg.task_event_max_per_task,
+        retention_ms=cfg.task_event_retention_days * 86_400_000,
+        step_timeout_s=cfg.newapi_timeout_s,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -168,6 +229,12 @@ def create_app(
         try:
             yield
         finally:
+            tasks = list(app.state.background_tasks)
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            ledger.close()
             store.close()
 
     app = FastAPI(
@@ -177,8 +244,13 @@ def create_app(
     )
     app.state.settings = cfg
     app.state.store = store
+    app.state.ledger = ledger
     app.state.clock = now
     app.state.route_metrics = RouteMetrics()
+    app.state.planner = selected_planner
+    app.state.executor = selected_executor
+    app.state.runner = runner
+    app.state.background_tasks = set()
 
     async def require_auth(
         request: Request,
@@ -620,6 +692,289 @@ def create_app(
             request.app.state.route_metrics.render() + gauges,
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
+    async def require_node_identity(
+        request: Request,
+        authorization: str | None = Header(default=None),
+        x_node_id: str | None = Header(default=None, alias="X-Node-Id"),
+    ) -> str:
+        cfg_ = request.app.state.settings
+        scheme, _, value = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not value:
+            raise RegistryError(401, "unauthorized", "缺少 bearer token")
+        if cfg_.node_tokens:
+            matched = [
+                node_id
+                for node_id, token in cfg_.node_tokens.items()
+                if secrets.compare_digest(value, token)
+            ]
+            if not matched:
+                raise RegistryError(401, "unauthorized", "bearer token 无匹配节点")
+            if len(matched) > 1:
+                raise RegistryError(
+                    401, "unauthorized", "bearer token 匹配多个节点，配置不唯一"
+                )
+            identity = matched[0]
+            if x_node_id and x_node_id != identity:
+                raise RegistryError(403, "identity_mismatch", "X-Node-Id 与 token 不匹配")
+            return identity
+        if cfg_.token and not secrets.compare_digest(value, cfg_.token.get()):
+            raise RegistryError(401, "unauthorized", "缺少或无效的 bearer token")
+        if not x_node_id:
+            raise RegistryError(
+                403, "identity_required", "共享 token 模式必须携带 X-Node-Id"
+            )
+        return x_node_id
+
+    # ---------------------------------------------------------------- 任务
+
+    def _task_urls(task_id: str) -> dict[str, str]:
+        return {
+            "events_url": f"/zhentu/v1/requests/{task_id}/events",
+            "result_url": f"/zhentu/v1/requests/{task_id}",
+        }
+
+    def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "created_at": _iso(int(task["created_at_ms"])),
+            "deadline_at": _iso(int(task["deadline_at_ms"])),
+            **_task_urls(task["task_id"]),
+        }
+
+    def _canceled_result(task_id: str) -> dict[str, Any]:
+        return {
+            "schema_version": "1.0",
+            "task_id": task_id,
+            "status": "canceled",
+            "terminal_reason": "user_canceled",
+            "mode": "cluster",
+            "answer": None,
+            "sources": [],
+            "partials": [],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "steps": 0},
+            "error": None,
+        }
+
+    def _orchestration_error(code: str, message: str) -> dict[str, Any]:
+        return {
+            "error": {
+                "message": message,
+                "type": "orchestration_error",
+                "param": None,
+                "code": code,
+            }
+        }
+
+    @app.post("/zhentu/v1/requests")
+    async def create_task(
+        request: Request,
+        body: TaskCreateRequest,
+        identity: str = Depends(require_node_identity),
+    ):
+        if body.origin_node_id != identity:
+            raise RegistryError(
+                403,
+                "origin_mismatch",
+                "origin_node_id 与鉴权身份不一致",
+                type_="orchestration_error",
+            )
+        if body.privacy == "local_only":
+            raise RegistryError(
+                403,
+                "local_only_rejected",
+                "local_only 任务不允许提交到阵图",
+                type_="orchestration_error",
+            )
+
+        existing = ledger.get_by_request(identity, body.request_id)
+        if existing is not None:
+            return JSONResponse(
+                status_code=200,
+                content={**_task_summary(existing), "duplicate": True},
+            )
+        if ledger.count_active_tasks() >= cfg.max_active_tasks:
+            return JSONResponse(
+                status_code=429,
+                content=_orchestration_error(
+                    "task_capacity_exceeded", "任务数已达上限，请稍后重试"
+                ),
+                headers={"Retry-After": "2"},
+            )
+
+        now_ms = now()
+        task, created = ledger.create_task(
+            request_id=body.request_id,
+            origin_node_id=identity,
+            session_id=body.session_id,
+            mode=body.mode,
+            requested_mode=body.requested_mode,
+            privacy=body.privacy,
+            request=body.model_dump(),
+            deadline_at_ms=now_ms + body.deadline_s * 1000,
+            now_ms=now_ms,
+        )
+        if not created:
+            return JSONResponse(
+                status_code=200,
+                content={**_task_summary(task), "duplicate": True},
+            )
+        ledger.append_event(
+            task["task_id"],
+            "task/created",
+            {"mode": body.mode, "request_id": body.request_id},
+            now_ms=now_ms,
+            max_events=cfg.task_event_max_per_task,
+            retention_ms=cfg.task_event_retention_days * 86_400_000,
+        )
+        background = asyncio.create_task(runner.run(task["task_id"]))
+        app.state.background_tasks.add(background)
+        background.add_done_callback(app.state.background_tasks.discard)
+        return JSONResponse(status_code=202, content=_task_summary(task))
+
+    @app.get("/zhentu/v1/requests/{task_id}/events")
+    async def task_events(
+        task_id: str,
+        request: Request,
+        identity: str = Depends(require_node_identity),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    ):
+        task = ledger.get_task(task_id)
+        if task is None:
+            raise RegistryError(
+                404, "task_unknown", f"任务 {task_id} 不存在", type_="orchestration_error"
+            )
+        if task["origin_node_id"] != identity:
+            raise RegistryError(
+                403,
+                "task_forbidden",
+                "只能读取本节点发起的任务",
+                type_="orchestration_error",
+            )
+        after_seq = 0
+        if last_event_id:
+            event = ledger.get_event(task_id, last_event_id)
+            if event is None:
+                return JSONResponse(
+                    status_code=410,
+                    content=_orchestration_error(
+                        "replay_unavailable", "Last-Event-ID 已超出保留窗口"
+                    ),
+                )
+            after_seq = int(event["seq"])
+
+        async def generate():
+            seq = after_seq
+            while True:
+                events = ledger.list_events(task_id, seq)
+                for event in events:
+                    seq = int(event["seq"])
+                    payload = {
+                        "event_id": event["event_id"],
+                        "task_id": task_id,
+                        "seq": seq,
+                        "type": event["type"],
+                        "at": _iso(int(event["at_ms"])),
+                        "data": event["data"],
+                    }
+                    yield (
+                        f"id: {seq}\n"
+                        f"event: {event['type']}\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                current = ledger.get_task(task_id)
+                if current and current["status"] in (
+                    "completed",
+                    "partial",
+                    "failed",
+                    "canceled",
+                ):
+                    if not ledger.list_events(task_id, seq):
+                        break
+                await asyncio.sleep(0.05)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/zhentu/v1/requests/{task_id}")
+    async def get_task_result(
+        task_id: str,
+        request: Request,
+        identity: str = Depends(require_node_identity),
+    ):
+        task = ledger.get_task(task_id)
+        if task is None:
+            raise RegistryError(
+                404, "task_unknown", f"任务 {task_id} 不存在", type_="orchestration_error"
+            )
+        if task["origin_node_id"] != identity:
+            raise RegistryError(
+                403,
+                "task_forbidden",
+                "只能读取本节点发起的任务",
+                type_="orchestration_error",
+            )
+        if task["status"] in ("completed", "partial", "failed", "canceled") and task[
+            "result_json"
+        ]:
+            return JSONResponse(status_code=200, content=task["result_json"])
+        return JSONResponse(
+            status_code=200,
+            content={
+                **_task_summary(task),
+                "error": task["error_json"],
+            },
+        )
+
+    @app.post("/zhentu/v1/requests/{task_id}/cancel")
+    async def cancel_task(
+        task_id: str,
+        request: Request,
+        identity: str = Depends(require_node_identity),
+    ):
+        task = ledger.get_task(task_id)
+        if task is None:
+            raise RegistryError(
+                404, "task_unknown", f"任务 {task_id} 不存在", type_="orchestration_error"
+            )
+        if task["origin_node_id"] != identity:
+            raise RegistryError(
+                403,
+                "task_forbidden",
+                "只能取消本节点发起的任务",
+                type_="orchestration_error",
+            )
+        if task["status"] in ("completed", "partial", "failed", "canceled"):
+            return JSONResponse(status_code=200, content=_task_summary(task))
+
+        now_ms = now()
+        if task["status"] == "queued":
+            ledger.update_task(
+                task_id,
+                now_ms=now_ms,
+                status="canceled",
+                terminal_reason="user_canceled",
+                result_json=_canceled_result(task_id),
+                finished_at_ms=now_ms,
+            )
+            ledger.append_event(
+                task_id,
+                "task/canceled",
+                {"reason": "user_canceled"},
+                now_ms=now_ms,
+                max_events=cfg.task_event_max_per_task,
+                retention_ms=cfg.task_event_retention_days * 86_400_000,
+            )
+            refreshed = ledger.get_task(task_id) or task
+            return JSONResponse(status_code=200, content=_task_summary(refreshed))
+
+        ledger.request_cancel(task_id, now_ms=now_ms)
+        refreshed = ledger.get_task(task_id) or task
+        return JSONResponse(status_code=202, content=_task_summary(refreshed))
 
     return app
 
