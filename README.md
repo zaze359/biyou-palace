@@ -294,6 +294,7 @@ docker compose up -d
 ## 十、参考文档
 
 - 协议基准：[`docs/node-agent-contract.md`](docs/node-agent-contract.md)
+- 编排协议：[`docs/orchestration-contract.md`](docs/orchestration-contract.md)
 - 灵脉监控：[`monitoring/README.md`](monitoring/README.md)
 - 准圣节点：[`nodes/quasheng/README.md`](nodes/quasheng/README.md)
 - 散仙节点：[`nodes/sanxian/README.md`](nodes/sanxian/README.md) · [`NATIVE_INTEGRATION.md`](nodes/sanxian/NATIVE_INTEGRATION.md)

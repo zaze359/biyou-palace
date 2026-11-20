@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "request_envelope": {
+    "schema_version": "1.0",
+    "request_id": "req-fixture-0001",
+    "session_id": "sess-fixture-0001",
+    "origin_node_id": "sanxian-01",
+    "mode": "cluster",
+    "requested_mode": "auto",
+    "privacy": "normal",
+    "deadline_s": 120,
+    "input": {
+      "messages": [
+        {"role": "user", "content": "帮我总结这份周报"}
+      ],
+      "attachments": []
+    },
+    "requirements": {
+      "capabilities": ["chat"],
+      "context_len": 8192
+    }
+  },
+  "plan": {
+    "plan_id": "plan-fixture-0001",
+    "intent": "总结周报并给出风险提示",
+    "max_steps": 8,
+    "max_parallel": 4,
+    "steps": [
+      {
+        "id": "s1",
+        "goal": "总结周报要点",
+        "capability": "chat",
+        "input": {
+          "messages": [
+            {"role": "user", "content": "总结以下周报要点：..."}
+          ]
+        },
+        "depends_on": [],
+        "parallel_group": "g1",
+        "exclusive": false,
+        "required": true,
+        "failure_policy": "fail_task",
+        "model_hint": null,
+        "input_ref": null,
+        "output_schema": null
+      },
+      {
+        "id": "s2",
+        "goal": "基于总结给出风险提示",
+        "capability": "chat",
+        "input": {
+          "messages": [
+            {"role": "user", "content": "基于前一步总结给出风险提示"}
+          ]
+        },
+        "depends_on": ["s1"],
+        "parallel_group": null,
+        "exclusive": false,
+        "required": false,
+        "failure_policy": "partial",
+        "model_hint": null,
+        "input_ref": null,
+        "output_schema": null
+      }
+    ],
+    "aggregate": {
+      "mode": "llm",
+      "input_step_ids": ["s1", "s2"],
+      "include_partial": true,
+      "instructions": "合并总结与风险提示，保留来源。"
+    }
+  },
+  "task_event": {
+    "event_id": "evt-fixture-0003",
+    "task_id": "task-fixture-0001",
+    "seq": 3,
+    "type": "step/result",
+    "at": "2026-11-20T02:30:00+08:00",
+    "data": {
+      "step_id": "s1",
+      "node_id": "quasheng-01",
+      "model": "qwen2.5:7b-instruct-q4_K_M",
+      "route_decision_id": "dec-fixture-0001",
+      "status": "ok",
+      "output_ref": "artifact://task-fixture-0001/s1"
+    }
+  },
+  "result_envelope": {
+    "schema_version": "1.0",
+    "task_id": "task-fixture-0001",
+    "status": "partial",
+    "terminal_reason": "deadline",
+    "mode": "cluster",
+    "answer": "周报总结与风险提示……",
+    "sources": [
+      {
+        "step_id": "s1",
+        "node_id": "quasheng-01",
+        "model": "qwen2.5:7b-instruct-q4_K_M",
+        "route_decision_id": "dec-fixture-0001",
+        "output_ref": "artifact://task-fixture-0001/s1"
+      }
+    ],
+    "partials": [
+      {
+        "step_id": "s2",
+        "reason": "timeout",
+        "output_ref": null
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "steps": 1
+    },
+    "error": null
+  }
+}
