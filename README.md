@@ -1,8 +1,17 @@
 # biyou-palace（碧游宫）
 
-一套**节点智能体系统**：把 PC 和手机都变成「自治双模单元」——本地跑大模型推理，对外暴露**完全一致**的 OpenAI 兼容 HTTP 服务，同时保留本机对话能力。
+一套**内网异构推理集群**：碧游宫网关、阵图编排、仙徒节点、灵脉监控、道鉴检定五层，
+全部跑在局域网内，数据不出金鳌岛。
 
-两套实现用不同语言、不同推理运行时，但共享同一份协议契约，**不共享代码**：
+- **碧游宫**（NewAPI）：统一 OpenAI 兼容入口、加权负载均衡、故障隔离；
+- **阵图**（ZhenTu）：节点注册/选路、复杂请求拆解、并行推演与道果聚合；
+- **仙徒节点**：准圣（PC + Ollama）与散仙（安卓 + llama.cpp），同时是自治双模单元——
+  本地跑模型并向集群暴露**完全一致**的 OpenAI 兼容 HTTP 服务，也保留本机对话能力；
+- **灵脉**（Prometheus + Grafana）与**道鉴**（压测 / 故障注入 / 长时耐久）。
+
+> 一键起中枢机：[集群一键部署与从零复现](#九集群一键部署与从零复现)。
+> 节点协议仍是本仓库的地基，两套实现用不同语言、不同推理运行时，共享同一份协议契约，
+> **不共享代码**：
 
 | 节点 | 角色 | 平台 | 推理运行时 | 默认端口 |
 |---|---|---|---|---|
@@ -235,11 +244,20 @@ curl -N -X POST http://127.0.0.1:4011/v1/chat/completions \
 
 ```
 biyou-palace/
+├── docker-compose.yml             # 中枢机一键起：碧游宫 + 阵图 + 灵脉
+├── .env.example                   # 中枢机编排变量模板
 ├── start.sh                       # 节点统一启动入口（菜单 / 无交互）
+├── deploy/
+│   ├── newapi/                    # 碧游宫：渠道/选项声明 + 管理员 CLI + compose
+│   ├── zhentu/Dockerfile          # 阵图镜像
+│   └── nodes.example.json         # 批量注册清单模板
 ├── docs/
-│   └── node-agent-contract.md     # 节点智能体统一契约 v1.2（协议基准）
+│   ├── deployment.md              # 从零复现部署手册
+│   ├── operations.md              # 运维、备份、故障排查
+│   ├── node-agent-contract.md     # 节点智能体统一契约 v1.2（协议基准）
+│   └── orchestration-contract.md  # 阵图编排/任务/事件契约
 ├── monitoring/                    # 灵脉：Prometheus + Grafana 编排与看板
-├── zhentu/                        # 阵图：注册表 / 选路 / 指标（旁路控制面）
+├── zhentu/                        # 阵图：注册表 / 选路 / 任务编排 / 指标
 ├── nodes/
 │   ├── quasheng/                  # 准圣节点（PC · Python + Ollama）
 │   │   ├── app.py                 # FastAPI 装配（薄代理 + 契约专属表面）
@@ -253,9 +271,14 @@ biyou-palace/
 │       ├── shared/ composeApp/ nativelib/   # 底座本体 + 节点增量源码
 │       └── README.md
 └── scripts/
+    ├── bootstrap_cluster.sh       # 中枢机本地配置生成 + 编排校验
     ├── run_quasheng.sh            # 准圣一键运行（校验/装依赖/配/启动）
+    ├── run_zhentu.sh              # 阵图本机进程启动（不走容器时）
+    ├── register_nodes.py          # 批量注册节点到阵图
+    ├── collect_logs.py            # 容器/节点日志与诊断快照收集
     ├── verify.sh                  # 准圣单测
-    └── smoke_quasheng.sh          # 准圣端到端冒烟（含负向用例）
+    ├── smoke_quasheng.sh          # 准圣端到端冒烟（含负向用例）
+    └── daojian/                   # 道鉴：压测 / 故障注入 / 耐久 / 网关验收
 ```
 
 ---
@@ -282,8 +305,71 @@ docker compose up -d
 
 ---
 
-## 九、已知限制
+## 九、集群一键部署与从零复现
 
+中枢机（一台常开 PC）用根目录 compose 起控制面；边缘节点按文档上线。
+
+```bash
+cp .env.example .env                 # 也可以交给 bootstrap 生成
+bash scripts/bootstrap_cluster.sh    # 生成 token/密钥并校验编排（不启动）
+docker compose up -d                 # new-api + zhentu + prometheus + grafana
+docker compose ps
+```
+
+- `bootstrap_cluster.sh --check` 只检查不写文件；`--up` 生成后直接拉起。
+- 需要保留旧栈数据时先停旧 compose；根编排卷名带 `biyou-palace_` 前缀。
+- 完整步骤（NewAPI 管理员 / API key、渠道改地址、准圣 / 散仙上线、灵脉、道鉴验收）见
+  [`docs/deployment.md`](docs/deployment.md)。
+- 日常运维、备份升级、故障排查见 [`docs/operations.md`](docs/operations.md)。
+
+---
+
+## 十、碧游宫网关与阵图编排
+
+### 碧游宫（NewAPI）
+
+渠道与选项是声明式配置，一条命令同步：
+
+```bash
+set -a; source .env; set +a
+python3 deploy/newapi/gateway_admin.py channel sync --dry-run
+python3 deploy/newapi/gateway_admin.py channel sync
+python3 deploy/newapi/gateway_admin.py option apply
+```
+
+- `deploy/newapi/channels.json`：渠道声明；远程节点把 `host.docker.internal` 换成局域网 IP。
+- `deploy/newapi/gateway-options.json`：重试、自动隔离阈值与状态码。
+- 验收：`python3 scripts/daojian/gateway_acceptance.py --strict`（G1–G5）。
+
+### 阵图（ZhenTu）
+
+阵图是控制面：只做节点注册 / 心跳、选路、任务拆解 / 调度 / 聚合与指标，不代理推理请求。
+
+```bash
+curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
+  http://127.0.0.1:4020/zhentu/v1/nodes
+curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"capability":"chat","strategy":"balanced"}' \
+  http://127.0.0.1:4020/zhentu/v1/route
+```
+
+- 端点与租约：[`zhentu/README.md`](zhentu/README.md)
+- 请求 / 计划 / 事件 / 结果契约：[`docs/orchestration-contract.md`](docs/orchestration-contract.md)
+- 批量注册：`python3 scripts/register_nodes.py --file deploy/nodes.example.json`
+- 编排 E2E：`python3 scripts/daojian/orchestration_e2e.py --strict`
+
+`ZHENTU_PLANNER_MODEL` 留空时阵图不拆步；填入网关可用模型后才会先规划再执行。
+
+---
+
+## 十一、已知限制
+
+- **中枢机 / 网关单点**：阵眼失效则全阵不可用；高可用与多活列入 V1.1。
+- **节点注册以自注册 + 静态清单为主**：没有自动发现与自动入阵。
+- **阵图取消是批次边界语义**：在途步骤不会立即中断。
+- **阵图指标进程内**：选路指标重启归零；任务指标按账本现状计算。
+- **灵脉单实例**：15 天保留、无远程存储与高可用。
 - **准圣 `/v1/models` 的 `owned_by`（已对齐契约）**：节点将每项 `owned_by` 统一改写为契约值 `biyou-node`，其余字段原样透传。
 - **准圣 `show()` 未实现**：无调用方，模型详情与能力来自 `/api/tags` + `capabilities_map`。
 - **散仙 `embeddings` 真实向量化（已落地）**：Plan A chat/embedding 双句柄 + JNI `embed` 桥，pooling 跟随模型元数据；未配置 `embedding_model` 或 embedding 句柄加载失败时返回 `503`，能力未声明时返回 `501`。
@@ -291,10 +377,14 @@ docker compose up -d
 
 ---
 
-## 十、参考文档
+## 十二、参考文档
 
+- 部署手册（从零复现）：[`docs/deployment.md`](docs/deployment.md)
+- 运维手册（注册 / 日志 / 检定 / 备份）：[`docs/operations.md`](docs/operations.md)
 - 协议基准：[`docs/node-agent-contract.md`](docs/node-agent-contract.md)
 - 编排协议：[`docs/orchestration-contract.md`](docs/orchestration-contract.md)
+- 阵图注册表：[`zhentu/README.md`](zhentu/README.md)
 - 灵脉监控：[`monitoring/README.md`](monitoring/README.md)
 - 准圣节点：[`nodes/quasheng/README.md`](nodes/quasheng/README.md)
 - 散仙节点：[`nodes/sanxian/README.md`](nodes/sanxian/README.md) · [`NATIVE_INTEGRATION.md`](nodes/sanxian/NATIVE_INTEGRATION.md)
+- 实测报告：[`docs/reports/`](docs/reports/)

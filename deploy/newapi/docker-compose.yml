@@ -8,7 +8,9 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     env_file:
-      - ./conf/new-api.env
+      # 由 scripts/bootstrap_cluster.sh 生成；缺失时仍可解析配置（NewAPI 使用内置默认值）
+      - path: ./conf/new-api.env
+        required: false
     volumes:
       - ${NEWAPI_DATA_DIR:-./data}:/data
     extra_hosts:

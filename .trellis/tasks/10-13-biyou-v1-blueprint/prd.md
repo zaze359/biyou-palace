@@ -111,6 +111,12 @@
 5. **第五步 · 归档传道**（原「归档传道」）
    全套文档、一键部署（Docker Compose）、运维脚本（批量注册 / 日志收集 / 批量检定）、已知限制与迭代路线。
    - 验收：他人依文档从零复现整套集群。
+   - **进度（2026-11-21）**：**已完成** —— 根 `docker-compose.yml` 通过 `include` 复用碧游宫与灵脉，
+     新增阵图镜像（`deploy/zhentu/Dockerfile`），`scripts/bootstrap_cluster.sh` 幂等生成本地密钥与 token；
+     `docs/deployment.md` 覆盖从零到验收，`docs/operations.md` 覆盖批量注册 / 日志 / 检定 / 备份 / 故障排查；
+     `scripts/register_nodes.py`、`scripts/collect_logs.py` 落地。`docker compose config -q` 通过，
+     `verify.sh` 211 通过、`pytest zhentu` 76 通过。镜像构建因本机无法访问 Docker Hub 未实测，
+     报告 `docs/reports/biyou-deploy-2026-11-21.md`。
 
 ## 四、验收标准（Acceptance Criteria · V1.0 整体）
 

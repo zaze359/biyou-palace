@@ -1,0 +1,39 @@
+.git
+.gitignore
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+.trellis
+.codebuddy
+.trae
+.agents
+.workbuddy
+
+# 节点工程与构建产物不参与阵图镜像构建
+nodes
+build
+.gradle
+.kotlin
+*.apk
+*.aab
+
+# 本地运行数据与密钥
+.env
+.env.*
+deploy/newapi/conf
+deploy/newapi/data
+deploy/newapi/*.local
+monitoring/prometheus/*_token
+*.log
+logs
+
+# 文档与报告
+docs
+*.md
+.DS_Store

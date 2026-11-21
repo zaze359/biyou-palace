@@ -1,0 +1,65 @@
+# 碧游宫 · 中枢机一键编排
+#
+# 用法：
+#   cp .env.example .env && bash scripts/bootstrap_cluster.sh
+#   docker compose up -d
+#
+# 复用两套已验收的子编排（Compose >= 2.20 的 include）：
+#   deploy/newapi/docker-compose.yml   碧游宫 NewAPI
+#   monitoring/docker-compose.yml      灵脉 Prometheus + Grafana
+# 阵图作为本仓库镜像单独声明。
+
+name: biyou-palace
+
+include:
+  - path: deploy/newapi/docker-compose.yml
+  - path: monitoring/docker-compose.yml
+
+services:
+  zhentu:
+    build:
+      context: .
+      dockerfile: deploy/zhentu/Dockerfile
+    image: biyou/zhentu:${BIYOU_VERSION:-1.0.0}
+    container_name: ${ZHENTU_CONTAINER_NAME:-biyou-zhentu}
+    restart: unless-stopped
+    ports:
+      # 节点要从局域网注册，默认对宿主机所有网卡开放；仅本机调试可改 127.0.0.1。
+      - "${ZHENTU_BIND_ADDR:-0.0.0.0}:${ZHENTU_PORT:-4020}:4020"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ZHENTU_HOST: 0.0.0.0
+      ZHENTU_PORT: "4020"
+      ZHENTU_DB: /data/registry.db
+      # 非回环监听必须配置 token；留空时阵图会拒绝启动并打印原因。
+      ZHENTU_REGISTRY_TOKEN: ${ZHENTU_REGISTRY_TOKEN:-}
+      ZHENTU_NODE_TOKENS: ${ZHENTU_NODE_TOKENS:-}
+      # 容器内直连 NewAPI 服务名，不走宿主机回环。
+      ZHENTU_NEWAPI_BASE_URL: http://new-api:3000
+      ZHENTU_NEWAPI_API_KEY: ${ZHENTU_NEWAPI_API_KEY:-}
+      ZHENTU_PLANNER_MODEL: ${ZHENTU_PLANNER_MODEL:-}
+      ZHENTU_PLANNER_RETRIES: ${ZHENTU_PLANNER_RETRIES:-1}
+      ZHENTU_PLANNER_TIMEOUT_S: ${ZHENTU_PLANNER_TIMEOUT_S:-30}
+      ZHENTU_AGGREGATOR_MODE: ${ZHENTU_AGGREGATOR_MODE:-concat}
+      ZHENTU_AGGREGATOR_MODEL: ${ZHENTU_AGGREGATOR_MODEL:-}
+      ZHENTU_AGGREGATOR_TIMEOUT_S: ${ZHENTU_AGGREGATOR_TIMEOUT_S:-30}
+      ZHENTU_MAX_ACTIVE_TASKS: ${ZHENTU_MAX_ACTIVE_TASKS:-4}
+      ZHENTU_TASK_EVENT_RETENTION_DAYS: ${ZHENTU_TASK_EVENT_RETENTION_DAYS:-30}
+      ZHENTU_TASK_EVENT_MAX_PER_TASK: ${ZHENTU_TASK_EVENT_MAX_PER_TASK:-10000}
+    volumes:
+      - zhentu-data:/data
+    depends_on:
+      - new-api
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4020/zhentu/v1/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  zhentu-data:

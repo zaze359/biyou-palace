@@ -9,7 +9,7 @@ services:
       - --storage.tsdb.retention.time=15d
       - --web.enable-lifecycle
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -29,7 +29,7 @@ services:
     depends_on:
       - prometheus
     ports:
-      - "3001:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     environment:
       # 本地看板免登录；对外暴露时务必改掉或用 SSO
       GF_AUTH_ANONYMOUS_ENABLED: "true"

@@ -1,0 +1,5 @@
+{"file": "docs/node-agent-contract.md", "reason": "节点契约：部署文档中的端点/鉴权/能力声明依据"}
+{"file": "docs/orchestration-contract.md", "reason": "阵图编排与任务端点：部署与运维手册依据"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端约定：控制面边界与观测一致性"}
+{"file": "monitoring/README.md", "reason": "灵脉启动与抓取地址改法"}
+{"file": "zhentu/README.md", "reason": "阵图环境变量、端点与租约"}

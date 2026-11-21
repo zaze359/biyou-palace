@@ -1,0 +1,3 @@
+# NewAPI 运行环境（由 scripts/bootstrap_cluster.sh 生成，禁止入库）
+conf/
+data/

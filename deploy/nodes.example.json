@@ -1,0 +1,46 @@
+{
+  "nodes": [
+    {
+      "id": "quasheng-01",
+      "name": "准圣·01",
+      "role": "quasheng",
+      "endpoint": "http://192.168.1.10:4010",
+      "models": [
+        {
+          "name": "qwen2.5:7b",
+          "capabilities": ["chat"],
+          "context_len": 32768,
+          "loaded": true
+        },
+        {
+          "name": "nomic-embed-text:latest",
+          "capabilities": ["embedding"],
+          "context_len": 8192,
+          "loaded": true
+        }
+      ],
+      "limits": {"max_concurrency": 4, "max_context_len": 32768},
+      "resources": {"queue_len": 0, "active": 0},
+      "status": "ready",
+      "heartbeat_interval_s": 15
+    },
+    {
+      "id": "sanxian-01",
+      "name": "散仙·01",
+      "role": "sanxian",
+      "endpoint": "http://192.168.1.20:4011",
+      "models": [
+        {
+          "name": "Qwen3-0.6B-Q8_0.gguf",
+          "capabilities": ["chat"],
+          "context_len": 4096,
+          "loaded": true
+        }
+      ],
+      "limits": {"max_concurrency": 2, "max_context_len": 4096},
+      "resources": {"queue_len": 0, "active": 0},
+      "status": "ready",
+      "heartbeat_interval_s": 15
+    }
+  ]
+}

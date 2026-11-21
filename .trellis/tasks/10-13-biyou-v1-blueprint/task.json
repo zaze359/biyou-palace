@@ -28,7 +28,8 @@
     "11-20-daoguo-aggregator",
     "11-21-zhentu-observability-parallel",
     "11-21-sanxian-frontend-cluster",
-    "11-21-biyou-gateway"
+    "11-21-biyou-gateway",
+    "11-21-biyou-deploy"
   ],
   "parent": null,
   "relatedFiles": [
