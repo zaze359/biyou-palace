@@ -1,7 +1,7 @@
 # 道鉴 · 阵图编排链路实测报告
 
-> 生成时间：2026-11-21 02:54 +0800　|　协议：`docs/orchestration-contract.md` v1.0　|　工具：`scripts/daojian/orchestration_e2e.py`
-> 结论：**7/7 通过**（`stub=True`，见第五节限制）
+> 生成时间：2026-11-21 02:54 +0800　|　最后更新：2026-11-21（真实网关重测）　|　协议：`docs/orchestration-contract.md` v1.0　|　工具：`scripts/daojian/orchestration_e2e.py`
+> 结论：**桩网关 7/7；真实 NewAPI 网关 7/7**（真实网关重测见第十一节）
 
 ## 一、背景与目的
 
@@ -248,3 +248,70 @@ ZHENTU_PLANNER_RETRIES=1               # 格式纠错重试次数（0-3）
 
 **更新（B+A 之后）**：拆步能力已可用。7B 一次通过、0.5B 靠重试也能成功。剩余缺口是 NewAPI 渠道未配置 7B，
 导致「阵图→NewAPI→节点」完整链路下仍只能走 0.5B。补齐渠道配置后应重跑本报告第二节的 E1–E7。
+
+## 十一、真实网关 E1–E7 重测（2026-11-21，`stub=false`）
+
+NewAPI 渠道已补上 `qwen2.5:7b`（`/v1/models` 可见、`/v1/chat/completions` 实测返回 `OK`），
+E2E 脚本也补了真实网关模式，按第二节的 E1–E7 完整重跑。
+
+### 脚本改动（`scripts/daojian/orchestration_e2e.py`）
+
+| 项 | 桩模式（默认） | 真实网关模式（`--gateway-base-url`） |
+|---|---|---|
+| 密钥 | 固定 `stub-key` | `--gateway-api-key` 或 `ZHENTU_NEWAPI_API_KEY`，缺失直接退出 |
+| 规划模型 | `planner-stub` | `--planner-model`（本次 `qwen2.5:7b`） |
+| 节点模型 | `e2e-chat` | `--chat-model`（本次 `qwen2.5:7b`） |
+| 规划/执行超时 | 默认 | `ZHENTU_PLANNER_TIMEOUT_S=300`、`ZHENTU_NEWAPI_TIMEOUT_S=300` |
+| 任务截止 | 60s | `--deadline-s`（本次 600s，契约上限） |
+| E3 断言 | 桩回显文本按序拼接 | `completed` + 步骤数 ≥2 + `sources` 与结果数一致 + 答案非空 |
+| E6 等待 | 20s | 300s（取消在批次边界生效） |
+| 结果 JSON | `stub=true` | `stub=false` + `planner_model`/`chat_model`/`deadline_s` |
+
+### 重测结果
+
+真实拓扑：阵图（进程内临时实例）→ `http://127.0.0.1:3000/v1`（NewAPI `v1.0.0-rc.48`）→ Ollama `qwen2.5:7b`。
+
+| 次数 | 结果 | 耗时 | 关键数据 |
+|---|---|---|---|
+| 1（脚本首版） | 7/7 | 100.3s | 主任务 2 步、`sources=2` |
+| 2 | 6/7 | 126.6s | **E3 超时**：`_wait_via` 固定 60s，主任务仍在 running |
+| 3（修复等待后） | 7/7 | 172.8s | 2 步、`sources=2`、answer 327 字符 |
+| 4 | 7/7 | 162.4s | 2 步、`sources=2`、answer 152 字符 |
+| 5（最终版本） | 7/7 | 185.8s | `planner_source=planner`、2 步、answer 568 字符 |
+
+> 第 2 次失败是**测试工具缺陷**，不是产品缺陷：真实 7B 规划 + 两步执行超过脚本写死的 60s 等待窗口。
+> 修复后连续 3 次（第 3–5 次）均为 7/7。
+
+各用例与桩模式一致：E1 `202`+urls、E2 事件链完整（`planned→2×started/result→aggregate→completed`）、
+E4 幂等 `duplicate=true`、E5 越权 `403 task_forbidden`、E7 无能力 `no_route`。
+
+E6 取消这次观察到更完整的一次：规划给出 **4 步**，取消在首批尚未启动时到达，
+事件流为 `task/planned → step/canceled ×4 → task/canceled`；与契约「未启动步骤写 canceled、在途步骤不中断」一致。
+
+E2 现在会把 `task/planned` 载荷一起写进结果 JSON，本次 `{"steps": 2, "planner_source": "planner"}`，
+后续排查「为什么没拆步」不用再翻代码。
+
+### 这次重测的边界（仍需记住）
+
+1. **注册节点仍是假条目**：模型声明为 `qwen2.5:7b`，但执行走的是
+   `阵图 → NewAPI → Ollama`，**没有**打到准圣/散仙的 `/v1/chat/completions` 端点。
+   因此本次验证的是「网关链路」，不是「节点端点链路」。
+2. NewAPI 的 `qwen2.5:7b` 渠道是**手工在后台加的**，仓库里还没有渠道初始化脚本；
+   渠道/权重/心跳的代码化属于第二步，自动化部署模板属于第五步。
+3. `sources` 与结果数一致（本次 2/2），第八节提到的「执行器不返回 source 时来源缺失」仍未在
+   真实节点路径上验证。
+
+### 复现
+
+```bash
+set -a; . ./.env; set +a
+.venv/bin/python scripts/daojian/orchestration_e2e.py \
+    --gateway-base-url http://127.0.0.1:3000/v1 \
+    --planner-model qwen2.5:7b --chat-model qwen2.5:7b \
+    --deadline-s 600 --json scripts/daojian/out/e2e-real.json --strict
+```
+
+### 对第三步验收的影响
+
+「复杂请求自动拆多子任务」在**真实网关 + 7B** 下已稳定成立（本次连续 3 次拆出 2 步并完成聚合）。
+第三步剩余工作只剩「把注册节点换成真实的准圣/散仙并验证节点端点路径」，可在第二步网关联调时一并完成。

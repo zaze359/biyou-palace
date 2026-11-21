@@ -10,13 +10,24 @@
 - E6 取消：长任务在第一步后取消 → `canceled`
 - E7 能力缺失：`requirements.capabilities=["rerank"]`（无节点声明）→ 任务 `failed` 且错误码可读
 
-**桩网关**：阵图的 Planner 与 Execution 都要一个 OpenAI 兼容网关，而真实碧游宫/NewAPI 渠道
-尚未接通（第二阶段）。本脚本默认内联起 `stub_gateway.py`，报告里标 `stub=true`。
-真实网关可用时传 `--gateway-base-url` 覆盖，并在报告里标 `stub=false`。
+**桩网关**：阵图的 Planner 与 Execution 都要一个 OpenAI 兼容网关。本脚本默认内联起
+`stub_gateway.py`，报告里标 `stub=true`；传 `--gateway-base-url` 时走真实网关，标记 `stub=false`。
+
+真实网关模式与桩模式有三处必要差异（都由 `real` 分支处理，不改变桩模式行为）：
+
+- 密钥取 `--gateway-api-key` 或 `ZHENTU_NEWAPI_API_KEY`（不再用 `stub-key`）；
+- 规划模型、节点模型、规划/执行超时、任务截止时间都换成真实可用的值
+  （7B 在 CPU 上单步可达数十秒，桩模式的 60s 截止必然超时）；
+- E3 不再断言桩回显文本，改为断言「多步结果 + 答案非空 + sources 与结果数一致」。
 
 用法：
     python3 scripts/daojian/orchestration_e2e.py            # 内联桩网关 + 临时阵图实例
     python3 scripts/daojian/orchestration_e2e.py --json out/e2e.json
+    # 真实网关：阵图 -> NewAPI -> 节点
+    python3 scripts/daojian/orchestration_e2e.py \
+        --gateway-base-url http://127.0.0.1:3000/v1 \
+        --planner-model qwen2.5:7b --chat-model qwen2.5:7b \
+        --json out/e2e-real.json --strict
 """
 from __future__ import annotations
 
@@ -121,7 +132,12 @@ def _collect_events(http: Any, task_id: str) -> list[dict[str, Any]]:
         pass
     return collected
 
-def _request_body(request_id: str, *, capabilities: list[str] | None = None) -> dict[str, Any]:
+def _request_body(
+    request_id: str,
+    *,
+    capabilities: list[str] | None = None,
+    deadline_s: int = 60,
+) -> dict[str, Any]:
     return {
         "schema_version": "1.0",
         "request_id": request_id,
@@ -129,7 +145,7 @@ def _request_body(request_id: str, *, capabilities: list[str] | None = None) -> 
         "mode": "cluster",
         "requested_mode": "cluster",
         "privacy": "normal",
-        "deadline_s": 60,
+        "deadline_s": deadline_s,
         "input": {"messages": [{"role": "user", "content": "请总结并给出风险提示"}]},
         "requirements": {"capabilities": capabilities or ["chat"]},
     }
@@ -153,23 +169,48 @@ def _wait_terminal(client: Client, task_id: str, *, timeout: float = 60.0) -> tu
     return last, status
 
 
-def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dict[str, Any]:
+def run(
+    gateway_base_url: str | None = None,
+    *,
+    stub: bool | None = None,
+    gateway_api_key: str | None = None,
+    planner_model: str = "qwen2.5:7b",
+    chat_model: str = "e2e-chat",
+    deadline_s: int = 60,
+    cancel_wait_s: float | None = None,
+) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     started = time.time()
 
+    real = gateway_base_url is not None
     stub_server = None
-    if gateway_base_url is None:
+    if not real:
         stub_server, _ = stub_gateway.start_in_thread(port=0, host="127.0.0.1")
         gateway_base_url = f"http://127.0.0.1:{stub_server.server_address[1]}"
         stub = True if stub is None else stub
+    else:
+        stub = False if stub is None else stub
+    if cancel_wait_s is None:
+        # 真实 7B 单步可能跑数十秒；取消在批次边界生效，要等首步跑完才落终态
+        cancel_wait_s = 300.0 if real else 20.0
 
     os.environ["ZHENTU_NODE_TOKENS"] = json.dumps({NODE_ID: NODE_TOKEN, OTHER_NODE_ID: NODE_TOKEN + "-2"})
     os.environ["ZHENTU_NEWAPI_BASE_URL"] = gateway_base_url
-    os.environ["ZHENTU_NEWAPI_API_KEY"] = "stub-key"
     os.environ["ZHENTU_AGGREGATOR_MODE"] = "concat"
-    # 不设 ZHENTU_PLANNER_MODEL 时阵图直接用 SingleStepPlanner（单步），
-    # 要验证「拆多子任务」必须让 PlannerClient 真正去调规划模型；桩网关会返回两段计划。
-    os.environ["ZHENTU_PLANNER_MODEL"] = "planner-stub"
+    if real:
+        api_key = gateway_api_key or os.environ.get("ZHENTU_NEWAPI_API_KEY") or ""
+        if not api_key:
+            raise SystemExit("真实网关模式需要 --gateway-api-key 或环境变量 ZHENTU_NEWAPI_API_KEY")
+        os.environ["ZHENTU_NEWAPI_API_KEY"] = api_key
+        # 7B 在 CPU 上规划/执行都要数十秒，桩模式的默认超时会让任务稳定超时失败
+        os.environ["ZHENTU_PLANNER_MODEL"] = planner_model
+        os.environ["ZHENTU_PLANNER_TIMEOUT_S"] = "300"
+        os.environ["ZHENTU_NEWAPI_TIMEOUT_S"] = "300"
+    else:
+        os.environ["ZHENTU_NEWAPI_API_KEY"] = "stub-key"
+        # 不设 ZHENTU_PLANNER_MODEL 时阵图直接用 SingleStepPlanner（单步），
+        # 要验证「拆多子任务」必须让 PlannerClient 真正去调规划模型；桩网关会返回两段计划。
+        os.environ["ZHENTU_PLANNER_MODEL"] = "planner-stub"
 
     tmpdir = Path(tempfile.mkdtemp(prefix="daojian-e2e-"))
     sys.path.insert(0, str(ROOT))
@@ -206,7 +247,7 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
                     "endpoint": f"http://127.0.0.1:{port}",
                     "status": "ready",
                     "models": [
-                        {"name": "e2e-chat", "capabilities": ["chat"], "context_len": 4096, "loaded": True}
+                        {"name": chat_model, "capabilities": ["chat"], "context_len": 4096, "loaded": True}
                     ],
                     "limits": {"max_concurrency": 4, "max_context_len": 4096},
                     "resources": {"queue_len": 0, "active": 0},
@@ -236,7 +277,9 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
 
         # ---- E1 提交
         request_id = "req-e2e-" + uuid.uuid4().hex[:12]
-        resp = call("POST", "/zhentu/v1/requests", body=_request_body(request_id))
+        resp = call(
+            "POST", "/zhentu/v1/requests", body=_request_body(request_id, deadline_s=deadline_s)
+        )
         created = resp.json()
         task_id = created.get("task_id")
         check(
@@ -247,7 +290,9 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
         )
 
         # ---- E2/E3 事件流 + 最终结果
-        final, get_status = _wait_via(call, task_id)
+        # 真实模型（CPU 上的 7B）规划 + 两步执行可能超过 60s，按任务截止时间等；
+        # 桩模式仍用 60s，行为不变。
+        final, get_status = _wait_via(call, task_id, timeout=deadline_s if real else 60)
         types: list[str] = []
         events: list[dict[str, Any]] = []
         if task_id:
@@ -265,22 +310,49 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
 
         expected = ["task/created", "task/planned", "step/started", "step/result", "task/completed"]
         missing = [t for t in expected if t not in types]
-        check("E2 事件流按序覆盖关键类型", not missing, f"types={types[:12]}{'...' if len(types) > 12 else ''}", {"types": types})
+        planned = next((e for e in events if e.get("type") == "task/planned"), {})
+        check(
+            "E2 事件流按序覆盖关键类型",
+            not missing,
+            f"types={types[:12]}{'...' if len(types) > 12 else ''} planned={planned.get('data')}",
+            {"types": types, "planned": planned.get("data")},
+        )
 
         step_results = [e for e in events if e.get("type") == "step/result"]
-        ok_final = (
-            isinstance(final, dict)
-            and final.get("status") == "completed"
-            and isinstance(final.get("answer"), str)
-            and "请总结要点" in final["answer"]
-            and "请给出风险提示" in final["answer"]
-            and final["answer"].index("请总结要点") < final["answer"].index("请给出风险提示")
-            and len(step_results) == 2
-        )
+        answer = (final or {}).get("answer") if isinstance(final, dict) else None
+        if real:
+            # 真实模型不会回显桩的固定文本；这里只验证「拆出多步 + 汇总非空 + 来源可追溯」，
+            # 具体内容由真实模型决定，不做文本匹配。
+            sources = (final or {}).get("sources") or []
+            ok_final = (
+                isinstance(final, dict)
+                and final.get("status") == "completed"
+                and isinstance(answer, str)
+                and len(answer.strip()) >= 20
+                and len(step_results) >= 2
+                and len(sources) == len(step_results)
+            )
+            e3_detail = (
+                f"status={(final or {}).get('status')} step_results={len(step_results)} "
+                f"sources={len(sources)} answer_len={len(answer or '')}"
+            )
+            e3_title = "E3 最终 ResultEnvelope 完成、多步结果汇总"
+        else:
+            ok_final = (
+                isinstance(final, dict)
+                and final.get("status") == "completed"
+                and isinstance(answer, str)
+                and "请总结要点" in answer
+                and "请给出风险提示" in answer
+                and answer.index("请总结要点") < answer.index("请给出风险提示")
+                and len(step_results) == 2
+            )
+            e3_detail = f"status={(final or {}).get('status')} step_results={len(step_results)}"
+            e3_title = "E3 最终 ResultEnvelope 完成、两步结果按序拼接"
         check(
-            "E3 最终 ResultEnvelope 完成、两步结果按序拼接",
+            e3_title,
             ok_final,
-            f"status={(final or {}).get('status')} step_results={len(step_results)}",
+            e3_detail,
             {
                 "status": (final or {}).get("status"),
                 "answer": ((final or {}).get("answer") or "")[:300],
@@ -289,7 +361,9 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
         )
 
         # ---- E4 幂等
-        dup = call("POST", "/zhentu/v1/requests", body=_request_body(request_id))
+        dup = call(
+            "POST", "/zhentu/v1/requests", body=_request_body(request_id, deadline_s=deadline_s)
+        )
         dbody = dup.json()
         check(
             "E4 同 request_id 幂等返回原任务",
@@ -309,8 +383,9 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
 
         # ---- E6 取消
         cancel_req = "req-e2e-cancel-" + uuid.uuid4().hex[:8]
-        cancel_body = _request_body(cancel_req)
-        # SLOWALL：无论桩走多步计划还是回退单步，执行都会沉睡 1s，保证取消落在执行中途
+        cancel_body = _request_body(cancel_req, deadline_s=deadline_s)
+        # SLOWALL：桩网关执行会沉睡 1s，保证取消落在执行中途；
+        # 真实模型下取消通常落在规划阶段或首批执行中，两者都按批次边界生效。
         cancel_body["input"]["messages"] = [{"role": "user", "content": "SLOWALL 请总结并给出风险提示"}]
         cresp = call("POST", "/zhentu/v1/requests", body=cancel_body)
         cancel_task = cresp.json().get("task_id")
@@ -327,7 +402,7 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
             cdel = call("POST", f"/zhentu/v1/requests/{cancel_task}/cancel")
             cancel_status = cdel.status_code
             # 取消在下一个批次边界生效：此时首步可能已跑完，必须用 SLOW 让首步足够长
-            cancel_final, _ = _wait_via(call, cancel_task, timeout=20)
+            cancel_final, _ = _wait_via(call, cancel_task, timeout=cancel_wait_s)
             events_of_cancel = _collect_events(http, cancel_task)
             cancel_events = [e.get("type") for e in events_of_cancel]
         # 取消语义（看 zhentu/runner.py）：批次边界生效。
@@ -371,6 +446,9 @@ def run(gateway_base_url: str | None = None, *, stub: bool | None = None) -> dic
         "elapsed_s": round(time.time() - started, 2),
         "gateway": gateway_base_url,
         "stub": bool(stub),
+        "planner_model": os.environ.get("ZHENTU_PLANNER_MODEL"),
+        "chat_model": chat_model,
+        "deadline_s": deadline_s,
         "passed": passed,
         "total": len(results),
         "results": results,
@@ -398,11 +476,25 @@ def _wait_via(call: Any, task_id: str, timeout: float = 60.0) -> tuple[Any, int]
 def main() -> int:
     parser = argparse.ArgumentParser(description="阵图编排端到端链路验证")
     parser.add_argument("--gateway-base-url", default=None, help="真实 OpenAI 兼容网关；缺省用内联桩")
+    parser.add_argument(
+        "--gateway-api-key", default=None, help="真实网关密钥；缺省读 ZHENTU_NEWAPI_API_KEY"
+    )
+    parser.add_argument("--planner-model", default="qwen2.5:7b", help="真实网关模式下的规划模型")
+    parser.add_argument(
+        "--chat-model", default="e2e-chat", help="注册节点声明的模型名；真实模式需为网关可路由的模型"
+    )
+    parser.add_argument("--deadline-s", type=int, default=60, help="任务截止时间（秒）")
     parser.add_argument("--json", dest="json_path", default=None, help="结果写入 JSON 文件")
     parser.add_argument("--strict", action="store_true", help="有失败项时退出码 1")
     args = parser.parse_args()
 
-    result = run(args.gateway_base_url)
+    result = run(
+        args.gateway_base_url,
+        gateway_api_key=args.gateway_api_key,
+        planner_model=args.planner_model,
+        chat_model=args.chat_model,
+        deadline_s=args.deadline_s,
+    )
     print(f"编排 E2E：{result['passed']}/{result['total']} 通过（stub={result['stub']}，{result['elapsed_s']}s）")
     for item in result["results"]:
         print(f"  {'OK ' if item['ok'] else 'FAIL'} {item['case']} — {item['detail']}")
