@@ -22,7 +22,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .aggregator import Aggregator, ConcatAggregator, LlmAggregator
+from .artifacts import ArtifactStore
 from .config import REGISTRY_VERSION, ConfigError, RegistrySettings, load_settings
+from .costs import CostLedger
 from .ledger import TaskStore
 from .metrics import RouteMetrics, render_task_metrics
 from .models import (
@@ -48,6 +50,8 @@ from .route import MAX_ALLOWED_MODELS, STRATEGIES, RouteQuery, bare_model, decid
 from .runner import TaskRunner
 from .store import RegistryStore
 from .task_models import TaskCreateRequest
+from .taskboard import TaskBoardStore
+from .taskboard_api import register_taskboard_routes
 
 logger = logging.getLogger("zhentu")
 
@@ -178,6 +182,9 @@ def create_app(
     cfg.validate()
     store = RegistryStore(cfg.db_path)
     ledger = TaskStore(cfg.db_path)
+    board = TaskBoardStore(cfg.db_path)
+    costs = CostLedger(cfg.db_path)
+    artifacts = ArtifactStore(cfg.db_path, cfg.artifact_dir)
     now = clock or (lambda: int(time.time() * 1000))
 
     selected_planner: Planner = planner or PlannerClient(
@@ -283,6 +290,9 @@ def create_app(
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             ledger.close()
+            board.close()
+            costs.close()
+            artifacts.close()
             store.close()
 
     app = FastAPI(
@@ -293,6 +303,9 @@ def create_app(
     app.state.settings = cfg
     app.state.store = store
     app.state.ledger = ledger
+    app.state.board = board
+    app.state.costs = costs
+    app.state.artifacts = artifacts
     app.state.clock = now
     app.state.route_metrics = RouteMetrics()
     app.state.planner = selected_planner
@@ -1028,6 +1041,20 @@ def create_app(
         ledger.request_cancel(task_id, now_ms=now_ms)
         refreshed = ledger.get_task(task_id) or task
         return JSONResponse(status_code=202, content=_task_summary(refreshed))
+
+    # ---------------------------------------------------------------- 任务板 / 账本
+
+    register_taskboard_routes(
+        app,
+        board=board,
+        costs=costs,
+        artifacts=artifacts,
+        clock=now,
+        require_auth=require_auth,
+        fail=lambda status, code, message: RegistryError(
+            status, code, message, type_="taskboard_error"
+        ),
+    )
 
     return app
 

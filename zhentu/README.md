@@ -19,6 +19,7 @@ bash scripts/run_zhentu.sh
 | `ZHENTU_MAX_BODY_BYTES` | `65536` | 注册体上限 |
 | `ZHENTU_TTL_MAX_S` | `600` | 租约上限 |
 | `ZHENTU_ROUTE_TTL_MS` | `5000` | `/route` 决策的建议有效期 |
+| `ZHENTU_ARTIFACT_DIR` | `zhentu/data/artifacts` | 藏经阁产物落盘目录 |
 
 ## 端点
 
@@ -34,6 +35,26 @@ bash scripts/run_zhentu.sh
 | GET | `/zhentu/v1/candidates` | Bearer | 按能力/模型返回回退候选 |
 | POST | `/zhentu/v1/route` | Bearer | 单跳选路决策：`selected` + `alternates` + `rejected` |
 | GET | `/zhentu/v1/metrics` | Bearer | Prometheus 文本指标（进程内，重启归零） |
+| POST | `/zhentu/v1/taskboard/tasks` | Bearer | 创建任务（按 `ticket_id` 幂等） |
+| GET | `/zhentu/v1/taskboard/tasks` | Bearer | 紧凑列表（`status` / `owner` / `limit`） |
+| GET | `/zhentu/v1/taskboard/tasks/{id}` | Bearer | 紧凑详情（不含历史与大产物） |
+| POST | `/zhentu/v1/taskboard/tasks/{id}/claim` | Bearer | CAS 认领 + 租约 + 写域冲突提示 |
+| POST | `/zhentu/v1/taskboard/tasks/{id}/update` | Bearer | CAS 更新状态 / owner / 租约 |
+| POST | `/zhentu/v1/taskboard/tasks/{id}/results` | Bearer | 追加结果（`result_id` 幂等） |
+| GET | `/zhentu/v1/taskboard/tasks/{id}/results` | Bearer | 结果增量（`after_seq`） |
+| POST | `/zhentu/v1/taskboard/reap` | Bearer | 回收过期租约 |
+| POST | `/zhentu/v1/taskboard/artifacts` | Bearer | 藏经阁落盘（内容哈希去重） |
+| GET | `/zhentu/v1/taskboard/artifacts` | Bearer | 产物索引（按 `ticket_id` 过滤） |
+| GET | `/zhentu/v1/taskboard/artifacts/{id}` | Bearer | 读取产物原文 |
+| PUT | `/zhentu/v1/costs/prices/{price_version}` | Bearer | 写入价格表 |
+| GET | `/zhentu/v1/costs/prices` | Bearer | 查询价格表 |
+| PUT | `/zhentu/v1/costs/budgets/{ticket_id}` | Bearer | 设置香火预算 |
+| GET | `/zhentu/v1/costs/budgets/{ticket_id}` | Bearer | 查询预算使用与状态 |
+| POST | `/zhentu/v1/costs/entries` | Bearer | 记录用量（`entry_id` 幂等） |
+| GET | `/zhentu/v1/costs/entries` | Bearer | 查询用量明细 |
+| GET | `/zhentu/v1/costs/summary/{ticket_id}` | Bearer | 按仙徒/步骤/模型汇总 |
+| GET | `/zhentu/v1/costs/alerts` | Bearer | 预算 80% / 100% 告警 |
+| POST | `/zhentu/v1/costs/admission` | Bearer | 开工前预算准入判断 |
 
 ```bash
 TOKEN='<cluster-token>'
@@ -105,6 +126,18 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 - `models_rev = "sha256:" + SHA256("name|cap1,cap2|context_len" 按 name 排序后以 \n 连接)`，`loaded` 不参与。
 - `routable = lease.online && status ∈ {ready, degraded}`；`loaded` 单独返回。
 
+## 任务板与香火账本
+
+- **CAS**：认领与更新都要求 `expected_revision`；不匹配返回 409 `revision_conflict`，不覆盖写入。
+- **依赖**：`blocked_by` 中任一任务未 `completed` 时认领返回 409 `task_blocked`；依赖完成后即时可认领，无需重算缓存。
+- **租约**：认领写入 `lease_expires_at`；`POST /taskboard/reap` 将过期任务回到 `pending` 并递增 `revision`。
+- **写域**：`write_scopes` 只返回 `write_scope_hints`，不构成锁，也不阻止认领。
+- **结果**：只追加；`result_id` 幂等；内联内容上限 8192 字符，超出必须走藏经阁 `artifact_ref`。
+- **紧凑视图**：列表与详情不返回历史与大产物；模型上下文只注入该视图。
+- **缓存计量**：命中/未命中分开计价；`cache_unknown=true` 时全部按未命中价估算，且 `cache_savings=0`。
+- **预算**：峰值用量比 ≥ 80% 记 `warning`，≥ 100% 记 `paused` 并写一次告警；`/costs/admission` 在 `paused` 时拒绝新香火。
+- **幂等**：任务按 `ticket_id`、结果按 `result_id`、账目按 `entry_id` 去重，重复回禀不会重复记账。
+
 ## 错误
 
 统一 OpenAI 形状：
@@ -121,4 +154,4 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 .venv/bin/python -m pytest zhentu/tests -q
 ```
 
-覆盖鉴权、报文校验、upsert、心跳、租约过期、boot_id 冲突、`need_snapshot`、注销、过滤、能力聚合、候选排序、跨重启持久化、与散仙 Kotlin 共用的 `models_rev` 向量，以及 `/route` 的过滤/评分/确定性/缺字段退化/参数错误/脱敏。
+覆盖鉴权、报文校验、upsert、心跳、租约过期、boot_id 冲突、`need_snapshot`、注销、过滤、能力聚合、候选排序、跨重启持久化、与散仙 Kotlin 共用的 `models_rev` 向量，以及 `/route` 的过滤/评分/确定性/缺字段退化/参数错误/脱敏；另覆盖任务板 CAS、阻塞依赖、租约回收、写域提示、结果幂等与藏经阁去重，以及香火缓存分计、预算告警与准入。

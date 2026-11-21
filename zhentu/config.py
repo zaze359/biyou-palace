@@ -14,6 +14,7 @@ NODE_TOKENS_ENV = "ZHENTU_NODE_TOKENS"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 4020
 DEFAULT_DB = Path(__file__).parent / "data" / "registry.db"
+DEFAULT_ARTIFACT_DIR = Path(__file__).parent / "data" / "artifacts"
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
 DEFAULT_TTL_MAX_S = 600
 DEFAULT_ROUTE_TTL_MS = 5000
@@ -66,6 +67,7 @@ class RegistrySettings:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     db_path: str = str(DEFAULT_DB)
+    artifact_dir: str = str(DEFAULT_ARTIFACT_DIR)
     token: Secret | None = None
     token_env: str = TOKEN_ENV
     node_tokens: dict[str, str] = field(default_factory=dict)
@@ -150,6 +152,7 @@ def load_settings() -> RegistrySettings:
         host=os.environ.get("ZHENTU_HOST", DEFAULT_HOST),
         port=int(os.environ.get("ZHENTU_PORT", DEFAULT_PORT)),
         db_path=db_path,
+        artifact_dir=os.environ.get("ZHENTU_ARTIFACT_DIR") or str(DEFAULT_ARTIFACT_DIR),
         token=Secret(token) if token else None,
         token_env=TOKEN_ENV,
         node_tokens=_load_node_tokens(os.environ.get(NODE_TOKENS_ENV) or ""),
