@@ -1,1 +1,9 @@
 {"file": "docs/orchestration-contract.md", "reason": "任务板与事件契约"}
+{"file": "docs/agent-contract.md", "reason": "师门任务/回禀/预算字段的上游定义"}
+{"file": "zhentu/taskboard.py", "reason": "任务板存储：DAG/CAS/租约/紧凑视图/追加结果"}
+{"file": "zhentu/artifacts.py", "reason": "藏经阁：内容哈希落盘与索引"}
+{"file": "zhentu/costs.py", "reason": "香火账本：定价、缓存分计、预算阈值与告警"}
+{"file": "zhentu/taskboard_api.py", "reason": "任务板/账本 HTTP 路由与参数校验"}
+{"file": "zhentu/app.py", "reason": "装配存储与路由"}
+{"file": "zhentu/tests/test_taskboard.py", "reason": "任务板与藏经阁行为测试"}
+{"file": "zhentu/tests/test_costs.py", "reason": "香火账本行为测试"}

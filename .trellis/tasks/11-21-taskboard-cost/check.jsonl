@@ -1,0 +1,5 @@
+{"file": "zhentu/tests/test_taskboard.py", "reason": "CAS 旧 revision 拒绝、阻塞不可认领、租约回收、紧凑视图与结果幂等"}
+{"file": "zhentu/tests/test_costs.py", "reason": "缓存命中/未命中分计、cache_unknown、预算 80%/100%、准入与告警"}
+{"file": "zhentu/taskboard.py", "reason": "核对任务结果只追加、写域仅提示、租约语义"}
+{"file": "zhentu/costs.py", "reason": "核对价格版本、币种一致性与超预算暂停"}
+{"file": "zhentu/README.md", "reason": "端点与运行参数是否与实现一致"}
