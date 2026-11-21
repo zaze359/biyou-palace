@@ -1,0 +1,4 @@
+# dsh profile 根：空入口列表。树由补丁逐层组合：
+# package.json 的 dsh.profile.bundles → cordis.patch.yml → --patch 覆盖层。
+# 要改配置请改 cordis.patch.yml，不要改这个文件。
+[]

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'"
+    />
+    <title>碧游宫</title>
+    <link rel="stylesheet" href="./shell.css" />
+  </head>
+  <body>
+    <header id="chrome" class="chrome">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">碧</span>
+        <span class="brand-text">
+          <strong>碧游宫</strong>
+          <em>BIYOU PALACE</em>
+        </span>
+        <span class="chip" id="version-chip">v0.1.0</span>
+      </div>
+
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item is-active" data-entry="dialog">对话</button>
+        <button class="nav-item" data-entry="observatory">观星台</button>
+        <button class="nav-item" data-entry="hall">功德殿</button>
+        <button class="nav-item" data-entry="library">藏经阁</button>
+      </nav>
+
+      <div class="actions">
+        <span class="status" id="status-pill" data-state="starting">
+          <i class="dot" aria-hidden="true"></i>
+          <span id="status-text">启动中</span>
+        </span>
+        <button class="icon-button" id="btn-restart" title="重启 dsh 运行时" aria-label="重启 dsh 运行时">↻</button>
+        <button class="text-button" id="btn-logs" title="打开日志目录">日志</button>
+      </div>
+    </header>
+
+    <main id="stage" class="stage">
+      <section class="panel" id="state-starting">
+        <div class="spinner" aria-hidden="true"><span></span></div>
+        <h1>正在起阵</h1>
+        <p class="hint">单机模式：不广播、不监听联阵，只在本机拉起 dsh 运行时。</p>
+        <ol class="steps">
+          <li data-step="profile" class="is-active"><b>1</b><span>同步 dsh profile 到用户数据目录</span></li>
+          <li data-step="runtime"><b>2</b><span>以锁定版本 Node 启动 dsh web</span></li>
+          <li data-step="ui"><b>3</b><span>载入对话界面</span></li>
+        </ol>
+        <p class="meta" id="boot-meta"></p>
+      </section>
+
+      <section class="panel is-hidden" id="state-failed">
+        <div class="badge is-danger">启动失败</div>
+        <h1 id="failed-title">dsh 运行时没能起来</h1>
+        <p class="hint" id="failed-message"></p>
+        <pre class="tail" id="failed-tail"></pre>
+        <div class="row">
+          <button class="primary" id="btn-retry">重试启动</button>
+          <button class="ghost" id="btn-open-logs">打开日志</button>
+        </div>
+      </section>
+
+      <section class="panel is-hidden" id="state-ready">
+        <div class="badge is-ok">运行时就绪</div>
+        <h1>碧游宫已就位</h1>
+        <p class="hint">对话界面由 dsh 提供；若此处仍为空白，说明视图尚未挂载完成。</p>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="./shell.js"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+# ---- 依赖 / 运行时（体积大、可重建，不入库）----
+node_modules/
+.runtime/
+smoke/
+
+# ---- Electron 构建产物（S8）----
+dist/
+out/
+release/
+
+# ---- 本地覆盖 ----
+*.local

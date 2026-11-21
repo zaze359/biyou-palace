@@ -1,0 +1,33 @@
+{
+  "name": "biyou-desktop",
+  "productName": "碧游宫",
+  "version": "0.1.0",
+  "private": true,
+  "description": "碧游宫桌面客户端：dsh 运行时 + 品牌壳，默认单机自闭环",
+  "type": "module",
+  "main": "electron/main.js",
+  "engines": {
+    "node": "24.22.3",
+    "npm": ">=10"
+  },
+  "dsh": {
+    "version": "0.2.2-rc.5",
+    "profile": "biyou",
+    "electron": "44.7.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs --dev",
+    "start": "node scripts/dev.mjs",
+    "smoke": "node scripts/dev.mjs --smoke",
+    "smoke:quit": "node scripts/dev.mjs --smoke-quit",
+    "smoke:dsh": "node scripts/smoke-dsh.mjs",
+    "dsh:web": "node scripts/run-dsh.mjs",
+    "dsh:install": "npm install --prefix runtime/home/profiles/biyou --no-audit --no-fund",
+    "node:bootstrap": "node scripts/bootstrap-node.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "check": "node scripts/check-env.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

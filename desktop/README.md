@@ -1,0 +1,189 @@
+# 碧游宫桌面客户端 · S1 骨架
+
+macOS / Windows 桌面客户端的第一层：**Electron 品牌壳 + dsh 运行时接入**。
+默认单机自闭环，不广播、不监听联阵；用户主动「开阵」后才进入联阵模式（S5）。
+
+> 任务：`.trellis/tasks/11-21-desktop-client`（设计见同目录 `design.md` / `implement.md`）
+> 命名一律按 `docs/naming.md`：阵眼、仙徒、观星台、功德殿、藏经阁、香火。
+
+## 一、版本锁定
+
+| 组件 | 版本 | 落地方式 |
+|---|---|---|
+| Node | **24.22.3** | `desktop/.node-version` + `.nvmrc`；`npm run node:bootstrap` 下载到 `desktop/.runtime/node` |
+| Electron | **44.7.0** | `devDependencies.electron` 精确版本 |
+| dsh | **0.2.2-rc.5** | `runtime/home/profiles/biyou/package.json` 精确版本 |
+
+三处必须一致，`npm run check` 会交叉校验 `package.json` / `.node-version` /
+`electron/versions.js` / profile 清单，任何一处漂移都会直接报错。
+
+为什么还要单独下载 Node：dsh 的 `engines` 要求 `>=24.9.0`，而 Electron 44.7.0 内置的
+Node 是 24.21.0——能用，但不是锁定版本。所以约定：
+
+1. 有 `.runtime/node` → 用它（**唯一真正锁定版本的路径**）；
+2. 没有 → 依次回退 Electron 内置 Node、PATH 上的 node，要求 `>=24.9.0`；
+3. 回退时状态里会标注 `exact=no`，`dsh.log` 第一行也会记下来。
+
+## 二、目录
+
+```text
+desktop/
+├── start.sh / start.command  一键启动（Finder 可双击）
+├── electron/
+│   ├── main.js            主进程：单实例、窗口、视图布局、IPC、退出清理
+│   ├── preload.cjs        渲染层唯一权力边界（sandbox + contextIsolation）
+│   ├── paths.js           userData 目录布局
+│   ├── versions.js        版本锁定单一事实来源
+│   └── dsh/
+│       ├── resolve-node.js  选 Node（锁定 → Electron → PATH）
+│       ├── provision.js     仓库 profile → userData（node_modules 用软链）
+│       └── server.js        dsh 子进程生命周期 + URL 解析 + 探活 + 进程组清理
+├── ui/shell/              品牌壳：顶栏、状态、启动/失败/就绪三态
+├── runtime/home/profiles/biyou/   dsh profile 模板（bundles + 补丁层）
+├── assets/icon.png        图标占位（npm run icon 可重生成）
+└── scripts/               版本自检、Node 下载、无头冒烟、图标生成
+```
+
+## 三、快速开始
+
+### 一键启动（推荐）
+
+```bash
+bash desktop/start.sh                 # 自检 → 起壳（缺依赖会提示安装）
+bash desktop/start.sh --setup         # 首次：装 Electron + dsh 依赖 + 锁定 Node，再起壳
+```
+
+macOS 也可以直接在 Finder 里双击 `desktop/start.command`。
+
+从仓库根统一入口进来等价：
+
+```bash
+bash start.sh desktop                 # 等同 bash desktop/start.sh
+bash start.sh desktop --smoke-dsh     # 参数原样透传
+```
+
+常用开关：
+
+| 开关 | 作用 |
+|---|---|
+| `--setup` | 缺什么装什么（Electron / dsh 依赖 / 锁定 Node） |
+| `--no-sandbox` | 受限环境（容器、CI、无签名沙箱）追加 `--no-sandbox` |
+| `--smoke` / `--smoke-quit` | 壳冒烟：截图报告 / 验证关窗清理 |
+| `--smoke-dsh` | 只验 dsh 接入，不需要图形界面 |
+| `--dsh` | 只起 dsh（终端），不开壳 |
+
+### 手动分步
+
+```bash
+cd desktop
+npm install                 # Electron 44.7.0
+npm run dsh:install         # dsh 运行时依赖（@deepseek-ai/dsh 0.2.2-rc.5）
+npm run node:bootstrap      # 可选但推荐：下载锁定 Node 24.22.3
+npm run dev                 # 起壳，自动拉起 dsh web profile
+```
+
+没有图形环境时验证接入链路：
+
+```bash
+npm run smoke:dsh           # 起 → 解析 URL → HTTP 探活 → 停 → 查残留
+npm run smoke               # Electron 壳冒烟，截图写到 <userData>/smoke/
+```
+
+## 四、和 dsh 的集成方式
+
+**子进程 + 打印的 URL，不 import。**
+
+```text
+Electron 主进程
+  └─ spawn <node> <profile>/node_modules/@deepseek-ai/dsh/lib/bin.js
+        --profile biyou --host 127.0.0.1 --port 0 --no-open
+     ↓ stdout: "dsh web: http://127.0.0.1:52341/?token=..."
+  ├─ HTTP 探活（带 token 的那条 URL）
+  └─ WebContentsView.loadURL(该 URL)   ← dsh UI 在独立渲染进程里
+```
+
+理由：
+
+- dsh 要求 Node >=24.9，Electron 内置 Node 版本不受我们控制，隔离进程最稳；
+- dsh 会自己起 shell / 工具子进程，`detached: true` 单独进程组，退出时按组发
+  `SIGTERM`（5 秒后 `SIGKILL`），避免残留；
+- dsh 崩了只影响它自己，壳还能显示失败原因 + 重试。
+
+品牌壳（本进程）与 dsh UI（WebContentsView）是两块独立渲染：壳只负责顶栏与状态，
+不 iframe、不往 dsh 页面注入脚本，避免被上游 DOM 变化带崩。
+
+**dsh 只做单 Agent 运行时/UI**：profile 只装 `dsh-base` + `dsh-web-app`，不启用
+`dsh-agent-team` 这类集群级编排——跨 Agent 调度属于阵图/联阵，不属于桌面端。
+
+## 五、数据与配置
+
+一切可写数据都在 userData（macOS：`~/Library/Application Support/biyou-desktop`），
+**不写仓库目录**：
+
+```text
+<userData>/
+├── config.json              窗口位置尺寸（S1 仅此一项）
+├── dsh/                     DSH_HOME
+│   └── profiles/biyou/      profile 运行时副本；node_modules 软链回仓库模板
+├── logs/desktop.log         壳日志
+├── logs/dsh.log             dsh stdout/stderr（4 MB 轮转）
+└── smoke/                   npm run smoke 的截图与报告
+```
+
+仓库里的 `runtime/home/profiles/biyou` 只是模板：启动时把 `package.json` /
+`cordis.yml` / `cordis.patch.yml` / `pnpm-workspace.yaml` 同步到 userData，
+`node_modules` 用符号链接指回模板，避免每次启动复制上百 MB。
+
+环境变量（调试用）：
+
+| 变量 | 作用 |
+|---|---|
+| `BIYOU_NODE` | 指定跑 dsh 的 node 可执行文件 |
+| `BIYOU_USER_DATA` | 覆盖 userData 目录（干净环境验证、CI 隔离） |
+| `BIYOU_NO_SANDBOX` | `=1` 时给 Electron 追加 `--no-sandbox`（受限环境专用） |
+| `DSH_HOME` | 由主进程设置，不要在外部改 |
+
+## 六、脚本
+
+| 命令 | 说明 |
+|---|---|
+| `bash start.sh` | 一键启动（同 `npm run dev`，带环境自检与补装） |
+| `npm run dev` | 自检 → 起壳（开发模式，非打包） |
+| `npm start` | 起壳，同样先自检 |
+| `npm run check` | 版本交叉校验 + 依赖检查 |
+| `npm run dsh:install` | 安装 / 更新 profile 依赖 |
+| `npm run node:bootstrap` | 下载锁定 Node 到 `.runtime/node` |
+| `npm run dsh:web` | 只起 dsh（终端里），用于判断「壳的问题还是 dsh 的问题」 |
+| `npm run smoke:dsh` | dsh 接入无头冒烟（CI 可跑） |
+| `npm run smoke` | Electron 壳冒烟：截图 + 报告写到 `<userData>/smoke/` |
+| `npm run smoke:quit` | 验证「关窗 → 清理 dsh 子进程 → 无残留」 |
+| `npm run icon` | 重新生成图标占位 |
+
+启动器 `scripts/dev.mjs` 会剔除 `ELECTRON_RUN_AS_NODE` 与 `NODE_OPTIONS` 再拉起 Electron：
+
+- 前者会让 Electron 退化成纯 Node，报 `module 'electron' does not provide an export named 'BrowserWindow'`；
+- 后者里的 `--require` 垫片（沙箱、APM）会污染主进程，也会通过环境继承搞坏 dsh 的原子写。
+
+受限环境（容器 / CI / 无签名沙箱，Chromium sandbox 起不来）设 `BIYOU_NO_SANDBOX=1` 即可追加 `--no-sandbox`。
+
+## 七、S1 验收对照
+
+- [x] `desktop/` 骨架：package.json、主进程、preload、渲染入口
+- [x] dsh / Electron / Node 三处版本锁定 + `npm run check` 交叉校验
+- [x] 开发模式接入 dsh：本地 profile 子进程 + URL 探活 + WebContentsView 承载 UI
+- [x] 单实例锁、窗口生命周期、退出清理（进程组）
+- [x] 品牌壳：应用名、图标占位、首页入口、运行时状态
+- [x] 冒烟可复现：`smoke:dsh` 全绿、`smoke` 出截图/报告、`smoke:quit` 无残留进程
+- [ ] 打包为 `.app` / Windows 安装包 → S8
+- [ ] 观星台 / 功德殿 / 开阵页 → S3 / S5 / S6
+
+## 八、已知限制
+
+- 未做签名/公证、自动更新（V2.0 非目标）。
+- `cordis.patch.yml` 目前为空：模型入口、品牌人设、Agent Teams 禁用项在 S2/S4 按需追加。
+- dsh UI 首屏是「请选择模型」：S1 只保证界面起得来，模型能力见 S2（Ollama）。
+- 壳固定 `nativeTheme.themeSource = 'dark'` 让 dsh 的「跟随系统」落在深色；S6 再做主题开关。
+- 冷启动 5~10 秒（dsh 要加载几百个 ESM 插件）；`dsh.log` 有完整启动日志。
+- 首次启动 dsh 需要模型凭据；`~/.dsh` 的既有登录不会自动复用（用独立 DSH_HOME）。
+- Windows 的 Node 自动下载未实现，开发时回退 Electron 内置 Node 即可。
+- 运行时依赖约 1.2 GB（dsh 的 web bundle 全家桶），S8 打包时需要裁剪。

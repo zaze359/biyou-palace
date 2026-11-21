@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-biyou",
+  "private": true,
+  "description": "碧游宫桌面客户端的 dsh profile：dsh-base + web-app，单 Agent 运行时，不启用 Agent Teams 编排",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.5"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app"
+      ]
+    }
+  }
+}
