@@ -176,3 +176,28 @@ S2 本地模型适配（Ollama 探活/流式/密钥留主进程），在 `cordis
 - **别拿仓库 profile 直接跑 dsh**：HMR 会把 `cordis.yml` 改写成英文注释，还会就地写
   `.credentials.yaml`（含 browser-session 密钥）与 `storages/`。已在 `.gitignore` 挡住，
   但仍应优先用 `/tmp` userData。
+
+## 路线调整 · 单机首版精简为纯 dsh（2026-11-22）
+
+**决策**：单机直接使用 dsh 原生 Agent，不再自建任务外壳、任务板/因果簿、香火账本与观星台/功德殿面板。
+
+范围变化：
+
+| 阶段 | 原计划 | 现在 |
+|---|---|---|
+| S2 | 自研 `model-adapter` 调 Ollama | 改为配置 dsh 的 Ollama provider + 健康提示；不写模型客户端 |
+| S3 | 本地控制面 + SQLite 任务板 | 移出 V2.0-A；保留 `zhentu` 实现作为后续/联阵参考 |
+| S4 | 单机任务闭环 | 由 dsh 原生会话承担；不再实现派差/回禀/租约 |
+| D3/D4 | 观星台、功德殿面板 | 后置；D2 收尾后直接进 S5/S7/S8 |
+| S5/S7/S8 | 联阵、健壮性、打包 | 保持 |
+
+保留：Electron 壳、dsh 子进程、品牌/状态插件、开阵入口、`ui/shell` 降级页。
+
+重新引入任务外壳的触发条件见 `design.md`「单机首版精简为纯 dsh」。
+
+### 下一步（按精简后范围）
+
+1. D2 收尾：冒烟补品牌替换断言，状态 pill 接 dsh 运行状态。
+2. S2：确认 dsh 的 Ollama provider 配置方式与模型目录展示。
+3. S5：按 `lan-formation-contract.md` 用 Node 实现开阵/寻阵/入阵。
+4. S7/S8：进程清理、错误路径、macOS 未签名 `.app` 与 Windows 构建脚本。

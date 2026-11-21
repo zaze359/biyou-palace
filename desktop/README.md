@@ -148,6 +148,9 @@ Electron 主进程
 品牌、观星台、功德殿、状态浮层不做成"第二个壳"，而是做成 **dsh 客户端插件**，
 注册进上游已有的 slot。这样会话、工作区、设置仍归上游所有，我们只贡献自己那几格。
 
+> 2026-11-22 范围调整：单机首版直接使用 dsh 原生 Agent，**观星台/功德殿面板后置**；
+> 当前插件只承载品牌与状态。任务外壳/账本同理后置，见任务 `11-21-desktop-client`。
+
 ```text
 packages/biyou-plugin/
 ├── package.json   exports["./client"] + dsh.client{platform:"web", inject:[...]}
@@ -163,7 +166,7 @@ packages/biyou-plugin/
 |---|---|
 | `shell.overlay` | 右下角「碧游宫」状态 pill（D1 占位） |
 | `sidebar.brand.mark` / `brand.name` | 待接（D2） |
-| `main`（keyed）+ `sidebar.panellist` | 观星台 / 功德殿（D3/D4），list id 即 main panel key |
+| `main`（keyed）+ `sidebar.panellist` | 预留：观星台 / 功德殿（后置，单机首版不实现） |
 
 产物格式是 dsh 自有的同步加载格式，**不是标准 ESM**：`window.__ModuleLoader__.load`
 拿到的 factory 里 `require("react")` 由宿主提供，所以 lib 下的文件是手写的、可直接运行，

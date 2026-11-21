@@ -7,12 +7,11 @@
 ## Scope
 
 - 基于 dsh 的 Electron 壳，固定 dsh / Electron / Node 版本。
-- 单机阵：本地阵眼、本地仙徒、本地任务板/因果簿、藏经阁、法宝权限、观星台。
+- 单机：直接使用 dsh 原生 Agent 完成目标；不自建 agent loop、任务外壳或本地任务板。
 - 联阵：默认不广播；用户点「开阵」后选择开放阵/闭阵，成为阵主。
-- 本地模型：优先接 Ollama；内置 llama.cpp 作为后续选项。
+- 本地模型：优先接 Ollama（经 dsh provider 配置）；内置 llama.cpp 作为后续选项。
 - 开阵弹窗、阵列表（寻阵）、成员列表、踢人、散阵。
-- 观星台：任务、气机、因果线、待定夺、香火用量。
-- 功德殿：概念占位，不实现后端。
+- 品牌与状态：dsh 插件提供品牌位与运行状态；观星台/功德殿后置。
 
 ## Requirements
 
@@ -35,11 +34,12 @@
 
 ## Dependencies
 
-- `11-21-agent-contracts`
-- `11-21-taskboard-cost`
 - `11-21-lan-formation`
+- 后续（任务治理/联阵扩展）：`11-21-agent-contracts`、`11-21-taskboard-cost`
 
 ## Out of Scope
 
+- 单机首版的任务外壳、本地任务板/因果簿、香火账本、观星台与功德殿面板（后置）。
+- 功德殿后端。
 - 移动端 App（见 `11-21-mobile-client`）。
 - 云端账号、公网大厅、自动更新、签名/公证/V1.1。

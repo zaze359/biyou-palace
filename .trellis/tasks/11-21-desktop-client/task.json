@@ -21,6 +21,6 @@
   "children": [],
   "parent": "11-21-biyou-superagent",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。",
   "meta": {}
 }
