@@ -82,7 +82,7 @@ desktop/
 
 - dsh 版本升级导致壳与 UI 接口漂移：固定版本，升级单独立项。
 - Electron 打包体积大：接受；本地运行时后置。
-- 本地控制面与 dsh 会话边界不清：先独立 SQLite，避免耦合。
+- 本地控制面与 dsh 会话边界：单机首版不引入本地控制面；后置时再按契约分层。
 - Ollama 依赖不满足“严格自闭环”：V2.0-A 接受，V2.0-B 再内嵌 llama.cpp。
 
 ## 完成定义
@@ -114,9 +114,25 @@ desktop/
   - 外部 `ELECTRON_RUN_AS_NODE=1` 会让 Electron 退化为 Node → 启动器剔除。
   - dsh 默认「跟随系统」主题在深色壳下割裂 → 主进程 `nativeTheme.themeSource = 'dark'`。
 
+### D1 · 已完成（2026-11-21）
+
+- 插件以 `@biyou/dsh-plugin` 进入 `window.__DSH_BOOT__`，`shell.overlay` 渲染状态 pill。
+- 插件经 `link-plugin.mjs` 链入 profile，`cordis.patch.yml` 注册 `ui-biyou`。
+
+### D2 · 已完成（2026-11-22）
+
+- `sidebar.brand.mark` 替换为青萍剑标记，`sidebar.brand.name` 替换为「碧游宫」；
+  两者带 `data-biyou` 标记，供冒烟断言。
+- 状态 pill 接 `ctx.connection.state`（`useSyncExternalStore`），显示「就绪 / 连接中 / 已断开」；
+  `data-state` 同步连接状态。
+- 冒烟新增断言：`inBoot`、pill 存在、`state === "connected"`、品牌标记存在、品牌名为「碧游宫」；
+  `dshView.biyouOk` 为总判定。
+- 实测：`npm run smoke` 返回 `ok=true`，`biyou={"inBoot":true,"pill":true,"text":"碧游宫 · 就绪",
+  "state":"connected","brandMarkCount":1,"brandName":"碧游宫"}`。
+
 ### 下一步
 
-S2 本地模型适配（Ollama 探活/流式/密钥留主进程），在 `cordis.patch.yml` 增模型入口。
+S2：确认并配置 dsh 的 Ollama provider，补模型健康提示；不自研模型客户端。
 
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 

@@ -164,8 +164,8 @@ packages/biyou-plugin/
 
 | slot | 当前用途 |
 |---|---|
-| `shell.overlay` | 右下角「碧游宫」状态 pill（D1 占位） |
-| `sidebar.brand.mark` / `brand.name` | 待接（D2） |
+| `shell.overlay` | 右下角「碧游宫 · 就绪 / 连接中 / 已断开」状态 pill（跟随 dsh 连接状态） |
+| `sidebar.brand.mark` / `brand.name` | 已接（D2）：青萍剑标记 + 「碧游宫」名称 |
 | `main`（keyed）+ `sidebar.panellist` | 预留：观星台 / 功德殿（后置，单机首版不实现） |
 
 产物格式是 dsh 自有的同步加载格式，**不是标准 ESM**：`window.__ModuleLoader__.load`
@@ -184,9 +184,11 @@ npm run plugin:link      # 手动链接（start.sh 已自动做）
 npm run plugin:check     # 只校验链接是否指向正确
 ```
 
-验收口径：`npm run smoke` 的 `report.json` 里 `dshView.biyou` 应为
-`{ inBoot: true, pill: true, text: "碧游宫" }` —— `inBoot` 证明进了 `window.__DSH_BOOT__`
-（browser roster），`pill` 证明 occupant 真的渲染上屏。
+验收口径：`npm run smoke` 的 `report.json` 里 `dshView.biyouOk` 应为 `true`，且
+`dshView.biyou` 至少包含 `{ inBoot: true, pill: true, state: "connected",
+brandMarkCount: 1, brandName: "碧游宫" }`。`inBoot` 证明进了 `window.__DSH_BOOT__`
+（browser roster），`pill`/`brandMarkCount` 证明 occupant 真的渲染上屏，
+`brandName` 证明侧栏产品名已被替换。
 
 ## 五、数据与配置
 

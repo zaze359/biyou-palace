@@ -451,10 +451,15 @@ async function probeBiyouPlugin() {
     let boot = ''
     try { boot = JSON.stringify(window.__DSH_BOOT__ ?? null) } catch {}
     const pill = document.querySelector('[data-biyou="status"]')
+    const marks = document.querySelectorAll('[data-biyou="brand-mark"]')
+    const name = document.querySelector('[data-biyou="brand-name"]')
     return {
       inBoot: boot.includes('@biyou/dsh-plugin'),
       pill: Boolean(pill),
       text: pill ? pill.textContent : null,
+      state: pill ? pill.getAttribute('data-state') : null,
+      brandMarkCount: marks.length,
+      brandName: name ? name.textContent : null,
     }
   })()`
 
@@ -462,7 +467,7 @@ async function probeBiyouPlugin() {
   let last = null
   while (Date.now() < deadline) {
     last = await dshView.webContents.executeJavaScript(script).catch((error) => ({ error: error.message }))
-    if (last?.pill) return last
+    if (last?.pill && last.brandMarkCount > 0 && last.state === 'connected') return last
     await sleep(400)
   }
   return last
@@ -500,6 +505,15 @@ async function runSmoke(window, status) {
       }
       report.dshView.size = dshView.getBounds()
       report.dshView.biyou = await probeBiyouPlugin()
+      const biyou = report.dshView.biyou
+      report.dshView.biyouOk = Boolean(
+        biyou?.inBoot &&
+          biyou.pill &&
+          biyou.state === 'connected' &&
+          biyou.brandMarkCount > 0 &&
+          biyou.brandName === '碧游宫',
+      )
+      if (!report.dshView.biyouOk) report.ok = false
     }
   } catch (error) {
     report.captureError = error.message

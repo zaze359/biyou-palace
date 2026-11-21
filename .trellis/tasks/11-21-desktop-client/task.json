@@ -1,8 +1,8 @@
 {
   "id": "desktop-client",
   "name": "desktop-client",
-  "title": "碧游宫 V2 · 桌面客户端（dsh 壳/单机阵/观星台/开阵）",
-  "description": "基于 dsh 的 macOS/Windows 桌面客户端：默认单机自闭环，可主动开阵担任阵眼，提供观星台与本地任务循环；取代旧聊天客户端定位。",
+  "title": "碧游宫 V2 · 桌面客户端（dsh 壳/单机/开阵）",
+  "description": "基于 dsh 的 macOS/Windows 桌面客户端：默认单机使用 dsh 原生 Agent，可主动开阵担任阵眼；观星台与任务外壳后置。",
   "status": "in_progress",
   "dev_type": null,
   "scope": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "11-21-biyou-superagent",
   "relatedFiles": [],
-  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。",
+  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。D2 已完成：品牌替换 + 状态 pill 接连接状态，冒烟 biyouOk=true。",
   "meta": {}
 }
