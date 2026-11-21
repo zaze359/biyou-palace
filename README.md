@@ -403,6 +403,7 @@ curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
 - 运维手册（注册 / 日志 / 检定 / 备份）：[`docs/operations.md`](docs/operations.md)
 - 协议基准：[`docs/node-agent-contract.md`](docs/node-agent-contract.md)
 - 编排协议：[`docs/orchestration-contract.md`](docs/orchestration-contract.md)
+- 联阵协议：[`docs/lan-formation-contract.md`](docs/lan-formation-contract.md)
 - 阵图注册表：[`zhentu/README.md`](zhentu/README.md)
 - 灵脉监控：[`monitoring/README.md`](monitoring/README.md)
 - 准圣节点：[`nodes/quasheng/README.md`](nodes/quasheng/README.md)
