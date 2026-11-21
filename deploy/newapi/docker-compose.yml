@@ -1,0 +1,15 @@
+services:
+  new-api:
+    image: ${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.48}
+    container_name: ${NEWAPI_CONTAINER_NAME:-new-api}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NEWAPI_PORT:-3000}:3000"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    env_file:
+      - ./conf/new-api.env
+    volumes:
+      - ${NEWAPI_DATA_DIR:-./data}:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

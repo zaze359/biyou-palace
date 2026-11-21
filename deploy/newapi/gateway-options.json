@@ -1,0 +1,10 @@
+{
+  "description": "碧游宫网关基线选项；channel sync 不会自动应用，使用 option apply 显式生效",
+  "options": {
+    "RetryTimes": "1",
+    "ChannelDisableThreshold": "5",
+    "AutomaticDisableChannelEnabled": "true",
+    "AutomaticEnableChannelEnabled": "false",
+    "AutomaticDisableStatusCodes": "401,403,500,502,503,504"
+  }
+}

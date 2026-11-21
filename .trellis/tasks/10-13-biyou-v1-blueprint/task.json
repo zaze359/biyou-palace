@@ -27,7 +27,8 @@
     "11-20-zhentu-task-ledger",
     "11-20-daoguo-aggregator",
     "11-21-zhentu-observability-parallel",
-    "11-21-sanxian-frontend-cluster"
+    "11-21-sanxian-frontend-cluster",
+    "11-21-biyou-gateway"
   ],
   "parent": null,
   "relatedFiles": [

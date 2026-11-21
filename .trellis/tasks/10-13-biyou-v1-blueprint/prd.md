@@ -68,6 +68,15 @@
 2. **第二步 · 碧游宫网关接入**（原「立坛筑基」网关部分 + 「布下万仙阵」）
    Docker 部署 NewAPI，将各仙徒作为渠道纳入，打通统一 OpenAI 入口与基础转发；配置权重、心跳、超时、故障自动隔离；两类调度模式验证（同模型多副本分摊 / 按模型路由）；基础并发压测。
    - 验收：网关可转发至任意仙徒；压测按权重分配；手动关停节点后网关自动隔离。
+   - **进度（2026-11-21）**：**第二步已完成** —— `deploy/newapi/` 提供渠道与选项声明
+     （`channels.json` / `gateway-options.json`）及管理员 CLI `gateway_admin.py`（三路鉴权、
+     channel list/sync/test/delete、option get/set/apply、log list）。`ollama-local`（type=4）与
+     `quasheng-01`（type=1，含别名 `quasheng/qwen2.5:7b`）已同步且幂等；基线选项
+     （重试 1、阈值 5、自动隔离开、自动恢复关、`401,403,5xx` 隔离）已生效。
+     `scripts/daojian/gateway_acceptance.py` 的 G1–G5 **连续 3 次 6/6**（含清理），
+     报告 `docs/reports/biyou-gateway-2026-11-21.md`。实测两个关键事实：① NewAPI 无内存缓存时
+     权重按 `(weight+10)` 平滑，3:1 实际为 54%，故用 23:1 构造 75% 目标流量；
+     ② 429 不应纳入自动隔离，否则准圣节点在合法并发背压下会被误摘。
 
 3. **第三步 · 阵图编排 + 道果聚合**（原「阵图显化」）
    阵图 ZhenTu 服务：请求解析 / 任务拆解、并行子任务调度、结果（道果）合并润色、异常重试与降级；示例场景（图→OCR+Embedding+LLM 综合回答）。

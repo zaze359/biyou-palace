@@ -1,0 +1,43 @@
+{
+  "channels": [
+    {
+      "name": "ollama-local",
+      "type": 4,
+      "base_url": "http://host.docker.internal:11434",
+      "models": [
+        "qwen2.5:0.5b",
+        "qwen2.5:7b",
+        "nomic-embed-text:latest"
+      ],
+      "group": "default",
+      "groups": ["default"],
+      "weight": 1,
+      "priority": 0,
+      "auto_ban": 1,
+      "key": "ollama-local",
+      "model_mapping": {},
+      "setting": {}
+    },
+    {
+      "name": "quasheng-01",
+      "type": 1,
+      "base_url": "http://host.docker.internal:4010",
+      "models": [
+        "qwen2.5:0.5b",
+        "qwen2.5:7b",
+        "nomic-embed-text:latest",
+        "quasheng/qwen2.5:7b"
+      ],
+      "group": "default",
+      "groups": ["default"],
+      "weight": 1,
+      "priority": 0,
+      "auto_ban": 1,
+      "key": "sk-biyou-local",
+      "model_mapping": {
+        "quasheng/qwen2.5:7b": "qwen2.5:7b"
+      },
+      "setting": {}
+    }
+  ]
+}
