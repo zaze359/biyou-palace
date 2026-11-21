@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-21-biyou-client/design.md", "reason": "客户端架构决策、dsh 运行时契约、配置与打包设计"}
+{"file": ".trellis/tasks/11-21-biyou-client/implement.md", "reason": "分阶段执行清单与验证门"}
+{"file": "docs/node-agent-contract.md", "reason": "本地模式依赖的 /v1/health、/v1/models 语义"}
+{"file": "docs/deployment.md", "reason": "网关与准圣的端口、启动方式"}
+{"file": "docs/reports/biyou-gateway-2026-11-21.md", "reason": "网关可用性、鉴权与模型渠道事实"}
+{"file": "README.md", "reason": "仓库入口、端口与现有客户端形态"}
