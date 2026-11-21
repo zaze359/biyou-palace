@@ -35,7 +35,8 @@ if (!hasSingleInstanceLock) app.exit(0)
 let mainWindow = null
 let dshView = null
 let dshServer = null
-let chromeHeight = 56
+// 与 dsh 的工具栏节奏对齐（14px 字号、28/32px 控件、12px 圆角），壳顶栏取 52px
+let chromeHeight = 52
 let cleanupDone = false
 
 // ---------------------------------------------------------------- 日志
@@ -85,7 +86,7 @@ function createWindow() {
     backgroundColor: '#0b0c10',
     title: '碧游宫',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 19 } : undefined,
+    trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 18 } : undefined,
     webPreferences: {
       preload: join(DESKTOP_ROOT, 'electron', 'preload.cjs'),
       contextIsolation: true,
@@ -378,9 +379,10 @@ process.on('exit', () => {
 
 app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
-  // 品牌壳是墨色底；让 dsh UI 的 "跟随系统" 也落在深色，避免亮白界面割裂。
-  // 用户仍可在 dsh 设置里改回浅色（theme 偏好优先级高于 themeSource）。
-  nativeTheme.themeSource = 'dark'
+  // 默认浅色（与 dsh 白底 #ffffff / 侧栏 #f9fafb 一致）；BIYOU_THEME=light|dark|system 可覆盖。
+  // dsh 的主题偏好默认「跟随系统」，所以这里定基调，dsh UI 会跟着落到同一套。
+  const theme = process.env.BIYOU_THEME ?? 'light'
+  nativeTheme.themeSource = ['light', 'dark', 'system'].includes(theme) ? theme : 'light'
   if (process.platform === 'darwin') {
     const icon = nativeImage.createFromPath(join(DESKTOP_ROOT, 'assets', 'icon.png'))
     if (!icon.isEmpty()) app.dock?.setIcon(icon)

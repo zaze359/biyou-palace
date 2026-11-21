@@ -182,8 +182,58 @@ Electron 主进程
 - 未做签名/公证、自动更新（V2.0 非目标）。
 - `cordis.patch.yml` 目前为空：模型入口、品牌人设、Agent Teams 禁用项在 S2/S4 按需追加。
 - dsh UI 首屏是「请选择模型」：S1 只保证界面起得来，模型能力见 S2（Ollama）。
-- 壳固定 `nativeTheme.themeSource = 'dark'` 让 dsh 的「跟随系统」落在深色；S6 再做主题开关。
+- 主题只有 `BIYOU_THEME` 环境变量这一个开关，且需重启生效；设置页里的主题切换留到 S6。
 - 冷启动 5~10 秒（dsh 要加载几百个 ESM 插件）；`dsh.log` 有完整启动日志。
 - 首次启动 dsh 需要模型凭据；`~/.dsh` 的既有登录不会自动复用（用独立 DSH_HOME）。
 - Windows 的 Node 自动下载未实现，开发时回退 Electron 内置 Node 即可。
 - 运行时依赖约 1.2 GB（dsh 的 web bundle 全家桶），S8 打包时需要裁剪。
+
+## 九、视觉规范（以 dsh 为准）
+
+壳是 dsh 的同色系延伸，**不引入第二套色板**。以下取值是在 Electron 里起 dsh 后
+用 `getComputedStyle` 实测得到的，不是猜的。
+
+**默认浅色**（`nativeTheme.themeSource = 'light'`），深色走
+`@media (prefers-color-scheme: dark)`。切主题用环境变量，不用改代码：
+
+```bash
+BIYOU_THEME=dark  ./start.sh     # light | dark | system，缺省 light
+BIYOU_THEME=system ./start.sh    # 跟随系统
+```
+
+浅色（默认）：
+
+| token | 值 | 用途 |
+|---|---|---|
+| `--bg-base` | `#ffffff` | 窗口底、顶栏底 |
+| `--bg-layer-1` / `--bg-layer-2` | `#f9fafb` / `#f1f3f5` | 侧栏底 / 分组底（与 dsh 侧栏同值） |
+| `--bg-raised` | `#ffffff` | toast、抬升面 |
+| `--line` / `--line-strong` | `rgba(0,0,0,.08)` / `.12` | 分隔线、控件描边 |
+| `--text` / `--text-2` / `--text-3` | `#0f1115` / `#61666b` / `#8a9099` | 主 / 次 / 三级文字 |
+| `--hover` / `--active` | `rgba(0,0,0,.04)` / `.06` | 行 hover / 选中 pill |
+| `--accent` / `--accent-hover` | `#3964fe` / `#4176e6` | 主按钮、品牌块、就绪指示 |
+| `--warning` / `--danger` | `#f7ad31` / `#f25a5a` | 启动中 / 失败 |
+
+深色覆盖（同变量名，只换值）：
+
+| token | 浅色 | 深色 |
+|---|---|---|
+| `--bg-base` | `#ffffff` | `#151517` |
+| `--bg-layer-1` / `--bg-layer-2` | `#f9fafb` / `#f1f3f5` | `#1b1b1c` / `#2b2d31` |
+| `--bg-raised` | `#ffffff` | `#43454a` |
+| `--line` / `--line-strong` | `rgba(0,0,0,.08)` / `.12` | `rgba(255,255,255,.10)` / `.16` |
+| `--text` / `--text-2` / `--text-3` | `#0f1115` / `#61666b` / `#8a9099` | `#f9fafb` / `#cfd3d6` / `#adb2b8` |
+| `--hover` / `--active` | `rgba(0,0,0,.04)` / `.06` | `rgba(255,255,255,.06)` / `.10` |
+
+控件规格对齐 dsh：高度 28（图标按钮）/ 32（行）/ 34~38（主按钮），圆角 8（小控件）
+/ 12（行与卡片），字号 12（caption）/ 13（辅助）/ 14（正文与导航）/ 17（面板标题），
+字体栈与 dsh 完全一致（`-apple-system, system-ui, "Segoe UI", "PingFang SC", …`）。
+顶栏取 52px，与 dsh 工具栏节奏衔接。
+
+一致性的关键前提：壳定了 `themeSource`，dsh UI 的「跟随系统」就会落到同一套，
+不会出现白壳配深色 dsh。改主题后要复核这一点，别只看壳自己。
+
+复核方式：改完样式跑 `npm run smoke`，把 `shell.png` 与 `dsh.png` 并排看——
+两块的底色、描边、圆角必须能无缝拼在一起；`report.json` 里
+`dshView.colorScheme.dark` 要和当前主题一致（浅色应为 `false`、`bg` 为 `rgb(255, 255, 255)`）。
+dsh 自带的侧栏品牌行属于 dsh UI 本身，S6 用壳内入口弱化，不做 DOM 注入。
