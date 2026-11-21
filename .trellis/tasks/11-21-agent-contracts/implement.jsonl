@@ -1,2 +1,8 @@
 {"file": "docs/naming.md", "reason": "根骨/道行/品阶/风险/神通/法宝"}
 {"file": "docs/orchestration-contract.md", "reason": "任务/事件/结果契约"}
+{"file": "docs/node-agent-contract.md", "reason": "节点推理与注册边界"}
+{"file": "docs/lan-formation-contract.md", "reason": "入阵/离阵后的仙箓与重派"}
+{"file": "docs/agent-contract.md", "reason": "本任务主交付：对象、状态机、派差规则、端点与错误码"}
+{"file": "docs/schemas/agent/v1/agent-contract.schema.json", "reason": "对象 JSON Schema"}
+{"file": "docs/fixtures/agent/objects.v1.json", "reason": "各类对象示例与 Schema 校验样本"}
+{"file": "README.md", "reason": "文档导航"}

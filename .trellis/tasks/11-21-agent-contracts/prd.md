@@ -25,10 +25,10 @@
 
 ## Acceptance Criteria
 
-- [ ] 仙箓、师门任务、师门令、回禀、巡阵均有 JSON Schema 与示例。
-- [ ] 状态机覆盖：待派、候差、悬赏、执行中、回禀、验收、失败、取消。
-- [ ] 不越阶、可低接、风险与法宝权限匹配均有明确错误码。
-- [ ] 与现有 `node-agent-contract.md`、`orchestration-contract.md` 的边界清晰，无重复定义。
+- [x] 仙箓、师门任务、师门令、回禀、巡阵均有 JSON Schema 与示例。
+- [x] 状态机覆盖：待派、候差、悬赏、执行中、回禀、验收、失败、取消。
+- [x] 不越阶、可低接、风险与法宝权限匹配均有明确错误码。
+- [x] 与现有 `node-agent-contract.md`、`orchestration-contract.md` 的边界清晰，无重复定义。
 - [ ] 文档评审通过，桌面端与移动端可据此实现。
 
 ## Dependencies

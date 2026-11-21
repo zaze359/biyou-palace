@@ -1,0 +1,6 @@
+{"file": "docs/agent-contract.md", "reason": "逐条核对 PRD 五项验收：对象 Schema、状态机、派差错误码、边界、可实现性"}
+{"file": "docs/schemas/agent/v1/agent-contract.schema.json", "reason": "Draft 2020-12 语法与约束是否可执行"}
+{"file": "docs/fixtures/agent/objects.v1.json", "reason": "示例是否通过 Schema 校验，负例是否被拒绝"}
+{"file": "docs/naming.md", "reason": "根骨/道行/品阶/风险枚举与命名一致"}
+{"file": "docs/orchestration-contract.md", "reason": "确认未重复定义 RequestEnvelope/Plan/ResultEnvelope"}
+{"file": "docs/node-agent-contract.md", "reason": "确认未新增或修改节点 /v1/* 端点"}
