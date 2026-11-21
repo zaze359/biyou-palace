@@ -1,0 +1,33 @@
+{
+  "id": "biyou-superagent",
+  "name": "biyou-superagent",
+  "title": "碧游宫 V2.0 · Super-agent 架构与契约",
+  "description": "将 V1.0 推理集群升级为 Super-agent 系统：Router/Worker、事件驱动、Ticket/Mandate、Watchdog、Agent Console",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-21",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-21-agent-contracts",
+    "11-21-taskboard-cost",
+    "11-21-lan-formation",
+    "11-21-desktop-client",
+    "11-21-mobile-client",
+    "11-21-client-packaging"
+  ],
+  "parent": "10-13-biyou-v1-blueprint",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

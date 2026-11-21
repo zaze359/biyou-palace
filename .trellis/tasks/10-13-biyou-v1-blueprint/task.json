@@ -29,7 +29,9 @@
     "11-21-zhentu-observability-parallel",
     "11-21-sanxian-frontend-cluster",
     "11-21-biyou-gateway",
-    "11-21-biyou-deploy"
+    "11-21-biyou-deploy",
+    "11-21-biyou-client",
+    "11-21-biyou-superagent"
   ],
   "parent": null,
   "relatedFiles": [
