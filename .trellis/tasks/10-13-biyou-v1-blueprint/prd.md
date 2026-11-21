@@ -73,7 +73,7 @@
      channel list/sync/test/delete、option get/set/apply、log list）。`ollama-local`（type=4）与
      `quasheng-01`（type=1，含别名 `quasheng/qwen2.5:7b`）已同步且幂等；基线选项
      （重试 1、阈值 5、自动隔离开、自动恢复关、`401,403,5xx` 隔离）已生效。
-     `scripts/daojian/gateway_acceptance.py` 的 G1–G5 **连续 3 次 6/6**（含清理），
+     `scripts/daojian/gateway_acceptance.py` 的 G1–G5 **连续 4 次 6/6**（含清理），
      报告 `docs/reports/biyou-gateway-2026-11-21.md`。实测两个关键事实：① NewAPI 无内存缓存时
      权重按 `(weight+10)` 平滑，3:1 实际为 54%，故用 23:1 构造 75% 目标流量；
      ② 429 不应纳入自动隔离，否则准圣节点在合法并发背压下会被误摘。
