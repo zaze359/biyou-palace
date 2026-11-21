@@ -1,0 +1,182 @@
+{
+  "schema_version": "1.0",
+  "agent_card": {
+    "agent_id": "inner-01",
+    "name": "内门·01",
+    "root": "inner",
+    "cultivation": 3,
+    "merit": 120,
+    "skills": ["chat", "summarize", "diagnose"],
+    "tools": ["read_file", "http_get"],
+    "tool_permissions": {
+      "read_file": "qingxiu",
+      "http_get": "qingxiu"
+    },
+    "preferred_tools": ["read_file"],
+    "models": [
+      {
+        "model": "qwen2.5:7b-instruct-q4_K_M",
+        "capabilities": ["chat"],
+        "context_len": 32768
+      }
+    ],
+    "limits": {
+      "max_concurrency": 4,
+      "max_context_len": 32768,
+      "max_cost_per_ticket": 2.0
+    },
+    "location": {
+      "workspace": "/var/biyou/agents/inner-01",
+      "zone": "lan"
+    },
+    "status": "ready",
+    "contract_version": "1.0",
+    "updated_at": "2026-11-21T10:00:00+08:00"
+  },
+  "ticket": {
+    "ticket_id": "tkt-01HQ0001",
+    "thread_id": "thr-01HQ0001",
+    "trigger_id": "trg-01HQ0001",
+    "title": "诊断节点温度过高",
+    "goal": "定位 inner-01 温度告警根因并给出建议动作",
+    "tier": 3,
+    "min_cultivation": 3,
+    "risk": "qingxiu",
+    "required_skills": ["chat", "diagnose"],
+    "required_tools": ["read_file"],
+    "inputs": {
+      "refs": ["artifact://alerts/alert-778"],
+      "params": { "node_id": "inner-01" }
+    },
+    "expected_outputs": ["root_cause", "recommended_actions"],
+    "depends_on": [],
+    "orchestration_request_id": null,
+    "budget": {
+      "max_workers": 2,
+      "max_input_tokens": 100000,
+      "max_output_tokens": 20000,
+      "max_cost": 1.5,
+      "max_wall_time_s": 600,
+      "currency": "CNY"
+    },
+    "deadline_at": "2026-11-21T12:00:00+08:00",
+    "status": "running",
+    "current_assignment_id": "asg-01HQ0001",
+    "revision": 3,
+    "created_by": "router",
+    "created_at": "2026-11-21T10:05:00+08:00",
+    "updated_at": "2026-11-21T10:06:30+08:00",
+    "contract_version": "1.0"
+  },
+  "mandate": {
+    "mandate_id": "mdt-01HQ0001",
+    "ticket_id": "tkt-01HQ0001",
+    "scope": {
+      "tier_max": 3,
+      "risk_max": "qingxiu",
+      "skills": ["chat", "diagnose"],
+      "tools": ["read_file"],
+      "data_boundary": {
+        "paths": ["/var/biyou/logs"],
+        "network": ["lan"],
+        "external_send": false
+      }
+    },
+    "budget": {
+      "max_workers": 2,
+      "max_input_tokens": 100000,
+      "max_output_tokens": 20000,
+      "max_cost": 1.5,
+      "max_wall_time_s": 600,
+      "currency": "CNY"
+    },
+    "approvals": [],
+    "issued_by": "router",
+    "issued_at": "2026-11-21T10:05:00+08:00",
+    "expires_at": "2026-11-21T12:00:00+08:00",
+    "immutable": true,
+    "revoked": false,
+    "contract_version": "1.0"
+  },
+  "assignment": {
+    "assignment_id": "asg-01HQ0001",
+    "ticket_id": "tkt-01HQ0001",
+    "agent_id": "inner-01",
+    "mandate_id": "mdt-01HQ0001",
+    "status": "running",
+    "attempt": 1,
+    "lease": {
+      "owner_agent_id": "inner-01",
+      "fencing_token": 7,
+      "expires_at": "2026-11-21T10:20:00+08:00"
+    },
+    "offered_at": "2026-11-21T10:06:00+08:00",
+    "accepted_at": "2026-11-21T10:06:30+08:00",
+    "finished_at": null,
+    "reason": null,
+    "contract_version": "1.0"
+  },
+  "report": {
+    "report_id": "rpt-01HQ0001",
+    "ticket_id": "tkt-01HQ0001",
+    "assignment_id": "asg-01HQ0001",
+    "agent_id": "inner-01",
+    "seq": 2,
+    "status": "ready",
+    "message": "根因为散热风扇转速异常，建议清理风道后复测",
+    "artifacts": [
+      {
+        "key": "root_cause",
+        "artifact_ref": "artifact://tickets/tkt-01HQ0001/root_cause.md",
+        "media_type": "text/markdown"
+      }
+    ],
+    "usage": {
+      "input_tokens": 8200,
+      "output_tokens": 1200,
+      "cache_hit_tokens": 6000,
+      "cache_miss_tokens": 2200,
+      "cache_unknown": false,
+      "cost": 0.08,
+      "currency": "CNY",
+      "latency_ms": 14500,
+      "steps": 3
+    },
+    "trace_id": "trace-01HQ0001",
+    "at": "2026-11-21T10:12:00+08:00",
+    "contract_version": "1.0"
+  },
+  "watchdog": {
+    "watchdog_id": "wdg-01HQ0001",
+    "agent_id": "inner-01",
+    "ticket_id": "tkt-01HQ0001",
+    "assignment_id": "asg-01HQ0001",
+    "signal": "heartbeat_missing",
+    "detected_at": "2026-11-21T10:21:00+08:00",
+    "action": "reassign",
+    "fencing_token": 8,
+    "note": "命灯连续 3 个周期缺失，租约已过期",
+    "contract_version": "1.0"
+  },
+  "event": {
+    "event_id": "aevt-01HQ0001",
+    "seq": 12,
+    "type": "ticket/status_changed",
+    "at": "2026-11-21T10:12:05+08:00",
+    "data": {
+      "ticket_id": "tkt-01HQ0001",
+      "from": "running",
+      "to": "reported",
+      "assignment_id": "asg-01HQ0001",
+      "revision": 4
+    }
+  },
+  "error": {
+    "error": {
+      "code": "tier_exceeded",
+      "message": "agent inner-01 道行 3 低于任务最低道行 4",
+      "type": "agent_error",
+      "param": "min_cultivation"
+    }
+  }
+}

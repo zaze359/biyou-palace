@@ -275,7 +275,11 @@ biyou-palace/
 │   ├── deployment.md              # 从零复现部署手册
 │   ├── operations.md              # 运维、备份、故障排查
 │   ├── node-agent-contract.md     # 节点智能体统一契约 v1.2（协议基准）
-│   └── orchestration-contract.md  # 阵图编排/任务/事件契约
+│   ├── orchestration-contract.md  # 阵图编排/任务/事件契约
+│   ├── agent-contract.md          # 仙箓/师门任务/师门令/派差/回禀/巡阵契约
+│   ├── lan-formation-contract.md  # 局域网开阵/寻阵/入阵契约
+│   ├── schemas/agent/v1/          # Agent 契约 JSON Schema
+│   └── fixtures/agent/            # Agent 契约示例对象
 ├── monitoring/                    # 灵脉：Prometheus + Grafana 编排与看板
 ├── zhentu/                        # 阵图：注册表 / 选路 / 任务编排 / 指标
 ├── nodes/
@@ -403,6 +407,7 @@ curl -H "Authorization: Bearer $ZHENTU_REGISTRY_TOKEN" \
 - 运维手册（注册 / 日志 / 检定 / 备份）：[`docs/operations.md`](docs/operations.md)
 - 协议基准：[`docs/node-agent-contract.md`](docs/node-agent-contract.md)
 - 编排协议：[`docs/orchestration-contract.md`](docs/orchestration-contract.md)
+- 仙徒契约（仙箓/师门任务/师门令/派差/回禀/巡阵）：[`docs/agent-contract.md`](docs/agent-contract.md)
 - 联阵协议：[`docs/lan-formation-contract.md`](docs/lan-formation-contract.md)
 - 阵图注册表：[`zhentu/README.md`](zhentu/README.md)
 - 灵脉监控：[`monitoring/README.md`](monitoring/README.md)

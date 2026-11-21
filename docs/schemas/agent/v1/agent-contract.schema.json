@@ -1,0 +1,466 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biyou.local/schemas/agent/v1/agent-contract.schema.json",
+  "title": "BiYou Palace Agent Contract v1.0",
+  "description": "仙箓、师门任务、师门令、派差、回禀、巡阵对象的 JSON Schema。见 docs/agent-contract.md。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "agent_card": { "$ref": "#/$defs/agentCard" },
+    "ticket": { "$ref": "#/$defs/ticket" },
+    "mandate": { "$ref": "#/$defs/mandate" },
+    "assignment": { "$ref": "#/$defs/assignment" },
+    "report": { "$ref": "#/$defs/report" },
+    "watchdog": { "$ref": "#/$defs/watchdog" },
+    "error": { "$ref": "#/$defs/error" },
+    "event": { "$ref": "#/$defs/event" }
+  },
+  "required": ["schema_version"],
+  "$defs": {
+    "root": {
+      "type": "string",
+      "description": "根骨：inner=内门(PC)，outer=外门(移动端)。quasheng/sanxian 仅作兼容别名。",
+      "enum": ["inner", "outer", "quasheng", "sanxian"]
+    },
+    "cultivation": {
+      "type": "integer",
+      "description": "道行 1..9：人仙..混元。0 为非法值。",
+      "minimum": 1,
+      "maximum": 9
+    },
+    "tier": {
+      "type": "integer",
+      "description": "品阶 1..8：黄、玄、地、天、宇、宙、洪、荒。",
+      "minimum": 1,
+      "maximum": 8
+    },
+    "risk": {
+      "type": "string",
+      "description": "风险四档：清修 < 入世 < 破阵 < 传道。",
+      "enum": ["qingxiu", "rushi", "pozhen", "chuandao"]
+    },
+    "agentStatus": {
+      "type": "string",
+      "enum": ["ready", "busy", "degraded", "offline", "draining"]
+    },
+    "ticketStatus": {
+      "type": "string",
+      "description": "师门任务状态：待派/候差/悬赏/执行中/回禀/验收/已完成/失败/取消。",
+      "enum": ["pending", "queued", "bounty", "running", "reported", "verifying", "completed", "failed", "canceled"]
+    },
+    "assignmentStatus": {
+      "type": "string",
+      "enum": ["offered", "accepted", "running", "reported", "released", "revoked"]
+    },
+    "reportStatus": {
+      "type": "string",
+      "description": "回禀状态。done 为 ready 的废弃别名，不作为规范值。",
+      "enum": ["accepted", "progress", "waiting", "ready", "blocked", "failed", "dropped"]
+    },
+    "watchdogSignal": {
+      "type": "string",
+      "enum": ["heartbeat_missing", "lease_expired", "task_timeout", "stalled", "orphan"]
+    },
+    "watchdogAction": {
+      "type": "string",
+      "enum": ["reassign", "release", "cancel", "notify"]
+    },
+    "budget": {
+      "type": "object",
+      "description": "香火额度。预检按冷缓存估算。",
+      "properties": {
+        "max_workers": { "type": "integer", "minimum": 1 },
+        "max_input_tokens": { "type": "integer", "minimum": 0 },
+        "max_output_tokens": { "type": "integer", "minimum": 0 },
+        "max_cost": { "type": "number", "minimum": 0 },
+        "max_wall_time_s": { "type": "integer", "minimum": 1 },
+        "currency": { "type": "string", "minLength": 1 }
+      },
+      "required": ["max_workers", "max_input_tokens", "max_output_tokens", "max_cost", "max_wall_time_s"]
+    },
+    "modelEntry": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "context_len": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["model", "capabilities"]
+    },
+    "agentCard": {
+      "type": "object",
+      "description": "仙箓：身份、根骨、道行、神通、法宝、模型、限额与状态。",
+      "properties": {
+        "agent_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "root": { "$ref": "#/$defs/root" },
+        "cultivation": { "$ref": "#/$defs/cultivation" },
+        "merit": { "type": "integer", "minimum": 0 },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "tool_permissions": {
+          "type": "object",
+          "description": "法宝 -> 风险档。未在 tools 中声明的法宝不可调用。",
+          "additionalProperties": { "$ref": "#/$defs/risk" }
+        },
+        "preferred_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "models": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/modelEntry" }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_concurrency": { "type": "integer", "minimum": 1 },
+            "max_context_len": { "type": "integer", "minimum": 1 },
+            "max_cost_per_ticket": { "type": "number", "minimum": 0 }
+          },
+          "required": ["max_concurrency", "max_context_len"]
+        },
+        "location": {
+          "type": "object",
+          "properties": {
+            "workspace": { "type": "string" },
+            "zone": { "type": "string" }
+          }
+        },
+        "status": { "$ref": "#/$defs/agentStatus" },
+        "contract_version": { "type": "string", "const": "1.0" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "agent_id",
+        "root",
+        "cultivation",
+        "skills",
+        "tools",
+        "tool_permissions",
+        "models",
+        "limits",
+        "status",
+        "contract_version",
+        "updated_at"
+      ]
+    },
+    "ticket": {
+      "type": "object",
+      "description": "师门任务。min_cultivation 必须等于 tier。",
+      "properties": {
+        "ticket_id": { "type": "string", "minLength": 1 },
+        "thread_id": { "type": "string", "minLength": 1 },
+        "trigger_id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "goal": { "type": "string", "minLength": 1 },
+        "tier": { "$ref": "#/$defs/tier" },
+        "min_cultivation": { "$ref": "#/$defs/cultivation" },
+        "risk": { "$ref": "#/$defs/risk" },
+        "required_skills": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "required_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "inputs": {
+          "type": "object",
+          "properties": {
+            "refs": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "params": { "type": "object" }
+          }
+        },
+        "expected_outputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "orchestration_request_id": { "type": ["string", "null"] },
+        "budget": { "$ref": "#/$defs/budget" },
+        "deadline_at": { "type": "string", "format": "date-time" },
+        "status": { "$ref": "#/$defs/ticketStatus" },
+        "current_assignment_id": { "type": ["string", "null"] },
+        "revision": { "type": "integer", "minimum": 1 },
+        "created_by": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "contract_version": { "type": "string", "const": "1.0" }
+      },
+      "required": [
+        "ticket_id",
+        "thread_id",
+        "trigger_id",
+        "title",
+        "goal",
+        "tier",
+        "min_cultivation",
+        "risk",
+        "budget",
+        "status",
+        "revision",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "contract_version"
+      ]
+    },
+    "mandate": {
+      "type": "object",
+      "description": "师门令：不可变授权。范围扩大必须新开任务。",
+      "properties": {
+        "mandate_id": { "type": "string", "minLength": 1 },
+        "ticket_id": { "type": "string", "minLength": 1 },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "tier_max": { "$ref": "#/$defs/tier" },
+            "risk_max": { "$ref": "#/$defs/risk" },
+            "skills": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "tools": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "data_boundary": {
+              "type": "object",
+              "properties": {
+                "paths": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "network": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "external_send": { "type": "boolean" }
+              }
+            }
+          },
+          "required": ["tier_max", "risk_max", "tools"]
+        },
+        "budget": { "$ref": "#/$defs/budget" },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["human_decision", "guardian_review"] },
+              "by": { "type": "string", "minLength": 1 },
+              "at": { "type": "string", "format": "date-time" }
+            },
+            "required": ["kind", "by", "at"]
+          }
+        },
+        "issued_by": { "type": "string", "minLength": 1 },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "immutable": { "type": "boolean", "const": true },
+        "revoked": { "type": "boolean" },
+        "contract_version": { "type": "string", "const": "1.0" }
+      },
+      "required": [
+        "mandate_id",
+        "ticket_id",
+        "scope",
+        "budget",
+        "issued_by",
+        "issued_at",
+        "expires_at",
+        "immutable",
+        "revoked",
+        "contract_version"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "scope": { "properties": { "risk_max": { "enum": ["pozhen", "chuandao"] } }, "required": ["risk_max"] } },
+            "required": ["scope"]
+          },
+          "then": {
+            "properties": { "approvals": { "minItems": 1 } },
+            "required": ["approvals"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "scope": { "properties": { "tier_max": { "minimum": 7 } }, "required": ["tier_max"] } },
+            "required": ["scope"]
+          },
+          "then": {
+            "properties": { "approvals": { "minItems": 1 } },
+            "required": ["approvals"]
+          }
+        }
+      ]
+    },
+    "lease": {
+      "type": "object",
+      "properties": {
+        "owner_agent_id": { "type": "string", "minLength": 1 },
+        "fencing_token": { "type": "integer", "minimum": 1 },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["owner_agent_id", "fencing_token", "expires_at"]
+    },
+    "assignment": {
+      "type": "object",
+      "description": "派差：一次把师门任务交给某个仙徒的尝试。",
+      "properties": {
+        "assignment_id": { "type": "string", "minLength": 1 },
+        "ticket_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "mandate_id": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/assignmentStatus" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "lease": { "$ref": "#/$defs/lease" },
+        "offered_at": { "type": "string", "format": "date-time" },
+        "accepted_at": { "type": ["string", "null"], "format": "date-time" },
+        "finished_at": { "type": ["string", "null"], "format": "date-time" },
+        "reason": { "type": ["string", "null"] },
+        "contract_version": { "type": "string", "const": "1.0" }
+      },
+      "required": [
+        "assignment_id",
+        "ticket_id",
+        "agent_id",
+        "mandate_id",
+        "status",
+        "attempt",
+        "lease",
+        "offered_at",
+        "contract_version"
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "description": "回禀用量。cache_unknown=true 时不得按命中价估算费用。",
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cache_hit_tokens": { "type": "integer", "minimum": 0 },
+        "cache_miss_tokens": { "type": "integer", "minimum": 0 },
+        "cache_unknown": { "type": "boolean" },
+        "cost": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string" },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "steps": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["input_tokens", "output_tokens", "cost"]
+    },
+    "report": {
+      "type": "object",
+      "description": "回禀：仙徒向阵眼汇报状态、产物与用量。",
+      "properties": {
+        "report_id": { "type": "string", "minLength": 1 },
+        "ticket_id": { "type": "string", "minLength": 1 },
+        "assignment_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "seq": { "type": "integer", "minimum": 1 },
+        "status": { "$ref": "#/$defs/reportStatus" },
+        "message": { "type": "string" },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string", "minLength": 1 },
+              "artifact_ref": { "type": "string", "minLength": 1 },
+              "media_type": { "type": "string" }
+            },
+            "required": ["key", "artifact_ref"]
+          }
+        },
+        "usage": { "$ref": "#/$defs/usage" },
+        "trace_id": { "type": "string", "minLength": 1 },
+        "at": { "type": "string", "format": "date-time" },
+        "contract_version": { "type": "string", "const": "1.0" }
+      },
+      "required": [
+        "report_id",
+        "ticket_id",
+        "assignment_id",
+        "agent_id",
+        "seq",
+        "status",
+        "artifacts",
+        "usage",
+        "trace_id",
+        "at",
+        "contract_version"
+      ]
+    },
+    "watchdog": {
+      "type": "object",
+      "description": "巡阵事件：命灯/租约异常与恢复动作。",
+      "properties": {
+        "watchdog_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "ticket_id": { "type": ["string", "null"] },
+        "assignment_id": { "type": ["string", "null"] },
+        "signal": { "$ref": "#/$defs/watchdogSignal" },
+        "detected_at": { "type": "string", "format": "date-time" },
+        "action": { "$ref": "#/$defs/watchdogAction" },
+        "fencing_token": { "type": "integer", "minimum": 1 },
+        "note": { "type": "string" },
+        "contract_version": { "type": "string", "const": "1.0" }
+      },
+      "required": ["watchdog_id", "agent_id", "signal", "detected_at", "action", "contract_version"]
+    },
+    "error": {
+      "type": "object",
+      "description": "统一错误体。type 固定 agent_error。",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": { "type": "string", "minLength": 1 },
+            "message": { "type": "string" },
+            "type": { "type": "string", "const": "agent_error" },
+            "param": { "type": ["string", "null"] }
+          },
+          "required": ["code", "message", "type"]
+        }
+      },
+      "required": ["error"]
+    },
+    "event": {
+      "type": "object",
+      "description": "SSE 事件元素，shape 与 orchestration TaskEvent 一致。",
+      "properties": {
+        "event_id": { "type": "string", "minLength": 1 },
+        "seq": { "type": "integer", "minimum": 0 },
+        "type": { "type": "string", "minLength": 1 },
+        "at": { "type": "string", "format": "date-time" },
+        "data": { "type": "object" }
+      },
+      "required": ["event_id", "seq", "type", "at", "data"]
+    }
+  }
+}
