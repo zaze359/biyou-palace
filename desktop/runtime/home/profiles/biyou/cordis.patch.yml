@@ -1,6 +1,16 @@
 # 碧游宫桌面端 profile 的用户补丁层，作用于所有 bundle 之后。
 # 顶层是一个 YAML 数组：按 id 覆盖配置、禁用行、插入新行（可用 !!js 表达式）。
 #
-# 当前刻意保持为空：S1 只验证「壳能接入 dsh 并起得来」。
-# S2 起在这里加模型入口（Ollama）与品牌/人设，避免一上来就把 runtime 调坏。
-[]
+# 这里只放「碧游宫自己」的行。上游 bundle 的默认组合不动；
+# 需要覆盖上游行时，务必在注释里写清为什么。
+
+# ── 碧游宫客户端插件 ───────────────────────────────────────────────────────
+# 与 dsh-web-app 登记 `ui-open-in-app` 的方式一致：一行装下 node half 与
+# browser half —— node half 进 Loader（apply 为空），browser half 由
+# @deepseek-ai/dsh-client-modules 扫 `dsh.client` 声明后进 window.__DSH_BOOT__。
+# 包本体来自 desktop/packages/biyou-plugin，由 scripts/link-plugin.mjs 链进
+# profile 的 node_modules。
+- insert:
+    - id: ui-biyou
+      name: '@biyou/dsh-plugin'
+      config: {}

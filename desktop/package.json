@@ -25,7 +25,9 @@
     "dsh:install": "npm install --prefix runtime/home/profiles/biyou --no-audit --no-fund",
     "node:bootstrap": "node scripts/bootstrap-node.mjs",
     "icon": "node scripts/make-icon.mjs",
-    "check": "node scripts/check-env.mjs"
+    "check": "node scripts/check-env.mjs && node scripts/link-plugin.mjs --check",
+    "plugin:link": "node scripts/link-plugin.mjs",
+    "plugin:check": "node scripts/link-plugin.mjs --check"
   },
   "devDependencies": {
     "electron": "44.7.0"

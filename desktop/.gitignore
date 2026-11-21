@@ -10,3 +10,11 @@ release/
 
 # ---- 本地覆盖 ----
 *.local
+
+# ---- dsh 若被误作用于仓库 profile 会就地写这些东西 ----
+# 真实数据应落在 userData；这里挡住探针/手工调试的残留（含凭据，绝不入库）。
+runtime/home/.credentials.yaml
+runtime/home/.credentials.yaml.lock*
+runtime/home/storages/
+runtime/home/settings.yaml
+runtime/home/logs/

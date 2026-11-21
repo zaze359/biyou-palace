@@ -102,8 +102,16 @@ maybe_setup() {
   fi
 }
 
+# 把 desktop/packages/biyou-plugin 链进 profile 的 node_modules。
+# 幂等、离线：只建一个符号链接，不动 1.2 GB 的依赖树。
+link_plugin() {
+  [ -d runtime/home/profiles/biyou/node_modules ] || return 0
+  node scripts/link-plugin.mjs >/dev/null 2>&1 || die "碧游宫插件链接失败，请手动执行：node scripts/link-plugin.mjs"
+}
+
 need_node
 maybe_setup
+link_plugin
 
 if [ "$NO_SANDBOX" -eq 1 ]; then
   export BIYOU_NO_SANDBOX=1

@@ -39,9 +39,10 @@ desktop/
 │       ├── provision.js     仓库 profile → userData（node_modules 用软链）
 │       └── server.js        dsh 子进程生命周期 + URL 解析 + 探活 + 进程组清理
 ├── ui/shell/              品牌壳：顶栏、状态、启动/失败/就绪三态
+├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（品牌 / 观星台 / 功德殿 / 状态浮层）
 ├── runtime/home/profiles/biyou/   dsh profile 模板（bundles + 补丁层）
 ├── assets/icon.png        图标占位（npm run icon 可重生成）
-└── scripts/               版本自检、Node 下载、无头冒烟、图标生成
+└── scripts/               版本自检、Node 下载、无头冒烟、图标生成、插件链接
 ```
 
 ## 三、快速开始
@@ -114,6 +115,48 @@ Electron 主进程
 
 **dsh 只做单 Agent 运行时/UI**：profile 只装 `dsh-base` + `dsh-web-app`，不启用
 `dsh-agent-team` 这类集群级编排——跨 Agent 调度属于阵图/联阵，不属于桌面端。
+
+### 碧游宫插件（`packages/biyou-plugin`）
+
+品牌、观星台、功德殿、状态浮层不做成"第二个壳"，而是做成 **dsh 客户端插件**，
+注册进上游已有的 slot。这样会话、工作区、设置仍归上游所有，我们只贡献自己那几格。
+
+```text
+packages/biyou-plugin/
+├── package.json   exports["./client"] + dsh.client{platform:"web", inject:[...]}
+└── lib/
+    ├── index.js   node half：apply() 为空，只为了让插件成为正常 Cordis row
+    └── client.js  browser half：window.__ModuleLoader__.load({id, factory}) 包着的
+                   CJS factory，末尾 exports.apply / exports.inject
+```
+
+用的 slot（rc.5 实测存在）：
+
+| slot | 当前用途 |
+|---|---|
+| `shell.overlay` | 右下角「碧游宫」状态 pill（D1 占位） |
+| `sidebar.brand.mark` / `brand.name` | 待接（D2） |
+| `main`（keyed）+ `sidebar.panellist` | 观星台 / 功德殿（D3/D4），list id 即 main panel key |
+
+产物格式是 dsh 自有的同步加载格式，**不是标准 ESM**：`window.__ModuleLoader__.load`
+拿到的 factory 里 `require("react")` 由宿主提供，所以 lib 下的文件是手写的、可直接运行，
+不需要打包器。改完 `lib/` 里的文件重启即可，`rev` 由内容哈希自动变。
+
+挂载方式与上游登记 `ui-open-in-app` 完全一致：
+
+1. `scripts/link-plugin.mjs` 把包链进 profile 的 `node_modules`（幂等、离线，只建符号链接，
+   不碰 1.2 GB 依赖树）；`start.sh` 每次启动前会跑一次。
+2. `runtime/home/profiles/biyou/cordis.patch.yml` 里插一行
+   `- insert: [{id: ui-biyou, name: '@biyou/dsh-plugin'}]`。
+
+```bash
+npm run plugin:link      # 手动链接（start.sh 已自动做）
+npm run plugin:check     # 只校验链接是否指向正确
+```
+
+验收口径：`npm run smoke` 的 `report.json` 里 `dshView.biyou` 应为
+`{ inBoot: true, pill: true, text: "碧游宫" }` —— `inBoot` 证明进了 `window.__DSH_BOOT__`
+（browser roster），`pill` 证明 occupant 真的渲染上屏。
 
 ## 五、数据与配置
 

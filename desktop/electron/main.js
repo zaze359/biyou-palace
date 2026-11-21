@@ -441,6 +441,32 @@ async function waitForDshViewLoad(timeoutMs = 45_000) {
   return false
 }
 
+/**
+ * 冒烟探针：碧游宫插件到底有没有被装进浏览器 roster、pill 有没有真的渲染出来。
+ * 这是「插件路线」D1 的验收点——只看 dsh 起得来不够，得证明我们的 occupant 上了屏。
+ */
+async function probeBiyouPlugin() {
+  const script = `(() => {
+    let boot = ''
+    try { boot = JSON.stringify(window.__DSH_BOOT__ ?? null) } catch {}
+    const pill = document.querySelector('[data-biyou="status"]')
+    return {
+      inBoot: boot.includes('@biyou/dsh-plugin'),
+      pill: Boolean(pill),
+      text: pill ? pill.textContent : null,
+    }
+  })()`
+
+  const deadline = Date.now() + 8_000
+  let last = null
+  while (Date.now() < deadline) {
+    last = await dshView.webContents.executeJavaScript(script).catch((error) => ({ error: error.message }))
+    if (last?.pill) return last
+    await sleep(400)
+  }
+  return last
+}
+
 async function runSmoke(window, status) {
   const { writeFile } = await import('node:fs/promises')
   mkdirSync(paths.smokeDir, { recursive: true })
@@ -472,6 +498,7 @@ async function runSmoke(window, status) {
         await writeFile(join(paths.smokeDir, 'dsh.pdf'), pdf)
       }
       report.dshView.size = dshView.getBounds()
+      report.dshView.biyou = await probeBiyouPlugin()
     }
   } catch (error) {
     report.captureError = error.message
