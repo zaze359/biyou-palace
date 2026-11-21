@@ -119,16 +119,15 @@ body.platform-darwin .chrome {
   min-width: 0;
 }
 
+/* 写实青萍剑 logo（宣纸底方图）：顶栏里放大到 28px，object-fit 收敛留白让剑可辨 */
 .brand-mark {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
+  width: 28px;
+  height: 28px;
+  display: block;
+  flex: none;
+  object-fit: cover;
   border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--accent);
+  border: 1px solid var(--line);
 }
 
 .brand-text strong {

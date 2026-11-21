@@ -391,6 +391,7 @@ app.whenReady().then(async () => {
     applicationName: '碧游宫',
     applicationVersion: app.getVersion(),
     copyright: '碧游宫 · 内网异构推理集群',
+    icon: nativeImage.createFromPath(join(DESKTOP_ROOT, 'assets', 'icon.png')),
   })
 
   buildMenu()

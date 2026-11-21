@@ -41,9 +41,36 @@ desktop/
 ├── ui/shell/              品牌壳：顶栏、状态、启动/失败/就绪三态
 ├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（品牌 / 观星台 / 功德殿 / 状态浮层）
 ├── runtime/home/profiles/biyou/   dsh profile 模板（bundles + 补丁层）
-├── assets/icon.png        图标占位（npm run icon 可重生成）
+├── assets/
+│   ├── icon.png             应用图标（写实青萍剑 logo；npm run icon 重生成）
+│   └── brand/
+│       ├── icon-photo.png   图标事实源：写实水墨青萍剑（剑主体、青莲背景）
+│       ├── icon.svg         几何副版图标源（npm run icon -- --geo）
+│       └── mark.svg         单色几何标记（dsh 侧栏 24px 位用）
 └── scripts/               版本自检、Node 下载、无头冒烟、图标生成、插件链接
 ```
+
+### 品牌 Logo 接入
+
+正式 Logo 是**写实水墨青萍剑**（`docs/brand/logo-master.png`，剑为绝对主体、青莲为背景注脚），
+图标事实源为 `assets/brand/icon-photo.png`；设计推导与规范见 `docs/brand/`。
+
+| 落点 | 用什么 | 为什么 |
+|---|---|---|
+| 应用图标（Dock / 窗口 / 关于面板） | `assets/icon.png`，源自写实 logo | 大尺寸，写实笔触可辨 |
+| 壳顶栏品牌位 | `assets/icon.png`（28px 方图） | 放大显示，`object-fit: cover` 收敛留白 |
+| 关于面板 | `nativeImage` 载 `assets/icon.png` | 同上 |
+| dsh 侧栏品牌位（`sidebar.brand.mark`） | `brand/mark.svg` 几何单色版 | 24px + `currentColor` 场景，写实图会糊成一团 |
+
+重生成图标：
+
+```bash
+npm run icon              # 写实 logo（默认）
+npm run icon -- --geo     # 几何副版（回溯旧样式）
+```
+
+注意：`render-icon.main.cjs` 支持 PNG（写实）与 SVG（几何）两种源；改事实源后跑 `npm run icon`，
+不要手工覆盖 `assets/icon.png`。
 
 ## 三、快速开始
 
