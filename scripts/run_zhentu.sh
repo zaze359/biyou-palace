@@ -20,7 +20,8 @@ REQ_FILE="$REPO_ROOT/zhentu/requirements.txt"
 HOST="${ZHENTU_HOST:-0.0.0.0}"
 PORT="${ZHENTU_PORT:-4020}"
 
-MANAGED_PY="/Users/zaze/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
+# WorkBuddy 托管 Python 的常见位置（本机加速用；可用 WORKBUDDY_PY 覆盖，找不到就退回 PATH 上的 python3）
+MANAGED_PY="${WORKBUDDY_PY:-$HOME/.workbuddy/binaries/python/versions/3.13.12/bin/python3}"
 if [ -x "$MANAGED_PY" ]; then
   PY="$MANAGED_PY"
 else

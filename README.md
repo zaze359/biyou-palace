@@ -55,13 +55,29 @@
 ### 方式 A：统一入口 `start.sh`
 
 ```bash
-# 无参数 → 弹出菜单选择节点
+# 无参数 → 弹出菜单选择组件
 bash start.sh
 
-# 无交互直接启动指定节点（其余参数透传给节点启动命令）
-bash start.sh quasheng
-bash start.sh sanxian
+# 无交互直跑指定组件（其余参数透传给该组件的启动命令）
+bash start.sh quasheng                # 内门仙徒（PC，旧名准圣）
+bash start.sh sanxian                 # 外门仙徒（安卓，旧名散仙）
+bash start.sh zhentu                  # 阵图
+bash start.sh cluster                 # 中枢机编排（--check 只校验，--up 才拉起）
+bash start.sh desktop                 # 桌面客户端
+
+bash start.sh --list                  # 只列组件
+bash start.sh --help                  # 帮助与示例
 ```
+
+| 组件 | 说明 | 底层命令 |
+|---|---|---|
+| `quasheng` | 内门仙徒 · PC（Python + Ollama，:4010；旧名准圣） | `bash scripts/run_quasheng.sh` |
+| `sanxian` | 外门仙徒 · 安卓（Kotlin + llama.cpp，:4011；需真机） | `bash nodes/sanxian/build_and_run_sanxian.sh` |
+| `zhentu` | 阵图 · 节点注册表与选路（:4020） | `bash scripts/run_zhentu.sh` |
+| `cluster` | 中枢机 · 网关 + 阵图 + 灵脉编排 | `bash scripts/bootstrap_cluster.sh` |
+| `desktop` | 桌面客户端 · 碧游宫壳 + 本地 dsh | `bash desktop/start.sh` |
+
+旧名仍可用：`准圣`、`散仙`、`registry`、`gateway`、`client`。
 
 ### 方式 B：准圣节点（PC）
 
@@ -246,7 +262,11 @@ curl -N -X POST http://127.0.0.1:4011/v1/chat/completions \
 biyou-palace/
 ├── docker-compose.yml             # 中枢机一键起：碧游宫 + 阵图 + 灵脉
 ├── .env.example                   # 中枢机编排变量模板
-├── start.sh                       # 节点统一启动入口（菜单 / 无交互）
+├── start.sh                       # 统一启动入口（节点 / 阵图 / 中枢机 / 桌面客户端）
+├── desktop/                       # 桌面客户端：Electron 品牌壳 + dsh 运行时（见 desktop/README.md）
+│   ├── start.sh / start.command   # 一键启动（Finder 可双击）
+│   ├── electron/                  # 主进程 / preload / dsh 子进程管理
+│   └── runtime/home/profiles/biyou/   # dsh profile 模板
 ├── deploy/
 │   ├── newapi/                    # 碧游宫：渠道/选项声明 + 管理员 CLI + compose
 │   ├── zhentu/Dockerfile          # 阵图镜像
