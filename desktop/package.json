@@ -24,7 +24,7 @@
     "dsh:web": "node scripts/run-dsh.mjs",
     "dsh:install": "npm install --prefix runtime/home/profiles/biyou --no-audit --no-fund",
     "node:bootstrap": "node scripts/bootstrap-node.mjs",
-    "icon": "node scripts/make-icon.mjs",
+    "icon": "node scripts/render-icon.mjs",
     "check": "node scripts/check-env.mjs && node scripts/link-plugin.mjs --check",
     "plugin:link": "node scripts/link-plugin.mjs",
     "plugin:check": "node scripts/link-plugin.mjs --check"

@@ -98,4 +98,96 @@
 
 1. V2.0-A 是否接受 Ollama 作为本机前置依赖；若要求严格自闭环，需切 V2.0-B 内嵌 llama.cpp。
 2. 本地控制面是否直接复用 dsh 的会话存储，还是独立 SQLite；当前倾向独立。
-3. 观星台是独立页面，还是 dsh UI 的一个面板；当前倾向独立页面 + 壳内入口。
+3. ~~观星台是独立页面，还是 dsh UI 的一个面板；当前倾向独立页面 + 壳内入口。~~ → 已决：做成 dsh UI 的 `main` 面板（keyed slot），壳内不再渲染自有业务页。见下节「呈现路线」。
+
+---
+
+## 呈现路线：走 dsh 客户端插件（2026-11-21 决策）
+
+> 本节取代「架构」一节里「渲染进程：dsh UI + 碧游宫壳 + 观星台/开阵页」的表述。
+> 自建壳渲染进程（`desktop/ui/shell`）从"业务承载者"降级为"dsh 起不来时的降级页"。
+
+### 决策
+
+观星台、功德殿、品牌标识、运行状态浮层，一律做成 **dsh 客户端插件的 browser half**，注册进上游已有的 slot；
+Electron 只保留窗口、托盘、进程生命周期、本地控制面与密钥。理由四条：
+
+1. **位置已经开好了**。rc.5 实测（见下表）上游为「品牌、全局面板、浮层、底栏」都留了公开 slot，不需要重写壳，也不需要 patch 上游。
+2. **不复制 feature 状态**。会话、工作区、设置仍归上游插件所有，我们只贡献自己那块，避免状态双写。
+3. **品牌是官方留的替换位**。`sidebar.brand.mark` / `sidebar.brand.name` 就是给部署方换 logo 与名字用的，比自建壳更省。
+4. **升级只需跟 contract**。slot 与 service 是公开契约，dsh 升版时改动集中在 `inject` 列表与 d.ts 校验，不用整壳重做。
+
+### rc.5 已核实的能力（`node_modules/@deepseek-ai/`，340 个包）
+
+注册位置（`@deepseek-ai/dsh-client-ui-layout`、`dsh-client-ui-sidebar` 的 `contract/slots.d.ts`）：
+
+| slot | kind | 用途 |
+|---|---|---|
+| `sidebar.brand.mark` / `sidebar.brand.name` | single | 换品牌图标 / 名字（自带兜底） |
+| `sidebar.panellist` | list | 全局面板图标；**list id 即对应 main panel 的 key** |
+| `sidebar.footer.action` | list | 设置旁的脚部动作 |
+| `main` | keyed | 中央面板；保留 key `conversation`，其余 key 不绑会话 |
+| `shell.overlay` | list | 全帧浮层，**本身 click-through**，条目自行 opt-in 指针事件 |
+| `shell.bottom` | single | 三栏下方通栏 |
+| `shell.leading` | single | 顶栏左侧窗口区 |
+
+共享服务（`ctx.layout`，`dsh-client-ui-layout/lib/types/client/service.d.ts`）：
+`selectPanel(MainPanelId | null)` / `toggleSidebar()` / `openRightbar(track, fullscreen)` / `closeRightbar()` /
+`beginNavigation(): AbortSignal` / `panelInfo: HostObservable<PanelInfo>`。
+
+插件写法（真实样例 `dsh-client-ui-open-in-app`，`src/` 随包发布可直接抄）：
+
+```ts
+export const inject = ['slots', 'locale', 'layout', 'sessions']
+export function apply(ctx: ClientContext): void {
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay', id: 'biyou.status', locale: NS,
+    inject: () => ({ hooks: status.hooks, refresh: status.refresh }),
+  }, BiyouStatusPill))
+}
+```
+
+包形态（`package.json`）：`exports["./client"]` 指向 browser half，
+`dsh.client = { inject: [...], platform: 'web' }`；node half 的 `apply() {}` 只为进 Loader。
+挂载到 profile：依赖进 profile `package.json`，再在 `cordis.patch.yml` 插一行
+`- insert: [{ id: ui-biyou, name: '@biyou/dsh-plugin', config: {} }]`。
+
+### 目标架构
+
+```text
+Electron 主进程      窗口 / 托盘 / 单实例 / dsh 子进程 / 本地控制面 / 密钥
+      │  (Host service，不经 preload IPC 直达插件)
+dsh Host ──── biyou 插件 node half（service：state / taskboard / formation）
+      │
+dsh Web UI ──── biyou 插件 browser half（slot occupant）
+                 ├ sidebar.brand.mark/name   碧游宫品牌
+                 ├ sidebar.panellist + main  观星台 / 功德殿
+                 └ shell.overlay             运行状态 pill（开阵中 / 模型未就绪）
+      │
+desktop/ui/shell     仅三态降级页：dsh 起不来 / 启动中 / 崩溃后重试
+```
+
+纪律：**插件只拥有 chrome 与几何**，观星台是 `main` 面板而不是"另一个壳"；会话与设置不复制到插件。
+
+### 阶段计划
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| D1 | `desktop/packages/biyou-plugin` 骨架：TS + ESM 构建、node/browser 双 half、profile 挂载 | 冒烟断言插件进 Loader 且出现在 `window.__DSH_BOOT__` roster |
+| D2 | 品牌与状态：`sidebar.brand.mark` / `brand.name` + `shell.overlay` 状态 pill 接通现有 dsh status | 截图无上游鱼标；pill 能反映 ready/failed |
+| D3 | 观星台：`main` keyed 面板 + `sidebar.panellist` 入口，第一版只读 | 点击侧栏能进面板、能回 conversation；不崩不白屏 |
+| D4 | 功德殿：任务板面板，读写经 Host service 到本地控制面 | 创建/推进任务落盘 userData，刷新后仍在 |
+| D5 | 自建壳退场：`ui/shell` 只留降级页，README 与视觉规范改写 | 正常路径不再出现自建壳顶栏 |
+
+### 风险与回退
+
+- **slot 契约随版本变动**：锁 rc.5；升级单独立项，用 d.ts 编译期校验 + `npm run check` 兜底。
+- **视觉割裂**：插件 UI 复用 `@deepseek-ai/dsh-client-ui-primitives` 与 theme token，不引入第二套色板。
+- **构建链变复杂**：先用 tsup 出 ESM，`platform: 'web'`；打包塞 asar 的事留到 S8。
+- **回退**：D1–D4 任一卡住，`ui/shell` 仍在，不影响 S1 已交付能力；D5 是唯一不可逆步骤。
+
+### 待定（需你拍板）
+
+1. 插件放 `desktop/packages/biyou-plugin/`，还是独立仓库（便于以后给第三方复用）。
+2. 观星台第一版范围：只读展示，还是含「开阵」按钮（涉及本地控制面提前落地）。
+3. 品牌替换程度：只换 mark + name，还是连主色也换（会与 dsh 视觉规范分叉）。

@@ -117,3 +117,62 @@ desktop/
 ### 下一步
 
 S2 本地模型适配（Ollama 探活/流式/密钥留主进程），在 `cordis.patch.yml` 增模型入口。
+
+## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
+
+结论已写入 `design.md`「呈现路线」一节，这里只记执行要点与已核实的依据：
+
+- **已核实**：rc.5 的 `node_modules/@deepseek-ai/`（340 包）里，`dsh-client-ui-layout` 提供
+  `main`(keyed) / `shell.overlay`(list) / `shell.leading` / `shell.bottom` 四个根 slot 与
+  `ctx.layout` 服务（`selectPanel`/`toggleSidebar`/`openRightbar`）；`dsh-client-ui-sidebar`
+  提供 `sidebar.panellist`(list)、`sidebar.brand.mark`/`brand.name`、`sidebar.footer.action`。
+- **可抄的样例**：`dsh-client-ui-open-in-app`（`src/` 随包发布）——`inject` 数组 + `apply(ctx)` +
+  `ctx.slots.inject(name, () => ctx.slots.register({name, id, locale, inject}, Component))`。
+- **挂载方式**：插件包声明 `exports["./client"]` 与 `dsh.client = {inject, platform:'web'}`；
+  profile 加依赖，再在 `cordis.patch.yml` 插 `- insert: [{id, name, config}]`。与 dsh-web-app
+  登记 `ui-open-in-app` 的方式完全一致。
+- **不变的部分**：Electron 主进程职责（窗口/托盘/单实例/进程/本地控制面/密钥）与 S1 已交付能力
+  全部保留；`ui/shell` 降级为"dsh 起不来时的降级页"，到 D5 才动。
+- **先做 D1**：`desktop/packages/biyou-plugin` 骨架 + profile 挂载 + 冒烟断言进 roster，
+  再做品牌（D2）与观星台（D3）。
+
+### D1 已完成（2026-11-21）
+
+落地物：
+
+| 文件 | 作用 |
+|---|---|
+| `desktop/packages/biyou-plugin/package.json` | `exports["./client"]` + `dsh.client{platform:"web", inject:[renderer, layout]}` |
+| `.../lib/index.js` | node half，`apply()` 为空：只为成为正常 Cordis row |
+| `.../lib/client.js` | browser half，手写 `window.__ModuleLoader__.load({id, factory})` |
+| `desktop/scripts/link-plugin.mjs` | 幂等软链进 profile `node_modules`，支持 `--check` |
+| `runtime/home/profiles/biyou/cordis.patch.yml` | 插一行 `- insert: [{id: ui-biyou, name: '@biyou/dsh-plugin'}]` |
+| `electron/main.js` | 新增 `probeBiyouPlugin()`，冒烟报告带 `dshView.biyou` |
+
+实测证据（`BIYOU_USER_DATA=/tmp/biyou-d1b npm run smoke`）：
+
+```json
+"dshView": { "loaded": true, "blank": false,
+  "biyou": { "inBoot": true, "pill": true, "text": "碧游宫" } }
+```
+
+`inBoot` 来自 `JSON.stringify(window.__DSH_BOOT__)` 含 `@biyou/dsh-plugin`，
+即 browser roster 真的收了这个包；`pill` 来自 `[data-biyou="status"]` 命中，
+证明 occupant 渲染上屏。截图确认 pill 在右下角、不遮挡内容。
+
+踩坑记录：
+
+- **产物不是标准 ESM**。客户端 bundle 形如
+  `window.__ModuleLoader__.load({id, factory: require => {...}})`，factory 内
+  `require("react")` 由宿主提供，末尾 `exports.apply/inject`。官方没有可用的公开打包器，
+  所以 `lib/` 下的文件是手写的、可直接运行，**不需要构建步骤**。
+- **combo URL 形如 `plugins/??pkg/client.js&rev=<combo rev>`**，逐个文件猜路径会命中 SPA
+  兜底（返回 index.html 而非 404），别把它当成功。
+- **`shell.overlay` 的条目默认落在画面左上角**，会压住侧栏品牌行；必须自己
+  `position: absolute` 定位，并保持 `pointer-events: none`（该层本身 click-through）。
+- **`smoke:dsh` 在 `~/Library/Application Support` 下必失败**：沙箱不允许 unlink，
+  `atomic-write` 拿不到 `.credentials.yaml.lock` → `EPERM`，进程 exit 1。用
+  `BIYOU_USER_DATA=/tmp/...` 跑即 8/8 全绿。与本插件无关（去掉插件行同样失败）。
+- **别拿仓库 profile 直接跑 dsh**：HMR 会把 `cordis.yml` 改写成英文注释，还会就地写
+  `.credentials.yaml`（含 browser-session 密钥）与 `storages/`。已在 `.gitignore` 挡住，
+  但仍应优先用 `/tmp` userData。

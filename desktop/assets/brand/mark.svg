@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="碧游宫">
+  <title>碧游宫</title>
+  <desc>青萍剑：剑身、窄剑格、剑柄与剑首。单色，随 currentColor 适配深浅主题；剑格刻意收窄，保证 16px 下仍读作剑而非十字。</desc>
+  <g fill="currentColor">
+    <path d="M50 15 L53.4 37 L53.4 59 L46.6 59 L46.6 37 Z"/>
+    <path d="M35 65 C40.2 61.2 45 60.2 50 60.2 C55 60.2 59.8 61.2 65 65 C59.8 63.8 55 63.2 50 63.2 C45 63.2 40.2 63.8 35 65 Z"/>
+    <rect x="47.4" y="65" width="5.2" height="11" rx="1.6"/>
+  </g>
+  <circle cx="50" cy="80.4" r="3.4" fill="currentColor"/>
+</svg>
