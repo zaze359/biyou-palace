@@ -64,7 +64,7 @@ desktop/
 
 | 落点 | 用什么 | 为什么 |
 |---|---|---|
-| 应用图标（Dock / 窗口 / 关于面板） | `assets/icon.png`，源自写实 logo | 大尺寸，写实笔触可辨 |
+| 应用图标（Dock / 窗口 / 关于面板） | `assets/icon.png`，源自写实 logo，带圆角与透明边距 | 大尺寸写实笔触可辨；透明底 + 圆角 + 内缩让 Dock 呈现为系统应用图标，不会顶满格子或显示成直角方图 |
 | 壳顶栏左上角 | **留空占位**，不显示 logo / 名称 / 版本号 | 2026-11-22 改决：碧游宫不占任何品牌位，左上角空出；空白区仍可拖拽窗口 |
 | 关于面板 | `nativeImage` 载 `assets/icon.png` | 同上 |
 | dsh 侧栏品牌位 | **碧游宫插件不占用**；显式启用 dsh-web-app 的 `ui-brand-official`，显示 deepseek 官方字标 | dsh 侧栏保留官方发行版外观，不显示「DSH 本地构建」fallback |
@@ -77,7 +77,10 @@ npm run icon -- --geo     # 几何副版（回溯旧样式）
 ```
 
 注意：`render-icon.main.cjs` 支持 PNG（写实）与 SVG（几何）两种源；改事实源后跑 `npm run icon`，
-不要手工覆盖 `assets/icon.png`。
+不要手工覆盖 `assets/icon.png`。渲染时会把源图放进透明画布、加圆角遮罩并四周内缩
+（默认 inset 10%、radius 22%，可给 `render-icon.main.cjs` 传第 4/5 个参数调整）——
+`app.dock.setIcon()` 不会给满幅不透明方图自动加圆角，所以图标本身必须带 alpha 与留白。
+事实源 `assets/brand/icon-photo.png` 保持满幅原作不动。
 
 ## 三、快速开始
 

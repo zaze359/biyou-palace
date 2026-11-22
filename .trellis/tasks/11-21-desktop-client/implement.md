@@ -249,8 +249,14 @@ S7：健壮性与退出（异常恢复、错误路径、日志脱敏、无残留
   not permitted` 导致 GPU 进程反复崩溃退出（SIGTRAP），与 S8 记录的限制一致；真机验收
   仍需 client-packaging 完成。
 - **清单缺陷（待改）**：`build.mjs` 对 `.app` 目录产物用「路径字符串」算 SHA-256，
-  内容变了哈希不变（三次打包 `.app` 哈希均为 `28870c07…`）。需改为真实内容哈希或
+  内容变了哈希不变（多次打包 `.app` 哈希均为 `28870c07…`）。需改为真实内容哈希或
   标注为目录清单哈希，交 client-packaging。
+- **Dock 图标圆角/尺寸修正（2026-11-23）**：真机反馈 Dock 图标是直角方图、比系统图标
+  大一圈。根因是 `assets/icon.png` 为 1024×1024 满幅 RGB 无 alpha，`app.dock.setIcon()`
+  对不透明方图不加圆角。修法：改 `render-icon.main.cjs`，渲染时把源图放进透明画布、
+  加圆角遮罩（radius 22%）并四周内缩（inset 10%），输出 RGBA；事实源
+  `assets/brand/icon-photo.png` 不动。重生成 `icon.png` 并重打包，从 `icon.icns` 导出
+  预览确认圆角+透明+留白正确，冒烟全绿。
 
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 
