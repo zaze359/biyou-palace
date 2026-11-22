@@ -28,6 +28,14 @@ extraResources:
     to: node-runtime
   - from: assets/icon.png
     to: icon.png
+  # 碧游宫自己的 dsh 插件必须放 asar 外：profile 里 @biyou/* 是指向
+  # ../../../../../../packages/* 的相对 symlink，解析到 Resources/packages/*；
+  # dsh 是独立 Node 进程、不走 asar，放 files 里（进 app.asar）会断链，
+  # 启动时报 ERR_MODULE_NOT_FOUND（S8 打包后验收发现的缺口）。
+  - from: packages/biyou-plugin
+    to: packages/biyou-plugin
+  - from: packages/biyou-local-models
+    to: packages/biyou-local-models
 
 # 未签名：identity: null 阻止 macOS Attempted ad-hoc 签名，gatekeeper 提示由用户自行处理
 mac:

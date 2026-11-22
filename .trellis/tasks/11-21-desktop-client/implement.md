@@ -230,6 +230,28 @@ S7：健壮性与退出（异常恢复、错误路径、日志脱敏、无残留
   需在真实桌面环境人工验收（双击 .app → 观察 dsh 就绪 / 插件上屏）。
 - 构建产物 `dist/` 已在 desktop/.gitignore 排除，不会误入提交。
 
+**打包后验收补记（2026-11-23）**：重打包并实际启动 `.app` 后，发现并修复一个此前
+开发态冒烟覆盖不到的缺口：
+
+- **bug**：`@biyou/dsh-plugin` / `@biyou/dsh-local-models` 在打包 profile 里是相对
+  symlink（`../../../../../../packages/biyou-*`），而 `electron-builder.yml` 的 `files`
+  不含 `packages/`。放 `files` 里会被塞进 `app.asar`，但 dsh 是独立 Node 进程、不走
+  asar，symlink 解析到 `Resources/packages/*` 时空无一物 → dsh 启动报
+  `ERR_MODULE_NOT_FOUND: Cannot find package '@biyou/dsh-plugin'`，2 个插件未激活。
+- **修复**：把两个插件目录从 `files` 移到 `extraResources`，落到 `Resources/packages/*`，
+  与 symlink 目标对齐。重打包验证：symlink 解析成功、dsh 日志无 `ERR_MODULE_NOT_FOUND`
+  或 `did not activate`、dsh 正常 READY。
+- **Dock 应用名验证**：打包 app 的 bundle 正确（`CFBundleName`/`DisplayName`=碧游宫、
+  `CFBundleIdentifier`=`cn.biyou.desktop`）。用 `open -n` 以 bundle 方式启动时
+  `lsappinfo` 显示 `bundleID="cn.biyou.desktop"`、`LSDisplayName=碧游宫`——Dock 悬停
+  标签正确（开发态直跑裸二进制拿不到 bundle 身份，是固有差异，见 patch 脚本注释）。
+- **仍未验证**：打包 GUI 完整渲染——本沙箱 `sandbox initialization failed: Operation
+  not permitted` 导致 GPU 进程反复崩溃退出（SIGTRAP），与 S8 记录的限制一致；真机验收
+  仍需 client-packaging 完成。
+- **清单缺陷（待改）**：`build.mjs` 对 `.app` 目录产物用「路径字符串」算 SHA-256，
+  内容变了哈希不变（三次打包 `.app` 哈希均为 `28870c07…`）。需改为真实内容哈希或
+  标注为目录清单哈希，交 client-packaging。
+
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 
 结论已写入 `design.md`「呈现路线」一节，这里只记执行要点与已核实的依据：
