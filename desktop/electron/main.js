@@ -8,6 +8,7 @@
  *   - 受控 IPC：渲染层只能通过 preload 白名单拿状态、重启、改布局
  */
 import { app, BrowserWindow, Menu, WebContentsView, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { createSocket } from 'node:dgram'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DESKTOP_ROOT, defaultUserDataDir, layoutPaths } from './paths.js'
@@ -15,6 +16,7 @@ import { PINNED } from './versions.js'
 import { resolveNode } from './dsh/resolve-node.js'
 import { provisionProfile } from './dsh/provision.js'
 import { DSH_STATE, DshServer } from './dsh/server.js'
+import { FormationHost } from './lan-host/index.js'
 
 const IS_DEV = !app.isPackaged
 const IS_SMOKE = process.argv.includes('--smoke')
@@ -35,6 +37,7 @@ if (!hasSingleInstanceLock) app.exit(0)
 let mainWindow = null
 let dshView = null
 let dshServer = null
+let lanHost = null
 // 与 dsh 的工具栏节奏对齐（14px 字号、28/32px 控件、12px 圆角），壳顶栏取 52px
 let chromeHeight = 52
 let cleanupDone = false
@@ -186,6 +189,21 @@ function broadcastStatus(status) {
   if (windowIsAlive()) mainWindow.webContents.send('dsh:status', status)
 }
 
+// ---------------------------------------------------------------- 联阵
+
+/**
+ * 联阵服务默认不创建：只有用户主动开阵（或 UI 查询状态）时才实例化。
+ * 实例本身在 standalone 状态下不监听任何端口。
+ */
+function ensureLanHost() {
+  if (lanHost) return lanHost
+  lanHost = new FormationHost({ logger: log, appVersion: app.getVersion() })
+  lanHost.on('status', (snapshot) => {
+    if (windowIsAlive()) mainWindow.webContents.send('lan:status', snapshot)
+  })
+  return lanHost
+}
+
 function attachServer(server) {
   server.on('status', (status) => {
     broadcastStatus(status)
@@ -280,6 +298,29 @@ function registerIpc() {
 
   ipcMain.handle('dsh:log-tail', (event) => (senderIsShell(event) ? (dshServer?.tail ?? []) : []))
 
+  ipcMain.handle('lan:status', (event) => (senderIsShell(event) ? ensureLanHost().snapshot() : null))
+
+  ipcMain.handle('lan:open', async (event, options) => {
+    if (!senderIsShell(event)) return null
+    try {
+      return { ok: true, ...(await ensureLanHost().open(options ?? {})) }
+    } catch (error) {
+      log(`开阵失败：${error.message}`)
+      return { ok: false, error: { code: 'open_failed', message: error.message } }
+    }
+  })
+
+  ipcMain.handle('lan:disband', async (event) => {
+    if (!senderIsShell(event)) return null
+    return { ok: true, ...(await ensureLanHost().stop()) }
+  })
+
+  ipcMain.handle('lan:kick', (event, memberId) => {
+    if (!senderIsShell(event)) return null
+    const result = ensureLanHost().kick(String(memberId ?? ''))
+    return { status: result.status, ...result.body }
+  })
+
   ipcMain.handle('shell:open-logs', async (event) => {
     if (!senderIsShell(event)) return false
     await shell.openPath(paths.logs)
@@ -357,9 +398,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', (event) => {
-  if (cleanupDone || !dshServer) return
+  const hosting = Boolean(lanHost && lanHost.state !== 'standalone')
+  if (cleanupDone || (!dshServer && !hosting)) return
   event.preventDefault()
-  stopDsh().finally(() => {
+  Promise.allSettled([stopDsh(), hosting ? lanHost.stop() : Promise.resolve()]).finally(() => {
     cleanupDone = true
     app.quit()
   })
@@ -474,6 +516,118 @@ async function probeBiyouPlugin() {
   return last
 }
 
+async function discoverRoomUdp(port, timeoutMs = 1500) {
+  if (!port) return null
+  return await new Promise((resolve) => {
+    const socket = createSocket('udp4')
+    let settled = false
+    let timer = null
+    const done = (value) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      try {
+        socket.close()
+      } catch {
+        /* 已关闭 */
+      }
+      resolve(value)
+    }
+    timer = setTimeout(() => done(null), timeoutMs)
+    socket.on('error', () => done(null))
+    socket.on('message', (data) => {
+      try {
+        done(JSON.parse(data.toString('utf8')))
+      } catch {
+        done(null)
+      }
+    })
+    socket.bind(0, '127.0.0.1', () => {
+      const packet = Buffer.from(JSON.stringify({ t: 'discover', v: 1 }), 'utf8')
+      socket.send(packet, port, '127.0.0.1', () => {})
+    })
+  })
+}
+
+/**
+ * S5 冒烟：默认单机 → 开阵 → HTTP 入阵/心跳 → UDP 发现 → 散阵 → 端口关闭。
+ * 这里不经过 preload，只验证主进程能完整拉起并回收联阵服务。
+ */
+async function probeLanHost() {
+  const host = ensureLanHost()
+  const before = host.snapshot()
+  const report = {
+    defaultState: before.state,
+    defaultRoom: before.room === null,
+    defaultEndpoints: before.endpoints === null,
+  }
+  let base = null
+  try {
+    const snapshot = await host.open({
+      name: '冒烟阵',
+      mode: 'open',
+      capacity: 2,
+      httpPort: 0,
+      discoveryPort: 0,
+      announceIntervalMs: 0,
+    })
+    base = `http://127.0.0.1:${snapshot.endpoints.http_port}`
+    const health = await fetch(`${base}/lan/v1/health`).then((response) => response.json())
+    const room = await fetch(`${base}/lan/v1/room`).then((response) => response.json())
+    const device = {
+      device_id: 'smoke-desktop',
+      name: '冒烟设备',
+      platform: 'smoke',
+      app_version: app.getVersion(),
+    }
+    const joined = await fetch(`${base}/lan/v1/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ protocol: 1, room_id: snapshot.room.room_id, device }),
+    }).then((response) => response.json())
+    const discovered = await discoverRoomUdp(snapshot.endpoints.discovery_port)
+
+    report.opened = {
+      state: snapshot.state,
+      httpPort: snapshot.endpoints.http_port,
+      discoveryPort: snapshot.endpoints.discovery_port,
+      health: health.ok === true,
+      roomId: room.room?.room_id === snapshot.room.room_id,
+      joined: joined.ok === true && joined.room?.players === 1,
+      discovered: discovered?.t === 'room' && discovered?.room_id === snapshot.room.room_id,
+    }
+    report.ok =
+      report.defaultState === 'standalone' &&
+      report.defaultRoom &&
+      report.defaultEndpoints &&
+      report.opened.state === 'hosting' &&
+      report.opened.health &&
+      report.opened.roomId &&
+      report.opened.joined &&
+      report.opened.discovered
+  } catch (error) {
+    report.error = error.message
+    report.ok = false
+  } finally {
+    await host.stop().catch((error) => log(`冒烟散阵失败：${error.message}`))
+  }
+
+  const after = host.snapshot()
+  report.afterState = after.state
+  report.afterRoom = after.room
+  let httpClosed = false
+  if (base) {
+    try {
+      await fetch(`${base}/lan/v1/health`, { signal: AbortSignal.timeout(500) })
+    } catch {
+      httpClosed = true
+    }
+  }
+  report.httpClosed = httpClosed
+  report.ok = Boolean(report.ok && after.state === 'standalone' && after.room === null && httpClosed)
+  return report
+}
+
 async function runSmoke(window, status) {
   const { writeFile } = await import('node:fs/promises')
   mkdirSync(paths.smokeDir, { recursive: true })
@@ -519,6 +673,9 @@ async function runSmoke(window, status) {
       report.dshView.localModelsOk = Boolean(biyou?.localModelsInBoot)
       if (!report.dshView.localModelsOk) report.ok = false
     }
+
+    report.lan = await probeLanHost()
+    if (!report.lan.ok) report.ok = false
   } catch (error) {
     report.captureError = error.message
   }

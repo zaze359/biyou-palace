@@ -541,6 +541,8 @@ standalone
 
 - 最小服务：[`scripts/lan_formation_server.py`](../scripts/lan_formation_server.py)
 - 可重复验收：[`scripts/lan_formation_acceptance.py`](../scripts/lan_formation_acceptance.py)
+- 桌面端正式实现：[`desktop/electron/lan-host/`](../desktop/electron/lan-host/)（Electron 主进程；UDP + HTTP/SSE，闭阵阵符用 Argon2id；mDNS 仍为 P1）
+- 桌面端集成测试：`cd desktop && npm run test:lan`
 
 ```bash
 python3 scripts/lan_formation_acceptance.py
@@ -552,7 +554,7 @@ python3 scripts/lan_formation_acceptance.py
 - 闭阵缺阵符、错阵符、正确阵符、阵满、协议不兼容、限速；
 - UDP `discover` → `room` 发现。
 
-参考实现当前用 PBKDF2 代替 Argon2id，且只实现 UDP 发现；这两项在正式桌面端/移动端实现中补齐。
+Python 参考实现用 PBKDF2 代替 Argon2id，且只实现 UDP 发现；桌面端已换 Argon2id，mDNS 仍在 P1 补齐。
 
 ## 十六、未决与后续
 

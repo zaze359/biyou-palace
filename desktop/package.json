@@ -28,9 +28,13 @@
     "check": "node scripts/check-env.mjs && node scripts/link-plugin.mjs --check",
     "plugin:link": "node scripts/link-plugin.mjs",
     "plugin:check": "node scripts/link-plugin.mjs --check",
-    "test:local-models": "node packages/biyou-local-models/test/unit/run.mjs && node packages/biyou-local-models/test/integration/run.mjs"
+    "test:local-models": "node packages/biyou-local-models/test/unit/run.mjs && node packages/biyou-local-models/test/integration/run.mjs",
+    "test:lan": "node --test electron/lan-host/test/lan-host.test.mjs"
   },
   "devDependencies": {
     "electron": "44.7.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0"
   }
 }

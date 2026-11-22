@@ -33,4 +33,13 @@ contextBridge.exposeInMainWorld('biyou', {
     openLogs: () => ipcRenderer.invoke('shell:open-logs'),
     devtools: () => ipcRenderer.send('shell:devtools'),
   },
+
+  lan: {
+    status: () => ipcRenderer.invoke('lan:status'),
+    /** options: { name, mode: 'open'|'closed', passcode, capacity } */
+    open: (options) => ipcRenderer.invoke('lan:open', options),
+    disband: () => ipcRenderer.invoke('lan:disband'),
+    kick: (memberId) => ipcRenderer.invoke('lan:kick', memberId),
+    onStatus: (callback) => subscribe('lan:status', callback),
+  },
 })

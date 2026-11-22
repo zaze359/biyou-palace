@@ -125,9 +125,35 @@ desktop/
 - 实测：`npm run smoke` 返回 `ok=true`，`biyou={"inBoot":true,"pill":true,"text":"碧游宫 · 就绪",
   "state":"connected","brandMarkCount":1,"brandName":"碧游宫"}`。
 
+### S5 · 已完成（2026-11-22）
+
+落地位置：`desktop/electron/lan-host/`，由 Electron 主进程持有，默认 standalone 不监听。
+
+| 文件 | 作用 |
+|---|---|
+| `index.js` | `FormationHost`：开阵/散阵、4022 起选端口、状态快照、退出清理 |
+| `room.js` | 房间状态机：成员/令牌/租约/封禁/限速/事件 |
+| `http.js` | `/lan/v1` HTTP/JSON + SSE；阵主接口仅回环 + host token |
+| `discovery.js` | UDP `4021` 公告 + `discover` 单播响应 |
+| `util.js` | Argon2id 阵符、令牌、私有地址判断、广播地址 |
+
+- 支持开放阵/闭阵；闭阵阵符 4–64 字符，只存 Argon2id 哈希（替代 Python 参考的 PBKDF2）。
+- 校验顺序、错误码、心跳 10s/租约 30s、踢人封禁、散阵广播均按契约。
+- 主进程新增 `lan:status/open/disband/kick` IPC 与 `biyou.lan` preload 白名单。
+- `npm run smoke` 新增 `report.lan`：默认 standalone → 开阵 → HTTP 入阵 → UDP 发现 → 散阵 → 端口关闭。
+
+实测：
+
+- `npm run test:lan` 9/9 通过（开放/闭阵、限速、踢人封禁、SSE、UDP、租约、端口顺延）。
+- `python3 scripts/lan_formation_acceptance.py` 3/3 通过（协议回归）。
+- `BIYOU_USER_DATA=/tmp/biyou-s5-smoke npm run smoke`：`ok=true`，
+  `lan={defaultState:"standalone", opened:{state:"hosting",health:true,roomId:true,joined:true,discovered:true}, afterState:"standalone", httpClosed:true}`。
+
+已知边界：mDNS 仍为 P1；租约过期只标 offline 并保留容量，任务回收待编排；开阵 UI 属 S6。
+
 ### 下一步
 
-S2：确认并配置 dsh 的 Ollama provider，补模型健康提示；不自研模型客户端。
+S6：开阵弹窗、成员列表、踢人/散阵、单机/联阵状态条。
 
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 

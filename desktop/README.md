@@ -1,6 +1,6 @@
-# 碧游宫桌面客户端 · S1 骨架
+# 碧游宫桌面客户端
 
-macOS / Windows 桌面客户端的第一层：**Electron 品牌壳 + dsh 运行时接入**。
+macOS / Windows 桌面客户端：**Electron 品牌壳 + dsh 运行时 + 本地模型 + 联阵服务**。
 默认单机自闭环，不广播、不监听联阵；用户主动「开阵」后才进入联阵模式（S5）。
 
 > 任务：`.trellis/tasks/11-21-desktop-client`（设计见同目录 `design.md` / `implement.md`）
@@ -34,10 +34,16 @@ desktop/
 │   ├── preload.cjs        渲染层唯一权力边界（sandbox + contextIsolation）
 │   ├── paths.js           userData 目录布局
 │   ├── versions.js        版本锁定单一事实来源
-│   └── dsh/
-│       ├── resolve-node.js  选 Node（锁定 → Electron → PATH）
-│       ├── provision.js     仓库 profile → userData（node_modules 用软链）
-│       └── server.js        dsh 子进程生命周期 + URL 解析 + 探活 + 进程组清理
+│   ├── dsh/
+│   │   ├── resolve-node.js  选 Node（锁定 → Electron → PATH）
+│   │   ├── provision.js     仓库 profile → userData（node_modules 用软链）
+│   │   └── server.js        dsh 子进程生命周期 + URL 解析 + 探活 + 进程组清理
+│   └── lan-host/          联阵服务（S5）：默认不启动，开阵才监听
+│       ├── index.js       FormationHost：开阵/散阵、端口选择、状态快照
+│       ├── room.js        房间状态机：成员、令牌、租约、封禁、限速
+│       ├── http.js        /lan/v1 HTTP/JSON + SSE
+│       ├── discovery.js   UDP 广播公告与 discover 响应
+│       └── util.js        常量、地址判断、Argon2id、令牌
 ├── ui/shell/              品牌壳：顶栏、状态、启动/失败/就绪三态
 ├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（品牌 / 状态浮层）
 ├── packages/biyou-local-models/ 本地模型插件（运行时 / GGUF / llama-server / provider）
@@ -234,6 +240,41 @@ node packages/biyou-local-models/test/integration/run.mjs
 → 崩溃重启 → 退出清理。真实 llama-server 已在 macOS x64 + Qwen2.5 0.5B 上手工验证；
 Windows 仍需真机跑一次。
 
+### 联阵服务（`electron/lan-host`，S5）
+
+默认单机时**不创建实例、不监听端口**。用户主动开阵后，主进程成为阵主/阵眼：
+
+```text
+FormationHost
+  ├─ HTTP/JSON  /lan/v1/{health,room,join,heartbeat,leave,events}
+  ├─ 阵主 API   /lan/v1/{members,members/:id/kick,disband}（仅回环 + X-Biyou-Host-Token）
+  ├─ UDP 发现   0.0.0.0:4021，每 2s 广播，响应 {"t":"discover","v":1}
+  ├─ 会话       开放阵/闭阵；闭阵阵符只存 Argon2id 哈希
+  └─ 租约       10s 心跳 / 30s TTL；过期标 offline，重新心跳可恢复
+```
+
+- HTTP 从 `4022` 起选空闲端口，冲突递增；实际端口写入发现报文 `port`。
+- 开放阵无阵符；闭阵 4–64 字符阵符，校验通过即入阵，无阵主逐次确认。
+- 入阵校验顺序：限速（IP+device，5 次/分钟）→ 协议 → 阵号/状态 → 容量 → 设备 → 封禁 → 阵符。
+- 踢人撤销令牌、本次阵封禁 `device_id`，被踢端通过 SSE 收到 `member.kicked` 后回单机。
+- 散阵广播 `room.closed`、停止 UDP 公告、关闭 SSE 与 HTTP；退出时同样清理。
+- 阵主令牌每次开阵随机生成，只存在主进程内，不写日志、不回 HTTP。
+
+渲染层通过 preload 白名单调用：`biyou.lan.status/open/disband/kick/onStatus`。
+开阵页与成员列表 UI 属 S6，本阶段只交付服务与 IPC。
+
+```bash
+npm run test:lan     # 9 个集成用例：开放/闭阵、限速、踢人、SSE、UDP、租约、端口顺延
+python3 scripts/lan_formation_acceptance.py   # 协议回归（Python 参考实现）
+npm run smoke        # Electron 内真实开阵 → 入阵 → UDP 发现 → 散阵 → 端口关闭
+```
+
+已知边界：
+
+- mDNS（`_biyou._tcp.local.`）仍为 P1；当前用 UDP 广播兜底，Android 无 mDNS 也能发现。
+- 租约过期只标 `offline` 并广播事件，成员仍占用容量；任务回收/重派要等编排接入。
+- 单机首版没有任务外壳，`member.offline` 目前只是协议事件。
+
 ## 五、数据与配置
 
 一切可写数据都在 userData（macOS：`~/Library/Application Support/biyou-desktop`），
@@ -276,6 +317,7 @@ Windows 仍需真机跑一次。
 | `npm run smoke:dsh` | dsh 接入无头冒烟（CI 可跑） |
 | `npm run smoke` | Electron 壳冒烟：截图 + 报告写到 `<userData>/smoke/` |
 | `npm run smoke:quit` | 验证「关窗 → 清理 dsh 子进程 → 无残留」 |
+| `npm run test:lan` | 联阵服务集成测试（HTTP/UDP/SSE/租约） |
 | `npm run icon` | 重新生成图标占位 |
 
 启动器 `scripts/dev.mjs` 会剔除 `ELECTRON_RUN_AS_NODE` 与 `NODE_OPTIONS` 再拉起 Electron：
@@ -285,7 +327,7 @@ Windows 仍需真机跑一次。
 
 受限环境（容器 / CI / 无签名沙箱，Chromium sandbox 起不来）设 `BIYOU_NO_SANDBOX=1` 即可追加 `--no-sandbox`。
 
-## 七、S1 验收对照
+## 七、阶段验收对照
 
 - [x] `desktop/` 骨架：package.json、主进程、preload、渲染入口
 - [x] dsh / Electron / Node 三处版本锁定 + `npm run check` 交叉校验
@@ -293,8 +335,10 @@ Windows 仍需真机跑一次。
 - [x] 单实例锁、窗口生命周期、退出清理（进程组）
 - [x] 品牌壳：应用名、图标占位、首页入口、运行时状态
 - [x] 冒烟可复现：`smoke:dsh` 全绿、`smoke` 出截图/报告、`smoke:quit` 无残留进程
+- [x] S5 联阵服务：默认不监听；开放/闭阵、UDP 发现、心跳租约、踢人、散阵、SSE
+- [ ] 开阵页 / 成员列表 / 踢人/散阵 UI → S6
 - [ ] 打包为 `.app` / Windows 安装包 → S8
-- [ ] 观星台 / 功德殿 / 开阵页 → S3 / S5 / S6
+- [ ] 观星台 / 功德殿 → 后置
 
 ## 八、已知限制
 
@@ -306,6 +350,8 @@ Windows 仍需真机跑一次。
 - 首次启动 dsh 需要模型凭据；`~/.dsh` 的既有登录不会自动复用（用独立 DSH_HOME）。
 - Windows 的 Node 自动下载未实现，开发时回退 Electron 内置 Node 即可。
 - 运行时依赖约 1.2 GB（dsh 的 web bundle 全家桶），S8 打包时需要裁剪。
+- 联阵 mDNS 未实现（P1），当前只有 UDP 广播发现；开阵 UI 未实现（S6）。
+- 联阵配置不持久化：重启后一律回单机，需要用户重新开阵。
 
 ## 九、视觉规范（以 dsh 为准）
 
