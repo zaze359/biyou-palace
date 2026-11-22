@@ -23,6 +23,6 @@
   ],
   "parent": "11-21-biyou-superagent",
   "relatedFiles": [],
-  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。D2 已完成：品牌替换 + 状态 pill 接连接状态，冒烟 biyouOk=true。子任务 11-22-local-models-plugin 已交付：内置 llama.cpp 运行时、GGUF 下载/导入、llama-server 托管、biyou-local provider 与设置页；macOS x64 真机通过，Windows 真机待补。S5 已完成：electron/lan-host 提供 UDP 发现 + HTTP/SSE 联阵服务，开放/闭阵、心跳租约、踢人、散阵；test:lan 9/9、Python 验收 3/3、Electron 冒烟 lan.ok=true。S6 已完成：壳内联阵入口、开阵表单、成员列表、踢人/散阵、单机/阵眼状态条与 dsh 视图让位；smoke.shell.ok=true。下一步 S7 健壮性与退出。",
+  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。D2 已完成：品牌替换 + 状态 pill 接连接状态，冒烟 biyouOk=true。子任务 11-22-local-models-plugin 已交付：内置 llama.cpp 运行时、GGUF 下载/导入、llama-server 托管、biyou-local provider 与设置页；macOS x64 真机通过，Windows 真机待补。S5 已完成：electron/lan-host 提供 UDP 发现 + HTTP/SSE 联阵服务，开放/闭阵、心跳租约、踢人、散阵；test:lan 9/9、Python 验收 3/3、Electron 冒烟 lan.ok=true。S6 已完成：壳内联阵入口、开阵表单、成员列表、踢人/散阵、单机/阵眼状态条与 dsh 视图让位；smoke.shell.ok=true。S7 已完成：日志脱敏（token 不落盘）、READY 后崩溃受限自动恢复（≤2 次）、test:s7 4/4、无残留。S8 已完成：electron-builder 产出 macOS 未签名 .app + .zip + build-manifest.json（SHA-256）；Windows NSIS 配置就绪；dmg 因沙箱 ditto 权限暂关。已向 11-21-client-packaging 交接 CI 矩阵与打包后启动冒烟。剩余：D5 自建壳退场（ui/shell 三个业务导航按归属标准搬 slot 或划为本体）、打包后 GUI 启动需真机人工验收。",
   "meta": {}
 }
