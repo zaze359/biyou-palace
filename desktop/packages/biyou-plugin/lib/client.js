@@ -69,8 +69,8 @@ window.__ModuleLoader__.load({
     /**
      * 浏览器插件体：只注册自己那一格，不替换、不复制上游的 layout / sidebar / conversation。
      *
-     * 侧栏品牌行（`sidebar.brand.mark` / `brand.name`）故意不占用：这里保留 dsh/DeepSeek
-     * 默认外观。碧游宫品牌由 Electron 壳顶栏承载，不在 dsh 侧栏重复一套。
+     * 侧栏品牌行（`sidebar.brand.mark` / `brand.name`）故意不占用：dsh-web-app 的
+     * ui-brand-official 会显示 deepseek 官方发行版字标。碧游宫品牌由 Electron 壳顶栏承载。
      * @param {import('@deepseek-ai/cordis').Context} ctx - 客户端根 context。
      */
     function apply(ctx) {
@@ -81,7 +81,7 @@ window.__ModuleLoader__.load({
         ),
       );
 
-      // 不注册 sidebar.brand.* —— 保留 dsh 默认品牌（见 apply 注释）。
+      // 不注册 sidebar.brand.* —— 由 dsh-web-app 的 ui-brand-official 占用（见 apply 注释）。
     }
 
     const inject = ["slots", "connection"];

@@ -511,7 +511,11 @@ async function waitForDshViewLoad(timeoutMs = 45_000) {
 
 /**
  * 冒烟探针：碧游宫插件到底有没有被装进浏览器 roster、pill 有没有真的渲染出来。
- * 侧栏品牌行留给 dsh 默认外观，因此这里同时断言没有占用 sidebar.brand.*。
+ *
+ * 侧栏品牌行只验证两件事：
+ * 1. 碧游宫插件没有占用 `sidebar.brand.*`；
+ * 2. dsh-web-app 自带的 ui-brand-official 真的渲染出 deepseek 官方字标，
+ *    而不是 sidebar 的 fallback「DSH 本地构建」。
  */
 async function probeBiyouPlugin() {
   const script = `(() => {
@@ -520,14 +524,24 @@ async function probeBiyouPlugin() {
     const pill = document.querySelector('[data-biyou="status"]')
     const marks = document.querySelectorAll('[data-biyou="brand-mark"]')
     const name = document.querySelector('[data-biyou="brand-name"]')
+    const brandRow = document.querySelector('[class*="logoRow"]')
+    const brandIdentity = brandRow?.querySelector('[class*="brandIdentity"]') ?? null
+    const brandMarkSvg = brandIdentity?.querySelector('[class*="brandMark"] svg') ?? null
+    const brandNameSvg = brandIdentity?.querySelector('[class*="brandName"] svg') ?? null
+    const brandNameViewBox = brandNameSvg?.getAttribute('viewBox') ?? null
     return {
       inBoot: boot.includes('@biyou/dsh-plugin'),
       localModelsInBoot: boot.includes('@biyou/dsh-local-models'),
-      pill: Boolean(pill),
+      brandOfficialInBoot: boot.includes('dsh-client-ui-brand-official'),
       text: pill ? pill.textContent : null,
       state: pill ? pill.getAttribute('data-state') : null,
       brandMarkCount: marks.length,
       brandName: name ? name.textContent : null,
+      officialMark: Boolean(brandMarkSvg),
+      pill: Boolean(pill),
+      // 官方 BrandWordmark 的 viewBox 固定为 26 0 156 24（不含鱼标的字标点）。
+      officialWordmark: brandNameViewBox === '26 0 156 24',
+      localBuildFallback: (brandIdentity?.textContent ?? '').includes('本地构建'),
     }
   })()`
 
@@ -840,9 +854,13 @@ async function runSmoke(window, status) {
         biyou?.inBoot &&
           biyou.pill &&
           biyou.state === 'connected' &&
-          // 侧栏品牌留给 dsh 默认外观：两个 slot 都不应被碧游宫占用
+          // 碧游宫不占用侧栏品牌位；dsh-web-app 的官方品牌 occupant 必须真的上屏。
           biyou.brandMarkCount === 0 &&
-          biyou.brandName === null,
+          biyou.brandName === null &&
+          biyou.brandOfficialInBoot &&
+          biyou.officialMark &&
+          biyou.officialWordmark &&
+          !biyou.localBuildFallback,
       )
       if (!report.dshView.biyouOk) report.ok = false
       // 本地模型插件的 browser half 也必须进 roster；页面渲染由设置页人工验收。

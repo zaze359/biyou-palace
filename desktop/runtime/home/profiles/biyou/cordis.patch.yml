@@ -4,6 +4,12 @@
 # 这里只放「碧游宫自己」的行。上游 bundle 的默认组合不动；
 # 需要覆盖上游行时，务必在注释里写清为什么。
 
+# ── 侧栏品牌 ───────────────────────────────────────────────────────────────
+# dsh-web-app 已登记 `ui-brand-official`；这里显式启用，避免 profile 状态残留
+# 把它关掉后侧栏 fallback 成「DSH 本地构建」。碧游宫插件本身不占用这两个 slot。
+- id: ui-brand-official
+  disabled: false
+
 # ── 碧游宫客户端插件 ───────────────────────────────────────────────────────
 # 与 dsh-web-app 登记 `ui-open-in-app` 的方式一致：一行装下 node half 与
 # browser half —— node half 进 Loader（apply 为空），browser half 由
