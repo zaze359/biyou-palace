@@ -130,6 +130,12 @@ desktop/
   `brandMarkCount === 0`、`brandName === null`（碧游宫未占用），并正向检查
   `brandOfficialInBoot`、`officialMark`、`officialWordmark`、`localBuildFallback === false`
   （官方字标确实上屏）。`dshView.biyouOk` 为总判定。
+- Dock / 菜单栏应用名：macOS 取 app bundle 的 `Info.plist` 名，非运行时 `app.setName()`。
+  开发态直跑 `node_modules/electron/dist/Electron.app`（bundle 名 Electron），新增幂等脚本
+  `scripts/patch-electron-name.mjs` 由 `dev.mjs` 启动时调用，把 `CFBundleName` /
+  `CFBundleDisplayName` 改成「碧游宫」并留 `.biyou-bak`；打包产物由 electron-builder 按
+  `productName` 生成，不受影响。验证：`lsappinfo info -only name 碧游宫` 返回
+  `LSDisplayName=碧游宫`，截图菜单栏左侧显示「碧游宫」。
 
 ### S5 · 已完成（2026-11-22）
 

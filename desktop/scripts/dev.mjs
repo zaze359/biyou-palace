@@ -28,6 +28,11 @@ if (!skipCheck) {
   if (check.status !== 0) process.exit(check.status ?? 1)
 }
 
+// 开发态把 Electron.app 的 bundle 名改成产品名，否则 macOS Dock 显示 "Electron"。
+// 幂等，打包产物不受影响；失败只告警，不影响启动。
+const patch = spawnSync(process.execPath, [join(DESKTOP_ROOT, 'scripts', 'patch-electron-name.mjs')], { stdio: 'inherit' })
+if (patch.status !== 0) console.error('! Dock 应用名修正失败，开发态 Dock 可能显示 Electron')
+
 let electronPath
 try {
   electronPath = require('electron')

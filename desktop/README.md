@@ -367,6 +367,7 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 | `npm run test:lan` | 联阵服务集成测试（HTTP/UDP/SSE/租约） |
 | `npm run test:s7` | 健壮性单测（日志脱敏 / 崩溃恢复 / 无残留） |
 | `npm run icon` | 重新生成图标占位 |
+| `scripts/patch-electron-name.mjs` | 开发态把 Electron.app 的 bundle 名改成「碧游宫」（dev 启动器自动调用，幂等） |
 
 启动器 `scripts/dev.mjs` 会剔除 `ELECTRON_RUN_AS_NODE` 与 `NODE_OPTIONS` 再拉起 Electron：
 
@@ -374,6 +375,12 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 - 后者里的 `--require` 垫片（沙箱、APM）会污染主进程，也会通过环境继承搞坏 dsh 的原子写。
 
 受限环境（容器 / CI / 无签名沙箱，Chromium sandbox 起不来）设 `BIYOU_NO_SANDBOX=1` 即可追加 `--no-sandbox`。
+
+**开发态 Dock 应用名**：macOS Dock / 菜单栏显示的名字取自 app bundle 的 `Info.plist`，不是运行时的
+`app.setName()`。开发模式直跑 `node_modules/electron/dist/Electron.app`，其 bundle 名默认 "Electron"，
+因此启动器会先跑 `scripts/patch-electron-name.mjs`，幂等地把 `CFBundleName` / `CFBundleDisplayName`
+改成 `productName`（碧游宫），并留一份 `Info.plist.biyou-bak` 备份。打包产物由 electron-builder 按
+`productName` 生成，不受此脚本影响。`npm install` 重装 electron 会覆盖 plist，下次 `npm run dev` 自动重打补丁。
 
 ## 六·五、打包（S8）
 
