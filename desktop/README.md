@@ -39,7 +39,8 @@ desktop/
 │       ├── provision.js     仓库 profile → userData（node_modules 用软链）
 │       └── server.js        dsh 子进程生命周期 + URL 解析 + 探活 + 进程组清理
 ├── ui/shell/              品牌壳：顶栏、状态、启动/失败/就绪三态
-├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（品牌 / 观星台 / 功德殿 / 状态浮层）
+├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（品牌 / 状态浮层）
+├── packages/biyou-local-models/ 本地模型插件（运行时 / GGUF / llama-server / provider）
 ├── runtime/home/profiles/biyou/   dsh profile 模板（bundles + 补丁层）
 ├── assets/
 │   ├── icon.png             应用图标（写实青萍剑 logo；npm run icon 重生成）
@@ -188,7 +189,50 @@ npm run plugin:check     # 只校验链接是否指向正确
 `dshView.biyou` 至少包含 `{ inBoot: true, pill: true, state: "connected",
 brandMarkCount: 1, brandName: "碧游宫" }`。`inBoot` 证明进了 `window.__DSH_BOOT__`
 （browser roster），`pill`/`brandMarkCount` 证明 occupant 真的渲染上屏，
-`brandName` 证明侧栏产品名已被替换。
+`brandName` 证明侧栏产品名已被替换。`dshView.localModelsOk=true` 证明本地模型插件的
+browser half 也进了 roster（设置页具体渲染仍需人工看一次）。
+
+### 本地模型插件（`packages/biyou-local-models`）
+
+设置页入口：**设置 → 插件 → 本地模型**（slot `settings.plugins.tab`，id
+`biyou.local-models`）。Host half 与 Browser half 装在同一个 Cordis row 里：
+
+```text
+Host half（lib/index.js）
+  ├─ RuntimeManager   固定清单 → 下载 → SHA-256 → 解压 → 激活
+  ├─ ModelManager     精选目录 / GGUF 导入 / 分片完整性 / registry
+  ├─ Supervisor       一个 llama-server router（preset + 按需加载 + 空闲卸载 + 退避重启）
+  ├─ LocalProvider    ctx.llm.registerAdapter(['biyou-local'], adapter)
+  └─ Bridge           /api/biyou-local/{status,action}（同源 + 白名单 + 256KB 上限）
+
+Browser half（lib/client.js）
+  └─ Runtime / Models / Status 三区，2s 轮询，不直接碰 Node/文件系统
+```
+
+- 运行时固定在 `lib/runtime/manifest.json`：llama.cpp `b12620`，macOS x64/arm64
+  （Metal）与 Windows x64（CPU/Vulkan/CUDA）；不抓 latest，不支持组合直接拒绝。
+- 模型固定在 `lib/runtime/catalog.json`：Qwen3 8B / 4B / 1.7B 的 Q4_K_M，记录
+  revision、sha256、上下文、内存估算与许可证；下载默认走 Hugging Face，可在
+  `cordis.patch.yml` 的插件 config 里配 `mirror`。
+- 服务用 router 模式：`--models-preset` 描述已安装模型，模型第一次请求时加载，
+  空闲 15 分钟 `/models/unload`；崩溃按 1/5/15/60 秒退避；退出/热重载清理进程组。
+- API key 随机生成在 `<DSH_HOME>/local-models/state/.api_key`（0600），只通过
+  `--api-key-file` 传给 router，不写日志、不回前端。
+- 数据目录：`<userData>/dsh/local-models/`（runtimes / models / cache / state / logs）。
+- 导入本地 `.gguf` 只建符号链接（Windows 无权限时退硬链接），不复制原文件；
+  文件头读取失败仍可入库，但标注 unverified。
+
+```bash
+cd desktop
+node packages/biyou-local-models/test/unit/run.mjs
+node packages/biyou-local-models/test/integration/run.mjs
+# 或：npm run test:local-models
+```
+
+单元测试覆盖清单、平台选择、下载/续传/校验、GGUF 头、分片完整性、SSE 解析与去敏；
+集成测试用假 runtime + 假 llama-server 跑通导入 → 启动 → 对话/工具调用 → 空闲卸载
+→ 崩溃重启 → 退出清理。真实 llama-server 已在 macOS x64 + Qwen2.5 0.5B 上手工验证；
+Windows 仍需真机跑一次。
 
 ## 五、数据与配置
 
@@ -255,8 +299,8 @@ brandMarkCount: 1, brandName: "碧游宫" }`。`inBoot` 证明进了 `window.__D
 ## 八、已知限制
 
 - 未做签名/公证、自动更新（V2.0 非目标）。
-- `cordis.patch.yml` 目前为空：模型入口、品牌人设、Agent Teams 禁用项在 S2/S4 按需追加。
-- dsh UI 首屏是「请选择模型」：S1 只保证界面起得来，模型能力见 S2（Ollama）。
+- `cordis.patch.yml` 只放碧游宫自己的两行（品牌插件、本地模型插件）；模型入口、品牌人设、Agent Teams 禁用项按需追加。
+- dsh UI 首屏是「请选择模型」：本地模型插件安装并加载模型后会出现在选择器；未安装时仍需云端凭据。
 - 主题只有 `BIYOU_THEME` 环境变量这一个开关，且需重启生效；设置页里的主题切换留到 S6。
 - 冷启动 5~10 秒（dsh 要加载几百个 ESM 插件）；`dsh.log` 有完整启动日志。
 - 首次启动 dsh 需要模型凭据；`~/.dsh` 的既有登录不会自动复用（用独立 DSH_HOME）。

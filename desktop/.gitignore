@@ -2,6 +2,7 @@
 node_modules/
 .runtime/
 smoke/
+.tmp-userdata/
 
 # ---- Electron 构建产物（S8）----
 dist/

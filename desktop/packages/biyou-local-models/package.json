@@ -1,0 +1,31 @@
+{
+  "name": "@biyou/dsh-local-models",
+  "version": "0.1.0",
+  "private": true,
+  "description": "碧游宫本地模型插件：托管 llama.cpp 运行时与 GGUF 模型，并注册为 dsh 的本地 LLM provider",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "test"
+  ],
+  "scripts": {
+    "test": "node test/unit/run.mjs && node test/integration/run.mjs",
+    "test:unit": "node test/unit/run.mjs",
+    "test:integration": "node test/integration/run.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}

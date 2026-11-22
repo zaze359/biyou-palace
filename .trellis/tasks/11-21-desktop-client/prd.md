@@ -2,14 +2,14 @@
 
 ## Goal
 
-交付 macOS / Windows 桌面客户端：默认单机自闭环，可主动开阵担任阵眼；提供观星台、任务板、本地模型与开阵/成员管理；取代旧“聊天客户端”定位。
+交付 macOS / Windows 桌面客户端：默认单机自闭环，可主动开阵担任阵眼；提供本地模型、开阵/成员管理与品牌状态；取代旧“聊天客户端”定位。
 
 ## Scope
 
 - 基于 dsh 的 Electron 壳，固定 dsh / Electron / Node 版本。
 - 单机：直接使用 dsh 原生 Agent 完成目标；不自建 agent loop、任务外壳或本地任务板。
 - 联阵：默认不广播；用户点「开阵」后选择开放阵/闭阵，成为阵主。
-- 本地模型：优先接 Ollama（经 dsh provider 配置）；内置 llama.cpp 作为后续选项。
+- 本地模型：由独立插件 `@biyou/dsh-local-models` 提供内置 llama.cpp 运行时与 GGUF 下载/托管，注册为 dsh provider；不再以 Ollama 作为主路径。
 - 开阵弹窗、阵列表（寻阵）、成员列表、踢人、散阵。
 - 品牌与状态：dsh 插件提供品牌位与运行状态；观星台/功德殿后置。
 
@@ -35,6 +35,7 @@
 ## Dependencies
 
 - `11-21-lan-formation`
+- `11-22-local-models-plugin`（本地模型插件）
 - 后续（任务治理/联阵扩展）：`11-21-agent-contracts`、`11-21-taskboard-cost`
 
 ## Out of Scope

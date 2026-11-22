@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Host half 的运行时、进程、存储与错误处理约定"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "设置页、dsh slot 与主题 token 约定"}
+{"file": ".trellis/tasks/11-22-local-models-plugin/research/hermes-and-dsh-plugins.md", "reason": "Hermes 实现与现有 DSH 插件差距调研"}

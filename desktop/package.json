@@ -27,7 +27,8 @@
     "icon": "node scripts/render-icon.mjs",
     "check": "node scripts/check-env.mjs && node scripts/link-plugin.mjs --check",
     "plugin:link": "node scripts/link-plugin.mjs",
-    "plugin:check": "node scripts/link-plugin.mjs --check"
+    "plugin:check": "node scripts/link-plugin.mjs --check",
+    "test:local-models": "node packages/biyou-local-models/test/unit/run.mjs && node packages/biyou-local-models/test/integration/run.mjs"
   },
   "devDependencies": {
     "electron": "44.7.0"

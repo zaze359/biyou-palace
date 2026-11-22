@@ -8,9 +8,16 @@
 # 与 dsh-web-app 登记 `ui-open-in-app` 的方式一致：一行装下 node half 与
 # browser half —— node half 进 Loader（apply 为空），browser half 由
 # @deepseek-ai/dsh-client-modules 扫 `dsh.client` 声明后进 window.__DSH_BOOT__。
-# 包本体来自 desktop/packages/biyou-plugin，由 scripts/link-plugin.mjs 链进
-# profile 的 node_modules。
+# 包本体来自 desktop/packages/，由 scripts/link-plugin.mjs 链进 profile 的
+# node_modules。
 - insert:
     - id: ui-biyou
       name: '@biyou/dsh-plugin'
       config: {}
+    # 本地模型：Host half 管运行时/模型/llama-server/provider，browser half 注册
+    # 「设置 → 插件 → 本地模型」。运行时与模型都按需下载，不进安装包。
+    - id: ui-biyou-local-models
+      name: '@biyou/dsh-local-models'
+      config:
+        # 国内网络直连 huggingface.co 常被阻断；默认走镜像，海外用户可删掉此行。
+        mirror: https://hf-mirror.com

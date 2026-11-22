@@ -18,9 +18,11 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "11-22-local-models-plugin"
+  ],
   "parent": "11-21-biyou-superagent",
   "relatedFiles": [],
-  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。D2 已完成：品牌替换 + 状态 pill 接连接状态，冒烟 biyouOk=true。",
+  "notes": "2026-11-22 决策：单机首版精简为纯 dsh，不实现任务外壳/任务板/香火账本/观星台/功德殿面板；这些后置，S3/S4 移出 V2.0-A。D2 已完成：品牌替换 + 状态 pill 接连接状态，冒烟 biyouOk=true。子任务 11-22-local-models-plugin 已交付：内置 llama.cpp 运行时、GGUF 下载/导入、llama-server 托管、biyou-local provider 与设置页；macOS x64 真机通过，Windows 真机待补。下一步 S5 联阵。",
   "meta": {}
 }

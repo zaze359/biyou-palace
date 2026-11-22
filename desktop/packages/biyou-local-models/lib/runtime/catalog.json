@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "provider": "biyou-local",
+  "models": [
+    {
+      "id": "qwen3-8b-q4km",
+      "display_name": "Qwen3 8B Q4_K_M",
+      "description": "8B 通用模型，工具调用能力好；40K 原生上下文，插件默认以 YaRN 扩到 64K。",
+      "repo": "unsloth/Qwen3-8B-GGUF",
+      "revision": "a6adef130ffb23ddaf1a62fec9dced968c9bc482",
+      "license": "apache-2.0",
+      "tool_calling": true,
+      "context": {
+        "train": 40960,
+        "default": 65536,
+        "max": 131072,
+        "yarn": true
+      },
+      "memory": {
+        "weights_bytes": 5027784512,
+        "kv_bytes_per_1k_ctx": 150994944,
+        "compute_bytes": 536870912,
+        "overhead_bytes": 402653184
+      },
+      "files": [
+        {
+          "path": "Qwen3-8B-Q4_K_M.gguf",
+          "size_bytes": 5027784512,
+          "sha256": "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-4b-q4km",
+      "display_name": "Qwen3 4B Q4_K_M",
+      "description": "4B 轻量模型，16GB 内存机器也能跑 64K 上下文，支持工具调用。",
+      "repo": "unsloth/Qwen3-4B-GGUF",
+      "revision": "22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
+      "license": "apache-2.0",
+      "tool_calling": true,
+      "context": {
+        "train": 40960,
+        "default": 65536,
+        "max": 131072,
+        "yarn": true
+      },
+      "memory": {
+        "weights_bytes": 2497281312,
+        "kv_bytes_per_1k_ctx": 150994944,
+        "compute_bytes": 402653184,
+        "overhead_bytes": 402653184
+      },
+      "files": [
+        {
+          "path": "Qwen3-4B-Q4_K_M.gguf",
+          "size_bytes": 2497281312,
+          "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-1.7b-q4km",
+      "display_name": "Qwen3 1.7B Q4_K_M",
+      "description": "最小可用档，适合低配机器或只想试一下本地推理；同样支持工具调用。",
+      "repo": "unsloth/Qwen3-1.7B-GGUF",
+      "revision": "d7f544eead698dbd1f15126ef60b45a1e1933222",
+      "license": "apache-2.0",
+      "tool_calling": true,
+      "context": {
+        "train": 40960,
+        "default": 65536,
+        "max": 131072,
+        "yarn": true
+      },
+      "memory": {
+        "weights_bytes": 1107409472,
+        "kv_bytes_per_1k_ctx": 117440512,
+        "compute_bytes": 268435456,
+        "overhead_bytes": 402653184
+      },
+      "files": [
+        {
+          "path": "Qwen3-1.7B-Q4_K_M.gguf",
+          "size_bytes": 1107409472,
+          "sha256": "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897"
+        }
+      ]
+    }
+  ]
+}

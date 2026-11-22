@@ -455,6 +455,7 @@ async function probeBiyouPlugin() {
     const name = document.querySelector('[data-biyou="brand-name"]')
     return {
       inBoot: boot.includes('@biyou/dsh-plugin'),
+      localModelsInBoot: boot.includes('@biyou/dsh-local-models'),
       pill: Boolean(pill),
       text: pill ? pill.textContent : null,
       state: pill ? pill.getAttribute('data-state') : null,
@@ -514,6 +515,9 @@ async function runSmoke(window, status) {
           biyou.brandName === '碧游宫',
       )
       if (!report.dshView.biyouOk) report.ok = false
+      // 本地模型插件的 browser half 也必须进 roster；页面渲染由设置页人工验收。
+      report.dshView.localModelsOk = Boolean(biyou?.localModelsInBoot)
+      if (!report.dshView.localModelsOk) report.ok = false
     }
   } catch (error) {
     report.captureError = error.message

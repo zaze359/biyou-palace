@@ -1,0 +1,33 @@
+{
+  "id": "local-models-plugin",
+  "name": "local-models-plugin",
+  "title": "碧游宫 V2 · 本地模型插件（dsh-local-models）",
+  "description": "为桌面客户端提供 dsh 本地模型插件：按平台下载 llama.cpp 运行时，管理 GGUF 模型下载/导入/校验，托管 llama-server 生命周期，并通过 ctx.llm.registerAdapter() 注册为 dsh 本地模型 provider。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "desktop",
+  "package": null,
+  "priority": "P1",
+  "creator": "zaze",
+  "assignee": "zaze",
+  "createdAt": "2026-11-22",
+  "completedAt": null,
+  "branch": "main",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "11-21-desktop-client",
+  "relatedFiles": [
+    "desktop/packages/biyou-local-models/lib/index.js",
+    "desktop/packages/biyou-local-models/lib/client.js",
+    "desktop/packages/biyou-local-models/lib/runtime/supervisor.js",
+    "desktop/packages/biyou-local-models/lib/runtime/provider.js",
+    "desktop/packages/biyou-local-models/lib/runtime/bridge.js",
+    "desktop/runtime/home/profiles/biyou/cordis.patch.yml"
+  ],
+  "notes": "2026-11-22 实现完成：@biyou/dsh-local-models 独立插件；运行时分发/下载/校验/解压/激活、Qwen3 目录、GGUF 导入、router 式 llama-server 托管、biyou-local provider、同源 bridge 与设置页均已落地。复核复跑：单元 12/12、集成 1/1、check、smoke:dsh、smoke（ok=true，localModelsOk=true）全通过；macOS x64 真实运行时+真实模型+工具调用+bridge 全链路通过。复核时修复 server.start / server.stop 只返回状态、未真正启停的问题；Windows CPU/Vulkan 安装包 URL、SHA-256 与二进制名已核对，但未在 Windows 真机执行；本机直连 HuggingFace 失败，桌面 profile 已默认 hf-mirror。待补：Windows 真机验证、设置页图形截图验收。",
+  "meta": {}
+}
