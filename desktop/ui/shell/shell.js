@@ -120,6 +120,13 @@ function renderDsh(status) {
   if (state === 'failed') {
     showPanel('failed')
     setSteps('runtime')
+    // S7：自动恢复中的 FAILED 是暂态，显示恢复提示而不是错误堆栈
+    if (status.recovering) {
+      els.failedMessage.textContent = status.error ?? 'dsh 意外退出，正在恢复…'
+      els.failedTail.classList.add('is-hidden')
+      els.restart.disabled = true
+      return
+    }
     els.failedMessage.textContent = status.error ?? '未知错误'
     els.failedTail.textContent = (status.tail ?? []).slice(-12).join('\n') || '（无输出，详见 dsh.log）'
     els.failedTail.classList.toggle('is-hidden', !(status.tail ?? []).length)

@@ -170,6 +170,25 @@ desktop/
 
 S7：健壮性与退出（异常恢复、错误路径、日志脱敏、无残留进程）。
 
+### S7 · 健壮性与退出 · 已完成（2026-11-22）
+
+- **日志脱敏**：新增 `electron/dsh/redact.js`；DshServer 的 `#pushTail` / `#writeLog` 与
+  主进程 `log()` 统一打码 URL `token` / `api_key` / `password` / `Bearer` 值。冒烟实测
+  `dsh.log` 只留 `?token=***`，无明文凭据；`report.json` 与 `SMOKE` stdout 里的
+  `status.url` 也打码（加载视图仍用原始值，不受影响）。
+- **崩溃自动恢复**：DshServer 加 `autoRecover`（默认 false，主进程显式开）、
+  `maxRecoverAttempts=2`、`recoverDelayMs=1200`、`probeTimeoutMs=20000`（原先探活写死 20s，
+  现在可配置）。只有 **READY 后**意外退出才重拉；STARTING 阶段失败不重试，避免坏 profile
+  死循环。恢复期间状态为 `FAILED + recovering`，壳显示「正在恢复」并隐藏旧视图，
+  重拉 READY 后重新 loadURL。
+- **单元测试**：`electron/dsh/test/s7.test.mjs`（`npm run test:s7`）4/4 通过——脱敏、
+  READY 后崩溃受限重拉、启动期失败不恢复、主动 stop 不恢复。用假 dsh CLI（真 HTTP 服务）
+  模拟，无需真实运行时。
+- **回归**：`npm run smoke:dsh` 8/8、`npm run smoke` ok=true（biyouOk / localModelsOk /
+  shell / lan 全绿），无残留进程。
+
+下一步：**S8 打包交接** → `11-21-client-packaging`。
+
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 
 结论已写入 `design.md`「呈现路线」一节，这里只记执行要点与已核实的依据：

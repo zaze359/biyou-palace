@@ -360,6 +360,7 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 | `npm run smoke` | Electron 壳冒烟：截图 + 报告写到 `<userData>/smoke/` |
 | `npm run smoke:quit` | 验证「关窗 → 清理 dsh 子进程 → 无残留」 |
 | `npm run test:lan` | 联阵服务集成测试（HTTP/UDP/SSE/租约） |
+| `npm run test:s7` | 健壮性单测（日志脱敏 / 崩溃恢复 / 无残留） |
 | `npm run icon` | 重新生成图标占位 |
 
 启动器 `scripts/dev.mjs` 会剔除 `ELECTRON_RUN_AS_NODE` 与 `NODE_OPTIONS` 再拉起 Electron：
@@ -379,6 +380,7 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 - [x] 冒烟可复现：`smoke:dsh` 全绿、`smoke` 出截图/报告、`smoke:quit` 无残留进程
 - [x] S5 联阵服务：默认不监听；开放/闭阵、UDP 发现、心跳租约、踢人、散阵、SSE
 - [x] S6 开阵页 / 成员列表 / 踢人/散阵 / 单机/阵眼状态条
+- [x] S7 健壮性：日志脱敏、崩溃自动恢复（≤2 次）、无残留进程；`test:s7` 4/4
 - [ ] 打包为 `.app` / Windows 安装包 → S8
 - [ ] 观星台 / 功德殿 → 后置
 
@@ -394,6 +396,7 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 - 运行时依赖约 1.2 GB（dsh 的 web bundle 全家桶），S8 打包时需要裁剪。
 - 联阵 mDNS 未实现（P1），当前只有 UDP 广播发现。
 - 联阵配置不持久化：重启后一律回单机，需要用户重新开阵。
+- dsh 在 READY 后崩溃会自动重拉最多 2 次（1.2 秒退避）；启动阶段失败不重试，需手动点「重试启动」。日志与冒烟报告中的 token 一律打码。
 
 ## 九、视觉规范（以 dsh 为准）
 

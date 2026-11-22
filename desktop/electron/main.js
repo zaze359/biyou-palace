@@ -16,6 +16,7 @@ import { PINNED } from './versions.js'
 import { resolveNode } from './dsh/resolve-node.js'
 import { provisionProfile } from './dsh/provision.js'
 import { DSH_STATE, DshServer } from './dsh/server.js'
+import { redactSecrets } from './dsh/redact.js'
 import { FormationHost } from './lan-host/index.js'
 
 const IS_DEV = !app.isPackaged
@@ -47,7 +48,7 @@ let dshVisible = true
 // ---------------------------------------------------------------- 日志
 
 function log(message) {
-  const line = `${new Date().toISOString()} [main] ${message}\n`
+  const line = redactSecrets(`${new Date().toISOString()} [main] ${message}\n`)
   process.stdout.write(line)
   try {
     writeFileSync(paths.desktopLog, line, { flag: 'a' })
@@ -217,7 +218,10 @@ function attachServer(server) {
       }
       if (OPEN_DEVTOOLS && view) view.webContents.openDevTools({ mode: 'detach' })
     } else if (status.state === DSH_STATE.FAILED || status.state === DSH_STATE.STOPPED) {
-      destroyDshView()
+      // S7：自动恢复中的 FAILED 只是暂态，隐藏旧视图即可，别销毁——
+      // 恢复成功后 READY 会重新 loadURL；次数用尽变成真 FAILED 再销毁。
+      if (status.recovering && dshView) dshView.setVisible(false)
+      else destroyDshView()
     }
   })
 }
@@ -247,6 +251,11 @@ async function startDsh() {
     dshHome: provisioning.dshHome,
     logFile: paths.dshLog,
     readyTimeoutMs: IS_SMOKE ? 300_000 : 240_000,
+    // S7：READY 后若 dsh 意外退出，自动重拉最多 2 次（1.2s 退避）；
+    // 启动阶段失败不重试，避免坏 profile 陷入死循环。
+    autoRecover: true,
+    maxRecoverAttempts: 2,
+    recoverDelayMs: 1200,
   })
   attachServer(dshServer)
 
@@ -790,7 +799,8 @@ async function runSmoke(window, status) {
   mkdirSync(paths.smokeDir, { recursive: true })
   const report = {
     ok: status.state === DSH_STATE.READY,
-    status,
+    // S7：status.url 含一次性 token，写盘与 stdout 前先打码（加载视图用的是原始值，不受影响）
+    status: { ...status, url: redactSecrets(status.url) },
     app: { version: app.getVersion(), electron: process.versions.electron, node: process.versions.node },
   }
 

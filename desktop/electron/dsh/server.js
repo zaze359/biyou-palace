@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { appendFileSync, mkdirSync, statSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { redactSecrets } from './redact.js'
 
 const ANSI = /\u001b\[[0-9;]*m/g
 const MAX_LOG_BYTES = 4 * 1024 * 1024
@@ -31,6 +32,8 @@ export class DshServer extends EventEmitter {
   #status = { state: DSH_STATE.STOPPED }
   #tail = []
   #stopping = false
+  #recoverAttempts = 0
+  #recoverTimer = null
 
   /**
    * @param {{
@@ -46,6 +49,10 @@ export class DshServer extends EventEmitter {
    *   logFile: string,
    *   readyTimeoutMs?: number,
    *   extraArgs?: string[],
+   *   autoRecover?: boolean,        // READY 后意外退出时自动重拉，默认 false
+   *   maxRecoverAttempts?: number,  // 最多重拉次数，默认 2
+   *   recoverDelayMs?: number,      // 重拉前退避，默认 1200ms
+   *   probeTimeoutMs?: number,      // URL 探活超时，默认 20000ms
    * }} options
    */
   constructor(options) {
@@ -56,6 +63,11 @@ export class DshServer extends EventEmitter {
       // 冷启动通常 5~10 秒（要加载几百个 ESM 插件）；首次建存储会更久，留足余量
       readyTimeoutMs: 180_000,
       extraArgs: [],
+      // S7：崩溃恢复默认关闭，由主进程决定是否开启；次数有限，避免坏 profile 无限重启
+      autoRecover: false,
+      maxRecoverAttempts: 2,
+      recoverDelayMs: 1200,
+      probeTimeoutMs: 20_000,
       ...options,
     }
   }
@@ -69,8 +81,14 @@ export class DshServer extends EventEmitter {
   }
 
   async start() {
+    // 注意：自动恢复期间状态仍是 FAILED（带 recovering 标记），必须允许 start 进入。
     if (this.#status.state === DSH_STATE.STARTING || this.#status.state === DSH_STATE.READY) {
       return this.status
+    }
+    // 手动重启（非恢复）时清零计数，恢复重拉由调用方保留计数
+    this.#clearRecover()
+    if (!this.#status.recovering && this.#recoverAttempts >= this.#options.maxRecoverAttempts) {
+      this.#recoverAttempts = 0
     }
 
     const options = this.#options
@@ -168,19 +186,58 @@ export class DshServer extends EventEmitter {
         if (this.#stopping) return
         if (this.#status.state === DSH_STATE.READY || this.#status.state === DSH_STATE.STARTING) {
           this.#writeLog(`[desktop] dsh 意外退出 code=${code} signal=${signal}`)
-          finish(
-            this.#update({
-              state: DSH_STATE.FAILED,
-              error: `dsh 进程退出（code=${code ?? 'null'} signal=${signal ?? 'null'}）`,
-              tail: this.tail,
-            }),
-          )
+          // S7：只有 READY 之后崩掉的才算「运行时崩溃」，值得自动重拉。
+          // STARTING 阶段退出多半是 profile/依赖问题，重试只会掩盖错误，直接报 FAILED。
+          const wasReady = this.#status.state === DSH_STATE.READY
+          const status = this.#update({
+            state: DSH_STATE.FAILED,
+            error: `dsh 进程退出（code=${code ?? 'null'} signal=${signal ?? 'null'}）`,
+            tail: this.tail,
+          })
+          finish(status)
+          if (wasReady && this.#options.autoRecover) this.#scheduleRecover()
         }
       })
     })
   }
 
+  /** S7：READY 后崩溃的受限自动恢复；次数用尽则停在 FAILED 交给用户重试 */
+  #scheduleRecover() {
+    this.#clearRecover()
+    if (this.#recoverAttempts >= this.#options.maxRecoverAttempts) {
+      this.#writeLog(`[desktop] dsh 崩溃恢复已达上限 ${this.#recoverAttempts} 次，停止重试`)
+      return
+    }
+    this.#recoverAttempts += 1
+    const attempt = this.#recoverAttempts
+    this.#writeLog(`[desktop] dsh 崩溃，${this.#options.recoverDelayMs}ms 后第 ${attempt} 次自动恢复`)
+    // 保持 FAILED + recovering 标记（不设 STARTING），否则 start() 的守卫会拦住重拉。
+    // 壳侧靠 recovering 隐藏旧视图并显示「正在恢复」。
+    this.#update({
+      state: DSH_STATE.FAILED,
+      error: `dsh 意外退出，正在自动恢复（${attempt}/${this.#options.maxRecoverAttempts}）`,
+      recovering: true,
+    })
+    this.#recoverTimer = setTimeout(() => {
+      this.#recoverTimer = null
+      this.start().catch((error) => {
+        this.#writeLog(`[desktop] 崩溃恢复失败：${error.message}`)
+        this.#update({ state: DSH_STATE.FAILED, error: `自动恢复失败：${error.message}`, recovering: false })
+      })
+    }, this.#options.recoverDelayMs)
+    this.#recoverTimer.unref?.()
+  }
+
+  #clearRecover() {
+    if (this.#recoverTimer) {
+      clearTimeout(this.#recoverTimer)
+      this.#recoverTimer = null
+    }
+  }
+
   async stop() {
+    this.#clearRecover()
+    this.#recoverAttempts = 0
     const child = this.#child
     this.#stopping = true
     if (!child || child.exitCode !== null) {
@@ -245,17 +302,20 @@ export class DshServer extends EventEmitter {
   }
 
   async #confirmUrl(url) {
-    const deadline = Date.now() + 20_000
+    const deadline = Date.now() + this.#options.probeTimeoutMs
     while (Date.now() < deadline) {
       try {
         const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(3000) })
         if (response.status < 500) {
           this.#writeLog(`[desktop] dsh 就绪 ${url}（HTTP ${response.status}）`)
+          // 成功就绪：清零崩溃恢复计数，下一轮崩溃重新获得完整重试额度
+          this.#recoverAttempts = 0
           return this.#update({
             state: DSH_STATE.READY,
             url,
             pid: this.#child?.pid,
             tail: undefined,
+            recovering: false,
           })
         }
       } catch {
@@ -278,13 +338,15 @@ export class DshServer extends EventEmitter {
   }
 
   #pushTail(line) {
-    this.#tail.push(line)
+    // dsh 打印的 `dsh web: http://.../?token=...` 含一次性凭据，
+    // 广播给壳的失败页与写盘日志都必须先脱敏。
+    this.#tail.push(redactSecrets(line))
     if (this.#tail.length > TAIL_LINES * 2) this.#tail.splice(0, this.#tail.length - TAIL_LINES)
   }
 
   #writeLog(line) {
     try {
-      appendFileSync(this.#options.logFile, `${new Date().toISOString()} ${line}\n`)
+      appendFileSync(this.#options.logFile, `${new Date().toISOString()} ${redactSecrets(line)}\n`)
     } catch {
       /* 日志失败不影响主流程 */
     }
