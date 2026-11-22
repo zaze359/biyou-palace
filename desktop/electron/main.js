@@ -41,6 +41,8 @@ let lanHost = null
 // 与 dsh 的工具栏节奏对齐（14px 字号、28/32px 控件、12px 圆角），壳顶栏取 52px
 let chromeHeight = 52
 let cleanupDone = false
+// 对话页与联阵页共用主区：联阵页在壳里，需要先隐藏 dsh 视图
+let dshVisible = true
 
 // ---------------------------------------------------------------- 日志
 
@@ -210,7 +212,7 @@ function attachServer(server) {
     if (status.state === DSH_STATE.READY) {
       const view = ensureDshView()
       if (view && view.webContents.getURL() !== status.url) {
-        view.setVisible(true)
+        view.setVisible(dshVisible)
         view.webContents.loadURL(status.url).catch((error) => log(`载入 dsh UI 失败：${error.message}`))
       }
       if (OPEN_DEVTOOLS && view) view.webContents.openDevTools({ mode: 'detach' })
@@ -340,6 +342,12 @@ function registerIpc() {
   ipcMain.on('shell:devtools', (event) => {
     if (!senderIsShell(event)) return
     mainWindow.webContents.openDevTools({ mode: 'detach' })
+  })
+
+  ipcMain.on('shell:dsh-visible', (event, visible) => {
+    if (!senderIsShell(event)) return
+    dshVisible = Boolean(visible)
+    dshView?.setVisible(dshVisible)
   })
 }
 
@@ -516,6 +524,155 @@ async function probeBiyouPlugin() {
   return last
 }
 
+/** S6 壳 UI：联阵入口存在、切换时 dsh 视图让位、preload 能拿到联阵状态 */
+async function probeShellUi(window) {
+  const info = await window.webContents.executeJavaScript(`(() => {
+    const nav = document.querySelector('.nav-item[data-entry="lan"]')
+    const panel = document.getElementById('state-lan')
+    const form = document.getElementById('lan-form')
+    const chip = document.getElementById('lan-pill')
+    return {
+      nav: Boolean(nav),
+      panel: Boolean(panel),
+      form: Boolean(form),
+      chip: Boolean(chip),
+      chipText: chip ? chip.textContent.trim() : null,
+    }
+  })()`)
+
+  const ipcState = await window.webContents
+    .executeJavaScript('window.biyou.lan.status().then((snapshot) => snapshot?.state ?? null)')
+    .catch(() => null)
+
+  await window.webContents.executeJavaScript(`document.querySelector('.nav-item[data-entry="lan"]')?.click()`)
+  await sleep(200)
+  const dshHidden = dshView ? !dshView.getVisible() : false
+  const lanVisible = await window.webContents.executeJavaScript(
+    `!document.getElementById('state-lan')?.classList.contains('is-hidden')`,
+  )
+  try {
+    const shot = await window.webContents.capturePage()
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(paths.smokeDir, 'lan.png'), shot.toPNG())
+  } catch (error) {
+    info.captureError = error.message
+  }
+
+  let uiOpened = null
+  let hostingVisible = false
+  let chipHosting = null
+  let memberRows = 0
+  let kickButtons = 0
+  let kicked = false
+  let uiStopped = false
+  try {
+    const opened = await window.webContents.executeJavaScript(
+      `window.biyou.lan.open({name:'壳冒烟阵',mode:'open',capacity:2,httpPort:0,discoveryPort:0,announceIntervalMs:0})`,
+    )
+    uiOpened = opened?.state ?? null
+    await sleep(300)
+    hostingVisible = await window.webContents.executeJavaScript(
+      `!document.getElementById('lan-hosting')?.classList.contains('is-hidden')`,
+    )
+    chipHosting = await window.webContents.executeJavaScript(
+      `document.getElementById('lan-text')?.textContent?.trim() ?? null`,
+    )
+    try {
+      const shot = await window.webContents.capturePage()
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(join(paths.smokeDir, 'lan-hosting.png'), shot.toPNG())
+    } catch (error) {
+      info.captureError = error.message
+    }
+
+    const httpPort = opened?.endpoints?.http_port
+    const roomId = opened?.room?.room_id
+    if (httpPort && roomId) {
+      const joined = await fetch(`http://127.0.0.1:${httpPort}/lan/v1/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          protocol: 1,
+          room_id: roomId,
+          device: {
+            device_id: 'ui-smoke-device',
+            name: '壳冒烟仙徒',
+            platform: 'smoke',
+            app_version: app.getVersion(),
+          },
+        }),
+      }).then((response) => response.json())
+      if (joined.ok === true) {
+        await sleep(350)
+        memberRows = await window.webContents.executeJavaScript(
+          `document.querySelectorAll('.lan-member').length`,
+        )
+        kickButtons = await window.webContents.executeJavaScript(
+          `document.querySelectorAll('button[data-kick]').length`,
+        )
+        try {
+          const shot = await window.webContents.capturePage()
+          const { writeFile } = await import('node:fs/promises')
+          await writeFile(join(paths.smokeDir, 'lan-members.png'), shot.toPNG())
+        } catch (error) {
+          info.captureError = error.message
+        }
+        if (kickButtons > 0) {
+          await window.webContents.executeJavaScript(`document.querySelector('button[data-kick]')?.click()`)
+          await sleep(450)
+          kicked =
+            (await window.webContents.executeJavaScript(`document.querySelectorAll('.lan-member').length`)) === 0
+        }
+      }
+    }
+
+    await window.webContents.executeJavaScript('window.biyou.lan.disband()')
+    await sleep(350)
+    uiStopped = await window.webContents.executeJavaScript(
+      `!document.getElementById('lan-form')?.classList.contains('is-hidden')`,
+    )
+  } catch (error) {
+    info.uiError = error.message
+  }
+
+  await window.webContents.executeJavaScript(`document.querySelector('.nav-item[data-entry="dialog"]')?.click()`)
+  await sleep(200)
+  const dshShown = dshView ? dshView.getVisible() : false
+
+  return {
+    ...info,
+    ipcState,
+    dshHidden,
+    lanVisible,
+    uiOpened,
+    hostingVisible,
+    chipHosting,
+    memberRows,
+    kickButtons,
+    kicked,
+    uiStopped,
+    dshShown,
+    ok: Boolean(
+      info.nav &&
+        info.panel &&
+        info.form &&
+        info.chip &&
+        info.chipText === '单机' &&
+        ipcState === 'standalone' &&
+        dshHidden &&
+        lanVisible &&
+        uiOpened === 'hosting' &&
+        hostingVisible &&
+        chipHosting?.includes('阵眼') &&
+        memberRows === 1 &&
+        kickButtons === 1 &&
+        kicked &&
+        uiStopped &&
+        dshShown,
+    ),
+  }
+}
+
 async function discoverRoomUdp(port, timeoutMs = 1500) {
   if (!port) return null
   return await new Promise((resolve) => {
@@ -673,6 +830,9 @@ async function runSmoke(window, status) {
       report.dshView.localModelsOk = Boolean(biyou?.localModelsInBoot)
       if (!report.dshView.localModelsOk) report.ok = false
     }
+
+    report.shell = await probeShellUi(window)
+    if (!report.shell.ok) report.ok = false
 
     report.lan = await probeLanHost()
     if (!report.lan.ok) report.ok = false

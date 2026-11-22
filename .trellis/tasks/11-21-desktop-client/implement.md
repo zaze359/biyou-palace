@@ -149,11 +149,26 @@ desktop/
 - `BIYOU_USER_DATA=/tmp/biyou-s5-smoke npm run smoke`：`ok=true`，
   `lan={defaultState:"standalone", opened:{state:"hosting",health:true,roomId:true,joined:true,discovered:true}, afterState:"standalone", httpClosed:true}`。
 
-已知边界：mDNS 仍为 P1；租约过期只标 offline 并保留容量，任务回收待编排；开阵 UI 属 S6。
+已知边界：mDNS 仍为 P1；租约过期只标 offline 并保留容量，任务回收待编排。
+
+### S6 · 已完成（2026-11-22）
+
+- 壳顶栏新增「联阵」入口与 `单机 / 阵眼 · N 人` 状态条；dsh 连接状态改为只显示「就绪/启动中/已断开」。
+- 联阵页占用主区：开阵表单（阵名/开放阵/闭阵/阵符/容量）、阵眼信息卡、成员列表（平台/门派/在线状态）、
+  行内移出、刷新、散阵（二次确认）。
+- 主进程新增 `shell:dsh-visible`，切到联阵页时隐藏 dsh 视图，回「对话」恢复；开阵后后台继续运行。
+- `npm run smoke` 新增 `report.shell`：校验入口/表单/状态条、dsh 视图让位与开阵/散阵后的页面状态，
+  输出 `smoke/lan.png` 与 `smoke/lan-hosting.png`。
+
+实测：
+
+- `BIYOU_USER_DATA=/tmp/biyou-s6-smoke3 npm run smoke`：`ok=true`，
+  `shell={nav:true,panel:true,form:true,chipText:"单机",ipcState:"standalone",dshHidden:true,lanVisible:true,uiOpened:"hosting",hostingVisible:true,chipHosting:"阵眼 · 0 人",uiStopped:true,dshShown:true,ok:true}`。
+- 截图确认：表单与阵眼信息卡顶部对齐、字段完整、按钮无截断；已修正 `.hint` 在左对齐面板里被 `margin:auto` 推到中间的问题。
 
 ### 下一步
 
-S6：开阵弹窗、成员列表、踢人/散阵、单机/联阵状态条。
+S7：健壮性与退出（异常恢复、错误路径、日志脱敏、无残留进程）。
 
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 

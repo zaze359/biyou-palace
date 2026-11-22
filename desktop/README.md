@@ -261,13 +261,25 @@ FormationHost
 - 阵主令牌每次开阵随机生成，只存在主进程内，不写日志、不回 HTTP。
 
 渲染层通过 preload 白名单调用：`biyou.lan.status/open/disband/kick/onStatus`。
-开阵页与成员列表 UI 属 S6，本阶段只交付服务与 IPC。
+
+### 开阵 UI（S6）
+
+壳顶栏新增「联阵」入口与单机/阵眼状态条；联阵页占用主区，切到联阵时隐藏 dsh 视图，
+回「对话」再显示，联阵服务在后台继续运行。页面包含：
+
+- 开阵表单：阵名、开放阵/闭阵、阵符（闭阵才显示）、容量；
+- 阵眼信息：模式、仙徒数/容量、HTTP 端口、UDP 发现端口；
+- 成员列表：平台、内门/外门、在线/离线，行内「移出」；
+- 刷新与散阵（散阵前二次确认）。
 
 ```bash
 npm run test:lan     # 9 个集成用例：开放/闭阵、限速、踢人、SSE、UDP、租约、端口顺延
 python3 scripts/lan_formation_acceptance.py   # 协议回归（Python 参考实现）
-npm run smoke        # Electron 内真实开阵 → 入阵 → UDP 发现 → 散阵 → 端口关闭
+npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵；含 UI 切换与截图
 ```
+
+`npm run smoke` 的 `report.shell` 会校验联阵入口、表单、状态条、dsh 视图让位与
+开阵/散阵后的页面状态，并输出 `smoke/lan.png`、`smoke/lan-hosting.png`。
 
 已知边界：
 
@@ -336,7 +348,7 @@ npm run smoke        # Electron 内真实开阵 → 入阵 → UDP 发现 → �
 - [x] 品牌壳：应用名、图标占位、首页入口、运行时状态
 - [x] 冒烟可复现：`smoke:dsh` 全绿、`smoke` 出截图/报告、`smoke:quit` 无残留进程
 - [x] S5 联阵服务：默认不监听；开放/闭阵、UDP 发现、心跳租约、踢人、散阵、SSE
-- [ ] 开阵页 / 成员列表 / 踢人/散阵 UI → S6
+- [x] S6 开阵页 / 成员列表 / 踢人/散阵 / 单机/阵眼状态条
 - [ ] 打包为 `.app` / Windows 安装包 → S8
 - [ ] 观星台 / 功德殿 → 后置
 
@@ -350,7 +362,7 @@ npm run smoke        # Electron 内真实开阵 → 入阵 → UDP 发现 → �
 - 首次启动 dsh 需要模型凭据；`~/.dsh` 的既有登录不会自动复用（用独立 DSH_HOME）。
 - Windows 的 Node 自动下载未实现，开发时回退 Electron 内置 Node 即可。
 - 运行时依赖约 1.2 GB（dsh 的 web bundle 全家桶），S8 打包时需要裁剪。
-- 联阵 mDNS 未实现（P1），当前只有 UDP 广播发现；开阵 UI 未实现（S6）。
+- 联阵 mDNS 未实现（P1），当前只有 UDP 广播发现。
 - 联阵配置不持久化：重启后一律回单机，需要用户重新开阵。
 
 ## 九、视觉规范（以 dsh 为准）

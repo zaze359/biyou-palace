@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('biyou', {
     setChromeHeight: (height) => ipcRenderer.send('shell:chrome-height', height),
     openLogs: () => ipcRenderer.invoke('shell:open-logs'),
     devtools: () => ipcRenderer.send('shell:devtools'),
+    /** 切到联阵页时隐藏 dsh 视图，回对话页再显示 */
+    setDshVisible: (visible) => ipcRenderer.send('shell:dsh-visible', visible),
   },
 
   lan: {

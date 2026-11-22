@@ -482,6 +482,235 @@ body.platform-darwin .chrome {
   background: var(--hover);
 }
 
+/* ---------------------------------------------------------------- 联阵 */
+
+[hidden] {
+  display: none !important;
+}
+
+.lan-status[data-state="hosting"] {
+  color: var(--text-2);
+}
+
+.lan-status[data-state="hosting"] .dot {
+  background: var(--accent);
+}
+
+.lan-status[data-state="starting"] .dot,
+.lan-status[data-state="stopping"] .dot {
+  background: var(--warning);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.lan-panel {
+  width: min(720px, 92vw);
+  max-height: calc(100vh - var(--chrome-height) - 40px);
+  overflow: auto;
+  align-self: start;
+  justify-self: center;
+  margin-top: 24px;
+  text-align: left;
+  padding: 0 0 32px;
+}
+
+.lan-panel .hint {
+  margin: 0;
+  max-width: none;
+}
+
+.lan-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+}
+
+.field > span,
+.field legend {
+  padding: 0;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.field input[type="text"],
+.field input[type="password"],
+.field input[type="number"] {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.field input[type="text"]:focus,
+.field input[type="password"]:focus,
+.field input[type="number"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(57, 100, 254, 0.12);
+}
+
+.radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-layer-1);
+  cursor: pointer;
+}
+
+.radio:hover {
+  border-color: var(--line-strong);
+}
+
+.radio input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.radio span {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.radio small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.lan-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+}
+
+.lan-room {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.lan-room > div {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-layer-1);
+}
+
+.lan-room strong {
+  font-weight: 500;
+}
+
+.muted {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.lan-members-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 16px 0 8px;
+}
+
+.lan-members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.lan-member {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-layer-1);
+}
+
+.lan-member-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lan-member-main strong {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-member-meta {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-member-status {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.lan-member-status[data-status="active"] {
+  color: var(--accent);
+  border-color: rgba(57, 100, 254, 0.3);
+}
+
+.lan-member-status[data-status="offline"] {
+  color: var(--danger-text);
+  border-color: rgba(242, 90, 90, 0.35);
+}
+
+.lan-empty {
+  margin-top: 0;
+  text-align: left;
+}
+
+.primary.danger {
+  background: var(--danger);
+}
+
+.primary.danger:hover {
+  background: #d94b4b;
+}
+
+.badge.is-ok {
+  color: var(--accent);
+  border-color: rgba(57, 100, 254, 0.35);
+  background: rgba(57, 100, 254, 0.08);
+}
+
 /* ---------------------------------------------------------------- 提示 */
 
 .toast {

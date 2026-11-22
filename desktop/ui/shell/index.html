@@ -19,12 +19,17 @@
 
       <nav class="nav" aria-label="主导航">
         <button class="nav-item is-active" data-entry="dialog">对话</button>
+        <button class="nav-item" data-entry="lan">联阵</button>
         <button class="nav-item" data-entry="observatory">观星台</button>
         <button class="nav-item" data-entry="hall">功德殿</button>
         <button class="nav-item" data-entry="library">藏经阁</button>
       </nav>
 
       <div class="actions">
+        <span class="status lan-status" id="lan-pill" data-state="standalone" title="联阵状态">
+          <i class="dot" aria-hidden="true"></i>
+          <span id="lan-text">单机</span>
+        </span>
         <span class="status" id="status-pill" data-state="starting">
           <i class="dot" aria-hidden="true"></i>
           <span id="status-text">启动中</span>
@@ -62,6 +67,76 @@
         <div class="badge is-ok">运行时就绪</div>
         <h1>碧游宫已就位</h1>
         <p class="hint">对话界面由 dsh 提供；若此处仍为空白，说明视图尚未挂载完成。</p>
+      </section>
+
+      <section class="panel lan-panel is-hidden" id="state-lan">
+        <div class="badge" id="lan-badge">单机</div>
+        <h1>联阵</h1>
+        <p class="hint" id="lan-hint">默认单机，不广播、不监听。开阵后成为阵眼，同局域网设备可发现并入阵。</p>
+
+        <form class="lan-form" id="lan-form">
+          <label class="field">
+            <span>阵名</span>
+            <input id="lan-name" type="text" maxlength="64" value="碧游宫" autocomplete="off" />
+          </label>
+
+          <fieldset class="field">
+            <legend>模式</legend>
+            <label class="radio">
+              <input type="radio" name="lan-mode" value="open" checked />
+              <span>开放阵<small>同局域网任何人都可能加入</small></span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="lan-mode" value="closed" />
+              <span>闭阵<small>需要 4-64 字符阵符；校验通过即入阵，无阵主确认</small></span>
+            </label>
+          </fieldset>
+
+          <label class="field" id="lan-passcode-field" hidden>
+            <span>阵符</span>
+            <input
+              id="lan-passcode"
+              type="password"
+              minlength="4"
+              maxlength="64"
+              autocomplete="off"
+              placeholder="4-64 个字符"
+            />
+          </label>
+
+          <label class="field">
+            <span>容量（仙徒数，不含阵主）</span>
+            <input id="lan-capacity" type="number" min="1" max="64" value="8" />
+          </label>
+
+          <p class="lan-error is-hidden" id="lan-error"></p>
+
+          <div class="row">
+            <button class="primary" id="lan-open" type="submit">开阵</button>
+          </div>
+        </form>
+
+        <div id="lan-hosting" class="is-hidden">
+          <div class="lan-room">
+            <div><span class="muted">阵名</span><strong id="lan-room-name">—</strong></div>
+            <div><span class="muted">模式</span><span id="lan-room-mode">—</span></div>
+            <div><span class="muted">仙徒</span><span id="lan-room-players">—</span></div>
+            <div><span class="muted">HTTP</span><span id="lan-room-port">—</span></div>
+            <div><span class="muted">发现</span><span id="lan-room-discovery">—</span></div>
+          </div>
+
+          <div class="lan-members-head">
+            <strong>成员</strong>
+            <span class="muted" id="lan-members-count"></span>
+          </div>
+          <ul class="lan-members" id="lan-members"></ul>
+          <p class="hint lan-empty" id="lan-empty">还没有仙徒入阵。</p>
+
+          <div class="row">
+            <button class="ghost" id="lan-refresh" type="button">刷新</button>
+            <button class="primary danger" id="lan-disband" type="button">散阵</button>
+          </div>
+        </div>
       </section>
     </main>
 
