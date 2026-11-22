@@ -6,9 +6,10 @@
 
 - 图标事实源：`desktop/assets/brand/icon-photo.png`（本文件副本）；
 - 应用图标：`desktop/assets/icon.png`（`npm run icon` 从写实源重生成）；
-- 顶栏品牌位：`desktop/ui/shell/index.html` 显示 `assets/icon.png`（28px）；
+- ~~顶栏品牌位：`desktop/ui/shell/index.html` 显示 `assets/icon.png`（28px）~~ → **2026-11-22 三次改决**：
+  顶栏左上角留空，不显示 logo / 名称 / 版本号；碧游宫不占任何品牌位；
 - 关于面板：`desktop/electron/main.js` 的 `setAboutPanelOptions` 载入图标；
-- ~~dsh 侧栏 24px 单色位保留几何副版（`desktop/assets/brand/mark.svg`）~~ → **2026-11-22 两次改决**：
+- ~~dsh 侧栏 24px 单色位保留几何副版（`desktop/assets/brand/mark.svg`）~~ → **2026-11-22 改决**：
   碧游宫插件不占用 dsh 侧栏品牌行；profile 显式启用 `ui-brand-official`，
   保留 deepseek 官方发行版字标（不是「DSH 本地构建」fallback）。`mark.svg` 暂留作素材，当前未接入。
 

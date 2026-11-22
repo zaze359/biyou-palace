@@ -115,7 +115,7 @@ Electron 只保留窗口、托盘、进程生命周期、本地控制面与密�
 
 1. **位置已经开好了**。rc.5 实测（见下表）上游为「品牌、全局面板、浮层、底栏」都留了公开 slot，不需要重写壳，也不需要 patch 上游。
 2. **不复制 feature 状态**。会话、工作区、设置仍归上游插件所有，我们只贡献自己那块，避免状态双写。
-3. ~~**品牌是官方留的替换位**。`sidebar.brand.mark` / `sidebar.brand.name` 就是给部署方换 logo 与名字用的，比自建壳更省。~~ → **2026-11-22 两次改决**：最终碧游宫插件不占用侧栏品牌位；由 dsh-web-app 的 `ui-brand-official` 占用并显示 deepseek 官方字标（不是「DSH 本地构建」fallback）。碧游宫品牌由 Electron 壳顶栏承载。其余三条理由不变。
+3. ~~**品牌是官方留的替换位**。`sidebar.brand.mark` / `sidebar.brand.name` 就是给部署方换 logo 与名字用的，比自建壳更省。~~ → **2026-11-22 三次改决**：最终碧游宫插件不占用侧栏品牌位；由 dsh-web-app 的 `ui-brand-official` 占用并显示 deepseek 官方字标（不是「DSH 本地构建」fallback）。壳顶栏左上角同样留空、不显示碧游宫品牌；碧游宫身份只保留在 Dock 图标与状态 pill 文案。其余三条理由不变。
 4. **升级只需跟 contract**。slot 与 service 是公开契约，dsh 升版时改动集中在 `inject` 列表与 d.ts 校验，不用整壳重做。
 
 ### rc.5 已核实的能力（`node_modules/@deepseek-ai/`，340 个包）
@@ -191,7 +191,7 @@ desktop/ui/shell     仅三态降级页：dsh 起不来 / 启动中 / 崩溃后�
 
 1. 插件放 `desktop/packages/biyou-plugin/`，还是独立仓库（便于以后给第三方复用）。
 2. ~~观星台第一版范围：只读展示，还是含「开阵」按钮（涉及本地控制面提前落地）。~~ → 已决：观星台后置。
-3. ~~品牌替换程度：只换 mark + name，还是连主色也换（会与 dsh 视觉规范分叉）。~~ → 已决：碧游宫不替换侧栏品牌，显式启用 dsh `ui-brand-official` 保留 deepseek 官方发行版外观；碧游宫品牌只在 Electron 壳顶栏。
+3. ~~品牌替换程度：只换 mark + name，还是连主色也换（会与 dsh 视觉规范分叉）。~~ → 已决：碧游宫不替换侧栏品牌，显式启用 dsh `ui-brand-official` 保留 deepseek 官方发行版外观；壳顶栏左上角也留空、不显示碧游宫品牌，身份只在 Dock 图标与状态 pill。
 
 ---
 
@@ -211,7 +211,7 @@ desktop/ui/shell     仅三态降级页：dsh 起不来 / 启动中 / 崩溃后�
 |---|---|
 | dsh 原生执行 | 会话、工具、模型调用全部归 dsh |
 | Electron 壳 | 窗口、单实例、dsh 子进程、配置与退出清理 |
-| 品牌与状态 | 碧游宫品牌在 Electron 壳顶栏；dsh 侧栏 `sidebar.brand.*` 由 `ui-brand-official` 显示 deepseek 官方字标；状态走 `shell.overlay` |
+| 品牌与状态 | 壳顶栏左上角与 dsh 侧栏均不显示碧游宫品牌（顶栏留空、侧栏由 `ui-brand-official` 显示 deepseek 官方字标）；身份只在 Dock 图标与状态 pill；状态走 `shell.overlay` |
 | 联阵 | 开阵/寻阵/入阵按 `lan-formation-contract.md` 用 Node 实现 |
 | `ui/shell` | 仅三态降级页 |
 

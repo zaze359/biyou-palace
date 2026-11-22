@@ -103,7 +103,6 @@ body.platform-darwin .chrome {
   padding-left: 82px;
 }
 
-.brand,
 .nav,
 .actions,
 .nav-item,
@@ -112,37 +111,10 @@ body.platform-darwin .chrome {
   -webkit-app-region: no-drag;
 }
 
+/* 顶栏左上角留空：不显示品牌，仅维持导航起始位置；空白区域可用于拖拽窗口。
+   品牌由 dsh 侧栏的 deepseek 官方字标承载。 */
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* 写实青萍剑 logo（宣纸底方图）：顶栏里放大到 28px，object-fit 收敛留白让剑可辨 */
-.brand-mark {
-  width: 28px;
-  height: 28px;
-  display: block;
-  flex: none;
-  object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-}
-
-.brand-text strong {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.chip {
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
+  flex: 0 0 136px;
 }
 
 .nav {

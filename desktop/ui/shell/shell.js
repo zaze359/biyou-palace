@@ -8,7 +8,6 @@ const api = window.biyou
 
 const els = {
   chrome: document.getElementById('chrome'),
-  versionChip: document.getElementById('version-chip'),
   statusPill: document.getElementById('status-pill'),
   statusText: document.getElementById('status-text'),
   lanPill: document.getElementById('lan-pill'),
@@ -277,9 +276,8 @@ async function bootstrap() {
 
   const info = await api.app.info()
   if (info) {
-    els.versionChip.textContent = `v${info.version}`
     els.bootMeta.textContent = `Electron ${info.versions.electron} · 壳 Node ${info.versions.node} · dsh ${info.pinned.dsh}`
-    document.title = `碧游宫 v${info.version}`
+    // 顶栏左上角留空：不显示品牌与版本号（macOS 原生标题栏为 hiddenInset，也不显示标题）
   }
 
   renderDsh(await api.dsh.status())

@@ -65,9 +65,9 @@ desktop/
 | 落点 | 用什么 | 为什么 |
 |---|---|---|
 | 应用图标（Dock / 窗口 / 关于面板） | `assets/icon.png`，源自写实 logo | 大尺寸，写实笔触可辨 |
-| 壳顶栏品牌位 | `assets/icon.png`（28px 方图） | 放大显示，`object-fit: cover` 收敛留白 |
+| 壳顶栏左上角 | **留空占位**，不显示 logo / 名称 / 版本号 | 2026-11-22 改决：碧游宫不占任何品牌位，左上角空出；空白区仍可拖拽窗口 |
 | 关于面板 | `nativeImage` 载 `assets/icon.png` | 同上 |
-| dsh 侧栏品牌位 | **碧游宫插件不占用**；显式启用 dsh-web-app 的 `ui-brand-official`，显示 deepseek 官方字标 | 2026-11-22 决策：碧游宫品牌只由 Electron 壳顶栏承载；dsh 侧栏保留官方发行版外观，不显示「DSH 本地构建」fallback |
+| dsh 侧栏品牌位 | **碧游宫插件不占用**；显式启用 dsh-web-app 的 `ui-brand-official`，显示 deepseek 官方字标 | dsh 侧栏保留官方发行版外观，不显示「DSH 本地构建」fallback |
 
 重生成图标：
 

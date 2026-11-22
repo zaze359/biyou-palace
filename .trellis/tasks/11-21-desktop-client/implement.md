@@ -119,8 +119,10 @@ desktop/
 - 状态 pill 接 `ctx.connection.state`（`useSyncExternalStore`），显示「就绪 / 连接中 / 已断开」；
   `data-state` 同步连接状态。**这是 D2 现在唯一保留的 browser half UI**。
 - 侧栏品牌：初版曾占用 `sidebar.brand.mark` / `brand.name`（青萍剑 + 碧游宫）；
-  同日按截图评审改决——**碧游宫插件不再占用这两处**。组件与注册已从 `client.js` 移除，
-  碧游宫品牌只由 Electron 壳顶栏承载。
+  同日按截图评审改决——**碧游宫插件不再占用这两处**。组件与注册已从 `client.js` 移除。
+- 壳顶栏品牌位：同样按截图评审，**顶栏左上角也不显示碧游宫 logo / 名称 / 版本号，留空占位**
+  （`index.html` 的空 `.brand` + `shell.css` 的 `flex: 0 0 136px`，`shell.js` 去掉版本号写入）。
+  碧游宫身份只保留在 Dock 图标与状态 pill 文案，不再占据任何品牌位。
 - 侧栏外观随后明确为 **deepseek 官方发行版**：`dsh-web-app` 自带 `ui-brand-official`，
   profile 补丁层显式写 `disabled: false`，防止 panel 残留把官方品牌关掉后 fallback 成
   「DSH 本地构建」。官方 mark / wordmark 仍由上游包提供，不改上游 bundle。
