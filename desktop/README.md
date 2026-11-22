@@ -370,6 +370,36 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 
 受限环境（容器 / CI / 无签名沙箱，Chromium sandbox 起不来）设 `BIYOU_NO_SANDBOX=1` 即可追加 `--no-sandbox`。
 
+## 六·五、打包（S8）
+
+V2 只产**未签名**包，不做签名/公证/自动更新。
+
+```bash
+npm run build -- --mac     # macOS：.app + .zip → dist/（dmg 需在无沙箱 CI 上另开）
+npm run build -- --win     # Windows：NSIS .exe（CI 上跑）
+npm run build -- --linux   # Linux：AppImage
+```
+
+前置（否则 `build.mjs` 直接报错，不产出半成品）：
+
+- `npm run dsh:install`：dsh 运行时依赖（约 1.4 GB）；
+- `npm run node:bootstrap`：锁定的 Node 24.22.3。
+
+打包布局（`electron-builder.yml`）：
+
+```text
+app.asar/                 主进程 / preload / ui/shell / assets / @noble/hashes
+Contents/Resources/
+  ├─ runtime/             dsh profile + node_modules（asar 外，可加载原生模块）
+  ├─ node-runtime/node/   锁定的 Node 24.22.3（跑 dsh 用）
+  └─ icon.png
+<userData>/dsh/profiles/biyou/node_modules → Resources/runtime/...（软链）
+```
+
+`main.js` 用 `app.isPackaged` 切换路径：开发读仓库 `desktop/runtime`，打包读 `Resources/runtime`。
+构建产物附 `dist/build-manifest.json`（版本、commit、构建时间、每个产物的 SHA-256），
+交给 `11-21-client-packaging` 做 CI 矩阵与校验和核对。
+
 ## 七、阶段验收对照
 
 - [x] `desktop/` 骨架：package.json、主进程、preload、渲染入口
@@ -381,7 +411,8 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 - [x] S5 联阵服务：默认不监听；开放/闭阵、UDP 发现、心跳租约、踢人、散阵、SSE
 - [x] S6 开阵页 / 成员列表 / 踢人/散阵 / 单机/阵眼状态条
 - [x] S7 健壮性：日志脱敏、崩溃自动恢复（≤2 次）、无残留进程；`test:s7` 4/4
-- [ ] 打包为 `.app` / Windows 安装包 → S8
+- [x] S8 打包：macOS `.app` + `.zip` 构建成功、资源布局与校验和清单核对通过（Windows NSIS 脚本就绪，CI 产物待 client-packaging）
+- [ ] 打包后 GUI 启动冒烟（需真实桌面环境人工验收；本沙箱 codesign/LaunchServices 限制无法完成）
 - [ ] 观星台 / 功德殿 → 后置
 
 ## 八、已知限制

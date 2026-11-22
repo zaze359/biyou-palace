@@ -35,9 +35,17 @@ export function profileSourceDir(profile = 'biyou') {
   return join(DESKTOP_ROOT, 'runtime', 'home', 'profiles', profile)
 }
 
-/** runtime/ 整体目录，打包时整体拷进 Resources */
+/**
+ * runtime/ 与锁定 Node 的运行时根目录。
+ * 开发模式指向仓库内；打包模式由调用方（main.js，用 app.isPackaged）显式传入 Resources 路径。
+ * 这里保留默认值，让普通 Node 脚本（冒烟、自检）无需 electron 就能用。
+ */
 export function runtimeSourceRoot() {
   return join(DESKTOP_ROOT, 'runtime')
+}
+
+export function pinnedNodeRoot() {
+  return join(DESKTOP_ROOT, '.runtime')
 }
 
 export function layoutPaths(userDataDir) {

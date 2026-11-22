@@ -187,7 +187,36 @@ S7：健壮性与退出（异常恢复、错误路径、日志脱敏、无残留
 - **回归**：`npm run smoke:dsh` 8/8、`npm run smoke` ok=true（biyouOk / localModelsOk /
   shell / lan 全绿），无残留进程。
 
-下一步：**S8 打包交接** → `11-21-client-packaging`。
+### S8 · 打包交接（2026-11-22）
+
+- **打包工具**：引入 `electron-builder@26`，配置见 `desktop/electron-builder.yml`。
+  app.asar 只装主进程 / preload / ui/shell / assets / `@noble/hashes`；
+  `runtime/`（1.4 GB dsh 依赖）与 `.runtime/`（锁定 Node 24.22.3）走 `extraResources`
+  放 asar 外——asar 内跑不了子进程 Node，也加载不了原生模块。
+- **路径适配**：`main.js` 用 `app.isPackaged` 切到 `process.resourcesPath/runtime` 与
+  `node-runtime`；`resolveNode` 加可选 `pinnedNodeRoot` 参数（开发走 `desktop/.runtime`）。
+  userData 里的 `node_modules` 软链在打包后指向 Resources，不再指仓库。
+- **构建入口**：`scripts/build.mjs`（`npm run build -- --mac|--win|--linux`）= 版本自检 →
+  校验 runtime/Node 就位 → 注入 commit/构建时间 → electron-builder → 写
+  `dist/build-manifest.json`（版本 + commit + 时间 + 每个产物 SHA-256）。
+  打包前剔除 `NODE_OPTIONS` / `ELECTRON_RUN_AS_NODE`，避免污染原子写。
+- **范围**：mac `.dmg`/`.zip`、win NSIS `.exe`、linux AppImage，全部未签名（`identity: null`）。
+  CI 矩阵、校验和一致性、Android APK 归 `11-21-client-packaging`。
+
+实测（2026-11-22，macOS x64）：
+
+- `npm run build -- --mac` 成功产出 `dist/mac/碧游宫.app`（2.0 GB）与
+  `碧游宫-0.1.0-mac.zip`（463 MB），`dist/build-manifest.json` 记录版本 / commit /
+  构建时间 / 两个产物 SHA-256。
+- 资源布局核对通过：`Resources/runtime/.../dsh/lib/bin.js`、`Resources/node-runtime/node/bin/node`、
+  `Resources/icon.png` 均就位；asar 内含 `/electron/main.js`、`/ui/shell/index.html`。
+- **dmg 目标已移除**：首次构建时 dmg 阶段的 `ditto` 在受限沙箱下报
+  `Operation not permitted`（挂载卷拷贝被拒），`.app` + `.zip` 已满足未签名分发；
+  dmg 由 client-packaging 在有权限 CI 上按需开启。
+- **未验证项**：打包后 GUI 启动冒烟——本沙箱下 Electron 报 `codesign_util` 与
+  `Node.js environment variables are disabled`，app 进程无法稳定进入主流程，
+  需在真实桌面环境人工验收（双击 .app → 观察 dsh 就绪 / 插件上屏）。
+- 构建产物 `dist/` 已在 desktop/.gitignore 排除，不会误入提交。
 
 ## 路线调整 · 呈现层改走 dsh 客户端插件（2026-11-21）
 

@@ -1,0 +1,59 @@
+# 碧游宫桌面端打包配置（S8）
+# V2 明确不做签名/公证/自动更新；产物交给 11-21-client-packaging 做 CI 与校验。
+appId: cn.biyou.desktop
+productName: 碧游宫
+copyright: 碧游宫 · 内网异构推理集群
+
+# 主进程/渲染层代码进 asar；runtime 与锁定 Node 走 extraResources（见下）
+asar: true
+files:
+  - electron/**
+  - ui/**
+  - assets/**
+  - package.json
+  # 运行期依赖（dsh 运行时本身在 runtime/ 里，不在这层）
+  - node_modules/@noble/**
+  - "!node_modules/electron-builder/**"
+  - "!node_modules/electron/**"
+  - "!**/test/**"
+  - "!**/*.test.mjs"
+
+# 1.4G 的 dsh runtime 与锁定 Node 放 asar 外：
+#   - asar 内无法加载原生 .node 模块，也无法跑子进程 Node
+#   - extraResources 保持目录结构，main.js 用 app.isPackaged 切到 Resources 路径
+extraResources:
+  - from: runtime
+    to: runtime
+  - from: .runtime
+    to: node-runtime
+  - from: assets/icon.png
+    to: icon.png
+
+# 未签名：identity: null 阻止 macOS Attempted ad-hoc 签名，gatekeeper 提示由用户自行处理
+mac:
+  # dmg 制作需要挂载卷并用 ditto 拷贝，受限沙箱/CI 无权限时会失败（Operation not permitted）。
+  # .app（目录）+ .zip 已满足「未签名可分发包」，dmg 由 client-packaging 在有权限的 CI 上按需开启。
+  target:
+    - zip
+  icon: assets/icon.png
+  identity: null
+  hardenedRuntime: false
+
+win:
+  target: nsis
+  icon: assets/icon.png
+  artifactName: "${productName}-${version}-win-${arch}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+linux:
+  target: AppImage
+  category: Development
+
+# 产物元信息：版本、提交号、构建时间由 scripts/build.mjs 注入 env 后写进 name
+directories:
+  output: dist

@@ -11,7 +11,7 @@ import { app, BrowserWindow, Menu, WebContentsView, ipcMain, nativeImage, native
 import { createSocket } from 'node:dgram'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DESKTOP_ROOT, defaultUserDataDir, layoutPaths } from './paths.js'
+import { DESKTOP_ROOT, defaultUserDataDir, layoutPaths, runtimeSourceRoot, pinnedNodeRoot as defaultPinnedNodeRoot } from './paths.js'
 import { PINNED } from './versions.js'
 import { resolveNode } from './dsh/resolve-node.js'
 import { provisionProfile } from './dsh/provision.js'
@@ -227,11 +227,15 @@ function attachServer(server) {
 }
 
 async function startDsh() {
-  const node = resolveNode({ desktopRoot: DESKTOP_ROOT })
+  // S8：打包后 runtime 与锁定 Node 都放在 Resources（asar 外，避免大文件/原生模块问题）
+  const runtimeRoot = app.isPackaged ? join(process.resourcesPath, 'runtime') : runtimeSourceRoot()
+  const nodeRoot = app.isPackaged ? join(process.resourcesPath, 'node-runtime') : defaultPinnedNodeRoot()
+  const node = resolveNode({ desktopRoot: DESKTOP_ROOT, pinnedNodeRoot: nodeRoot })
+  log(`runtimeRoot=${runtimeRoot} nodeRoot=${nodeRoot}`)
   const provisioning = provisionProfile({
     userDataDir: USER_DATA,
     profile: PINNED.profile,
-    runtimeRoot: join(DESKTOP_ROOT, 'runtime'),
+    runtimeRoot,
   })
   log(
     `node=${node.version}(${node.source}) dsh=${provisioning.dshVersion} profile=${PINNED.profile} ` +
@@ -442,15 +446,19 @@ app.whenReady().then(async () => {
   // dsh 的主题偏好默认「跟随系统」，所以这里定基调，dsh UI 会跟着落到同一套。
   const theme = process.env.BIYOU_THEME ?? 'light'
   nativeTheme.themeSource = ['light', 'dark', 'system'].includes(theme) ? theme : 'light'
+  // S8：打包后图标从 Resources 读（asar 内路径对 nativeImage 不可靠）
+  const appIconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(DESKTOP_ROOT, 'assets', 'icon.png')
   if (process.platform === 'darwin') {
-    const icon = nativeImage.createFromPath(join(DESKTOP_ROOT, 'assets', 'icon.png'))
+    const icon = nativeImage.createFromPath(appIconPath)
     if (!icon.isEmpty()) app.dock?.setIcon(icon)
   }
   app.setAboutPanelOptions({
     applicationName: '碧游宫',
     applicationVersion: app.getVersion(),
     copyright: '碧游宫 · 内网异构推理集群',
-    icon: nativeImage.createFromPath(join(DESKTOP_ROOT, 'assets', 'icon.png')),
+    icon: nativeImage.createFromPath(appIconPath),
   })
 
   buildMenu()

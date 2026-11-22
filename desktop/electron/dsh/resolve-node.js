@@ -44,12 +44,15 @@ function fromPath() {
 }
 
 /**
- * @param {{ desktopRoot: string }} options
+ * @param {{ desktopRoot: string, pinnedNodeRoot?: string }} options
+ *   pinnedNodeRoot: 打包模式下指向 Resources/node-runtime（内含 node/bin/node）；
+ *                   不传时用 desktopRoot/.runtime（开发模式）。
  * @returns {{ execPath: string, version: string, source: string, exact: boolean, env: Record<string,string> }}
  */
-export function resolveNode({ desktopRoot }) {
+export function resolveNode({ desktopRoot, pinnedNodeRoot }) {
   const candidates = []
-  const pinnedPath = join(desktopRoot, '.runtime', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
+  const nodeBase = pinnedNodeRoot ?? join(desktopRoot, '.runtime')
+  const pinnedPath = join(nodeBase, 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
 
   if (process.env.BIYOU_NODE) {
     candidates.push({ execPath: process.env.BIYOU_NODE, source: 'BIYOU_NODE', env: {}, exact: false })
