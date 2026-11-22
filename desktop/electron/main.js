@@ -511,7 +511,7 @@ async function waitForDshViewLoad(timeoutMs = 45_000) {
 
 /**
  * 冒烟探针：碧游宫插件到底有没有被装进浏览器 roster、pill 有没有真的渲染出来。
- * 这是「插件路线」D1 的验收点——只看 dsh 起得来不够，得证明我们的 occupant 上了屏。
+ * 侧栏品牌行留给 dsh 默认外观，因此这里同时断言没有占用 sidebar.brand.*。
  */
 async function probeBiyouPlugin() {
   const script = `(() => {
@@ -535,7 +535,7 @@ async function probeBiyouPlugin() {
   let last = null
   while (Date.now() < deadline) {
     last = await dshView.webContents.executeJavaScript(script).catch((error) => ({ error: error.message }))
-    if (last?.pill && last.brandMarkCount > 0 && last.state === 'connected') return last
+    if (last?.pill && last.state === 'connected') return last
     await sleep(400)
   }
   return last
@@ -840,8 +840,9 @@ async function runSmoke(window, status) {
         biyou?.inBoot &&
           biyou.pill &&
           biyou.state === 'connected' &&
-          biyou.brandMarkCount > 0 &&
-          biyou.brandName === '碧游宫',
+          // 侧栏品牌留给 dsh 默认外观：两个 slot 都不应被碧游宫占用
+          biyou.brandMarkCount === 0 &&
+          biyou.brandName === null,
       )
       if (!report.dshView.biyouOk) report.ok = false
       // 本地模型插件的 browser half 也必须进 roster；页面渲染由设置页人工验收。

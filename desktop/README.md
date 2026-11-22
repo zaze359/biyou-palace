@@ -45,7 +45,7 @@ desktop/
 │       ├── discovery.js   UDP 广播公告与 discover 响应
 │       └── util.js        常量、地址判断、Argon2id、令牌
 ├── ui/shell/              品牌壳：顶栏、状态、启动/失败/就绪三态
-├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（品牌 / 状态浮层）
+├── packages/biyou-plugin/ 碧游宫 dsh 客户端插件（状态浮层；侧栏品牌留给 dsh 默认）
 ├── packages/biyou-local-models/ 本地模型插件（运行时 / GGUF / llama-server / provider）
 ├── runtime/home/profiles/biyou/   dsh profile 模板（bundles + 补丁层）
 ├── assets/
@@ -53,7 +53,7 @@ desktop/
 │   └── brand/
 │       ├── icon-photo.png   图标事实源：写实水墨青萍剑（剑主体、青莲背景）
 │       ├── icon.svg         几何副版图标源（npm run icon -- --geo）
-│       └── mark.svg         单色几何标记（dsh 侧栏 24px 位用）
+│       └── mark.svg         单色几何标记（现未占用；dsh 侧栏保留默认品牌）
 └── scripts/               版本自检、Node 下载、无头冒烟、图标生成、插件链接
 ```
 
@@ -67,7 +67,7 @@ desktop/
 | 应用图标（Dock / 窗口 / 关于面板） | `assets/icon.png`，源自写实 logo | 大尺寸，写实笔触可辨 |
 | 壳顶栏品牌位 | `assets/icon.png`（28px 方图） | 放大显示，`object-fit: cover` 收敛留白 |
 | 关于面板 | `nativeImage` 载 `assets/icon.png` | 同上 |
-| dsh 侧栏品牌位（`sidebar.brand.mark`） | `brand/mark.svg` 几何单色版 | 24px + `currentColor` 场景，写实图会糊成一团 |
+| dsh 侧栏品牌位 | **不占用**，保留 dsh/DeepSeek 默认外观 | 2026-11-22 决策：碧游宫品牌只由 Electron 壳顶栏承载，不在 dsh 侧栏重复一套 |
 
 重生成图标：
 
@@ -186,7 +186,8 @@ dsh 官方插件，是碧游宫基于 dsh 契约编写、挂进自己 profile �
 注册进上游已有的 slot。这样会话、工作区、设置仍归上游所有，我们只贡献自己那几格。
 
 > 2026-11-22 范围调整：单机首版直接使用 dsh 原生 Agent，**观星台/功德殿面板后置**；
-> 当前插件只承载品牌与状态。任务外壳/账本同理后置，见任务 `11-21-desktop-client`。
+> 当前插件只承载运行状态浮层。侧栏品牌位已决定留给 dsh 默认外观，不再替换。
+> 任务外壳/账本同理后置，见任务 `11-21-desktop-client`。
 
 ```text
 packages/biyou-plugin/
@@ -202,7 +203,7 @@ packages/biyou-plugin/
 | slot | 当前用途 |
 |---|---|
 | `shell.overlay` | 右下角「碧游宫 · 就绪 / 连接中 / 已断开」状态 pill（跟随 dsh 连接状态） |
-| `sidebar.brand.mark` / `brand.name` | 已接（D2）：青萍剑标记 + 「碧游宫」名称 |
+| `sidebar.brand.mark` / `brand.name` | **不占用**：保留 dsh 默认品牌（2026-11-22 决策） |
 | `main`（keyed）+ `sidebar.panellist` | 预留：观星台 / 功德殿（后置，单机首版不实现） |
 
 产物格式是 dsh 自有的同步加载格式，**不是标准 ESM**：`window.__ModuleLoader__.load`
@@ -223,10 +224,11 @@ npm run plugin:check     # 只校验链接是否指向正确
 
 验收口径：`npm run smoke` 的 `report.json` 里 `dshView.biyouOk` 应为 `true`，且
 `dshView.biyou` 至少包含 `{ inBoot: true, pill: true, state: "connected",
-brandMarkCount: 1, brandName: "碧游宫" }`。`inBoot` 证明进了 `window.__DSH_BOOT__`
-（browser roster），`pill`/`brandMarkCount` 证明 occupant 真的渲染上屏，
-`brandName` 证明侧栏产品名已被替换。`dshView.localModelsOk=true` 证明本地模型插件的
-browser half 也进了 roster（设置页具体渲染仍需人工看一次）。
+brandMarkCount: 0, brandName: null }`。`inBoot` 证明进了 `window.__DSH_BOOT__`
+（browser roster），`pill` 证明状态 occupant 真的渲染上屏；`brandMarkCount: 0` 与
+`brandName: null` 反向守住「侧栏品牌留给 dsh 默认、未被碧游宫占用」的决策。
+`dshView.localModelsOk=true` 证明本地模型插件的 browser half 也进了 roster
+（设置页具体渲染仍需人工看一次）。
 
 ### 本地模型插件（`packages/biyou-local-models`）
 

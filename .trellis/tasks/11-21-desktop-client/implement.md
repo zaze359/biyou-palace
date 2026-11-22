@@ -114,16 +114,16 @@ desktop/
 - 插件以 `@biyou/dsh-plugin` 进入 `window.__DSH_BOOT__`，`shell.overlay` 渲染状态 pill。
 - 插件经 `link-plugin.mjs` 链入 profile，`cordis.patch.yml` 注册 `ui-biyou`。
 
-### D2 · 已完成（2026-11-22）
+### D2 · 已完成（2026-11-22，当日改决侧栏品牌）
 
-- `sidebar.brand.mark` 替换为青萍剑标记，`sidebar.brand.name` 替换为「碧游宫」；
-  两者带 `data-biyou` 标记，供冒烟断言。
 - 状态 pill 接 `ctx.connection.state`（`useSyncExternalStore`），显示「就绪 / 连接中 / 已断开」；
-  `data-state` 同步连接状态。
-- 冒烟新增断言：`inBoot`、pill 存在、`state === "connected"`、品牌标记存在、品牌名为「碧游宫」；
+  `data-state` 同步连接状态。**这是 D2 现在唯一保留的 browser half UI**。
+- 侧栏品牌：初版曾占用 `sidebar.brand.mark` / `brand.name`（青萍剑 + 碧游宫）；
+  同日按截图评审改决——**这两处不再占用，保留 dsh/DeepSeek 默认外观**。
+  组件与注册已从 `client.js` 移除，碧游宫品牌只由 Electron 壳顶栏承载。
+- 冒烟断言随之调整：`inBoot`、pill 存在、`state === "connected"`，
+  且 `brandMarkCount === 0`、`brandName === null`（反向守住侧栏默认品牌未被占用）。
   `dshView.biyouOk` 为总判定。
-- 实测：`npm run smoke` 返回 `ok=true`，`biyou={"inBoot":true,"pill":true,"text":"碧游宫 · 就绪",
-  "state":"connected","brandMarkCount":1,"brandName":"碧游宫"}`。
 
 ### S5 · 已完成（2026-11-22）
 

@@ -8,7 +8,8 @@
 - 应用图标：`desktop/assets/icon.png`（`npm run icon` 从写实源重生成）；
 - 顶栏品牌位：`desktop/ui/shell/index.html` 显示 `assets/icon.png`（28px）；
 - 关于面板：`desktop/electron/main.js` 的 `setAboutPanelOptions` 载入图标；
-- dsh 侧栏 24px 单色位保留几何副版（`desktop/assets/brand/mark.svg`），写实图在该尺寸不可辨。
+- ~~dsh 侧栏 24px 单色位保留几何副版（`desktop/assets/brand/mark.svg`）~~ → **2026-11-22 改决**：
+  dsh 侧栏品牌行不占用，保留 DeepSeek 默认外观；`mark.svg` 暂留作素材，当前未接入。
 
 详见 `desktop/README.md`「品牌 Logo 接入」节。
 
