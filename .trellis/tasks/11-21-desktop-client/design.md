@@ -8,7 +8,7 @@
 
 1. **壳与运行时**：基于 dsh 的 Electron 壳；固定 dsh `0.2.2-rc.5`、Electron `44.7.0`、Node `24.22.3`。
 2. **本地控制面用 Node/TypeScript**：桌面端不打包 Python sidecar；本地任务板、联阵服务、模型适配都在 Electron 主进程/本地服务中实现。Python `zhentu` 仅作为可选联阵后端。
-3. **本地模型 V2.0-A 接 Ollama**：检测 `127.0.0.1:11434`，通过 OpenAI 兼容端点调用；不把 Ollama 塞进安装包。严格自闭环的 llama.cpp 内嵌列为 V2.0-B。
+3. **本地模型走 dsh 插件，内置 llama.cpp**：由 `@biyou/dsh-local-models` 自管运行时与模型（回环 `127.0.0.1:18434`），以 `biyou-local` provider 注册进 dsh；不依赖外部 Ollama，也不把它塞进安装包。外部 Ollama 仅作可选 provider，不是 V2.0-A 前提。**V2.0-A 已按此交付**（2026-11-22，见 `11-22-local-models-plugin`）。
 4. **dsh 只做单 Agent 运行时/UI**：禁用 dsh 的集群级 Agent Teams 编排；跨 Agent 调度属于阵图/联阵，不属于桌面客户端。
 5. **联阵默认关闭**：启动为单机，不广播、不监听；用户点「开阵」后才启动 LAN 服务并成为阵主。
 6. **数据本地优先**：配置、任务、产物、日志写入 `app.getPath("userData")`，不写仓库目录。
@@ -97,7 +97,7 @@
 
 ## 开放问题
 
-1. V2.0-A 是否接受 Ollama 作为本机前置依赖；若要求严格自闭环，需切 V2.0-B 内嵌 llama.cpp。
+1. ~~V2.0-A 是否接受 Ollama 作为本机前置依赖；若要求严格自闭环，需切 V2.0-B 内嵌 llama.cpp。~~ → 已决：V2.0-A 直接交付内置 llama.cpp 插件，不依赖外部 Ollama（2026-11-22）。
 2. 本地控制面是否直接复用 dsh 的会话存储，还是独立 SQLite；当前倾向独立。
 3. ~~观星台是独立页面，还是 dsh UI 的一个面板；当前倾向独立页面 + 壳内入口。~~ → 已决：做成 dsh UI 的 `main` 面板（keyed slot），壳内不再渲染自有业务页。见下节「呈现路线」。
 
