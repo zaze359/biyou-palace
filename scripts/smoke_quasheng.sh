@@ -18,7 +18,8 @@ cd "$REPO_ROOT"
 
 VENV_DIR="$REPO_ROOT/.venv"
 REQ_FILE="$REPO_ROOT/nodes/quasheng/requirements.txt"
-MANAGED_PY="/Users/zaze/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
+# 托管 Python 路径可用 WORKBUDDY_PY 覆盖；找不到就回退 PATH 上的 python3
+MANAGED_PY="${WORKBUDDY_PY:-$HOME/.workbuddy/binaries/python/versions/3.13.12/bin/python3}"
 
 # 端口刻意避开 Ollama(11434) 与节点默认(4010)
 MOCK_PORT="${SMOKE_MOCK_PORT:-11499}"

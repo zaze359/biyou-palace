@@ -38,9 +38,9 @@ done
 echo "==> 仓库根目录: $REPO_ROOT"
 
 # ---------- 1) Python 解释器 ----------
-#    优先托管 3.13（与 implement.md 一致）；托管路径缺失时回退到 PATH 上的 python3，
-#    并要求 >= 3.11。
-MANAGED_PY="/Users/zaze/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
+#    优先托管 3.13（与 implement.md 一致）；可用 WORKBUDDY_PY 覆盖，
+#    托管路径缺失时回退到 PATH 上的 python3，并要求 >= 3.11。
+MANAGED_PY="${WORKBUDDY_PY:-$HOME/.workbuddy/binaries/python/versions/3.13.12/bin/python3}"
 if [ -x "$MANAGED_PY" ]; then
   PY="$MANAGED_PY"
 else
