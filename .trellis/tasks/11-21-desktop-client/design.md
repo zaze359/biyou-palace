@@ -12,6 +12,7 @@
 4. **dsh 只做单 Agent 运行时/UI**：禁用 dsh 的集群级 Agent Teams 编排；跨 Agent 调度属于阵图/联阵，不属于桌面客户端。
 5. **联阵默认关闭**：启动为单机，不广播、不监听；用户点「开阵」后才启动 LAN 服务并成为阵主。
 6. **数据本地优先**：配置、任务、产物、日志写入 `app.getPath("userData")`，不写仓库目录。
+7. **归属边界**：机制属于 dsh，代码属于碧游宫；功能要进 dsh 界面/能力上下文才写插件，只管进程与联阵则留客户端本体。详见文末「归属与交互边界」。
 
 ## 架构
 
@@ -230,3 +231,51 @@ desktop/ui/shell     仅三态降级页：dsh 起不来 / 启动中 / 崩溃后�
 - S2 由“自研 model-adapter”改为“配置 dsh 的 Ollama provider + 健康提示”；
 - D3/D4 后置，D2 收尾后可直接进入 S5/S7/S8；
 - `docs/agent-contract.md` 与 `zhentu` 任务板/账本保留，作为联阵或后续任务治理的契约与参考实现，不在单机首版接线。
+
+---
+
+## 归属与交互边界（2026-11-22 澄清，已确认）
+
+本节是后续拆功能的统一判断依据，优先级高于上文「架构」一节里把本地控制面画进 Electron 的早期表述。
+
+### 角色
+
+| | dsh | 碧游宫客户端 |
+|---|---|---|
+| 身份 | 运行时 + Cordis 插件框架（Agent / 会话 / 模型 / Web UI） | 产品壳 / 宿主（Electron 窗口、托盘、进程生命周期、联阵、主题、品牌） |
+| 代码 | 上游包，锁 `0.2.2-rc.5` | `desktop/electron/`、`desktop/ui/shell/`、`desktop/packages/` |
+| 关系 | 被托管 | 启动 dsh、配置 profile、装载碧游宫插件；用 `WebContentsView` 承载 dsh Web UI，不重写上游 UI |
+
+### 插件归属
+
+- **机制属于 dsh**：`apply(ctx)` / `inject` / `ctx.slots` / `ctx.llm`、`window.__ModuleLoader__`、profile 的 `cordis.patch.yml`、`exports["./client"]` → `window.__DSH_BOOT__`。
+- **代码与内容属于碧游宫**：`desktop/packages/@biyou/*`，服务碧游宫品牌与业务。
+- 精确表述：既不是 Electron 插件，也不是 dsh 官方插件，而是**碧游宫基于 dsh 契约编写、挂进自己 profile 的 dsh 插件**。
+
+### 交互方向：控制面双向、状态面单向、业务面不通
+
+```text
+客户端 ──①控制下行──▶ dsh        spawn / restart / 信号；profile / DSH_HOME / 主题预设
+客户端 ◀──②状态上行── dsh        stdout "dsh web:" 解析 + exit + 客户端主动 fetch 探活
+客户端 ──③UI 承载───▶ dsh UI     WebContentsView.loadURL，容器→内容，不是 API 调用
+客户端 ✕──④业务调用── dsh        无通道：客户端不调 dsh Agent/模型 API，dsh 不调联阵/窗口
+```
+
+关键事实：
+
+- ① 见 `electron/dsh/server.js` 的 `start/stop/restart/killNow` 与 `electron/main.js` 的 `provisionProfile`、`nativeTheme.themeSource`。
+- ② `dsh:status` 返回的是客户端自己维护的 `DshServer.status`（由 stdout 正则与 `child.on('exit')` 驱动），**不是 dsh 进程的回调**；dsh 不知道 Electron 存在。
+- ③ `electron/main.js` 的 `attachServer` 在 READY 时 `loadURL`。
+- ④ `desktop/packages/` 内无 `electron` / `ipcRenderer` / 联阵引用；本地模型插件的 `llama-server` 自管在 `127.0.0.1:18434`，不经客户端。
+
+**刻意的设计取舍**：dsh 可独立运行、崩溃隔离、不产生第二套需双向同步的状态；代价是客户端与插件业务不通，而这正好逼着业务能力走 dsh 契约。
+
+### 功能归属判断标准
+
+> 要进 dsh 的界面或能力上下文 → dsh 插件（browser half + 必要的 host half）；
+> 只是开应用 / 管进程 / 管联阵 → 客户端本体。
+
+### 已知 seam 与当前双轨
+
+- **联阵 seam**：`FormationHost` 在 Electron 主进程，dsh 插件不感知阵况。若未来要让观星台显示联阵状态，须新开通道（Host half 暴露 service，或客户端推 snapshot）；当前无通道是设计使然，不是缺陷。
+- **双轨现状**：品牌 mark/name、状态 pill、本地模型设置页已走 dsh slot（真插件）；自建壳 `ui/shell/index.html` 的观星台 / 功德殿 / 藏经阁导航仍走 Electron IPC（非插件）。D5 撤场时按上述标准逐项判定：搬进 slot，或明确划为客户端本体功能、不再以插件名义存在。

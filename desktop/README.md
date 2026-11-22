@@ -150,6 +150,36 @@ Electron 主进程
 **dsh 只做单 Agent 运行时/UI**：profile 只装 `dsh-base` + `dsh-web-app`，不启用
 `dsh-agent-team` 这类集群级编排——跨 Agent 调度属于阵图/联阵，不属于桌面端。
 
+### 归属与交互边界
+
+一条判断标准先立住：
+
+> **要进 dsh 界面或能力上下文 → dsh 插件；只管开应用 / 管进程 / 管联阵 → 客户端本体。**
+
+插件的**机制**来自 dsh（`apply(ctx)`、`ctx.slots`、`window.__ModuleLoader__`、profile 的
+`cordis.patch.yml`），**代码**属于碧游宫（`@biyou/*`）——既不是 Electron 插件，也不是
+dsh 官方插件，是碧游宫基于 dsh 契约编写、挂进自己 profile 的 dsh 插件。
+
+客户端与 dsh 的交互不是对等双向：
+
+| 方向 | 通道 |
+|---|---|
+| 客户端 → dsh | 控制下行：spawn / restart / 信号；profile / `DSH_HOME` / 主题预设 |
+| dsh → 客户端 | 状态上行：stdout `dsh web:` + `exit` + 客户端主动探活（**不是 dsh 回调**） |
+| 客户端 → dsh UI | `WebContentsView.loadURL`，容器 → 内容 |
+| 业务调用 | **无通道**：客户端不调 dsh Agent / 模型 API，dsh 不调联阵 / 窗口 |
+
+`dsh:status` 读的是客户端自己维护的 `DshServer.status`，dsh 进程不知道 Electron 存在。
+这是刻意取舍：dsh 可独立运行、崩溃隔离、不产生第二套需要双向同步的状态；代价是业务不通，
+正好逼着业务能力走 dsh 契约。
+
+已知边界：联阵 `FormationHost` 在主进程，dsh 插件不感知阵况——要让观星台显示联阵状态，
+须新开通道（Host half 暴露 service，或客户端推 snapshot）。自建壳 `ui/shell` 里的
+观星台 / 功德殿 / 藏经阁导航仍走 Electron IPC（非插件），D5 撤场时按上述标准逐项判定：
+搬进 slot，或明确划为客户端本体，不再以插件名义存在。
+
+完整论证见 `.trellis/tasks/11-21-desktop-client/design.md` 文末「归属与交互边界」。
+
 ### 碧游宫插件（`packages/biyou-plugin`）
 
 品牌、观星台、功德殿、状态浮层不做成"第二个壳"，而是做成 **dsh 客户端插件**，
