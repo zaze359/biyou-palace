@@ -59,6 +59,10 @@
   逐文件内容流式哈希），内容变化必变、同 commit 重复稳定；`npm run test:build` 6/6 覆盖。
   可直接用于待做 #2 的「同 commit 两次构建校验和一致」校验。
 - 前置依赖：`npm install`、`npm run dsh:install`、`npm run node:bootstrap`（缺一即报错，不产半成品）。
+- Node 下载校验已落地（2026-11-24）：`bootstrap-node.mjs` 下载/复用 Node tarball 后、解压前，
+  必按官方 `SHASUMS256.txt` 流式校验 sha256（`scripts/shasums.mjs` + `scripts/artifact-hash.mjs`）；
+  不符则删除 archive 并报错，不解压入库。`npm run test:build` 14/14 覆盖解析/比对/篡改/CRLF。
+  满足 Requirement #2（对应待做 #2 的 Node 包校验部分）。
 
 ### 本任务待做（桌面端）
 

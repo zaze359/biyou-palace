@@ -15,6 +15,8 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { DESKTOP_ROOT } from '../electron/paths.js'
+import { hashFile } from './artifact-hash.mjs'
+import { verifySha256 } from './shasums.mjs'
 
 const version = (/(\d+\.\d+\.\d+)/.exec(readFileSync(join(DESKTOP_ROOT, '.node-version'), 'utf8')) ?? [
   null,
@@ -33,8 +35,26 @@ if (platform === 'win32') {
 
 const platformName = platform === 'darwin' ? 'darwin' : 'linux'
 const archive = `node-v${version}-${platformName}-${arch}.tar.gz`
-const url = `https://nodejs.org/dist/v${version}/${archive}`
+const baseUrl = `https://nodejs.org/dist/v${version}`
+const url = `${baseUrl}/${archive}`
+const shasumsUrl = `${baseUrl}/SHASUMS256.txt`
 const archivePath = join(downloadDir, archive)
+
+/** 下载 SHASUMS256.txt，流式校验 archive；不符则删除 archive 并抛错。 */
+async function verifyArchive() {
+  console.log(`↓ ${shasumsUrl}`)
+  const res = await fetch(shasumsUrl)
+  if (!res.ok) throw new Error(`校验和清单下载失败 HTTP ${res.status}：${shasumsUrl}`)
+  const shasumsText = await res.text()
+  const actual = await hashFile(archivePath)
+  try {
+    const { expected } = verifySha256(shasumsText, archive, actual)
+    console.log(`✓ ${archive} 校验通过（sha256 ${expected.slice(0, 16)}…）`)
+  } catch (error) {
+    rmSync(archivePath, { force: true })
+    throw error
+  }
+}
 
 function nodeBinaryWorks() {
   const binary = join(nodeDir, 'bin', 'node')
@@ -62,6 +82,9 @@ if (!existsSync(archivePath) || statSync(archivePath).size < 1024 * 1024) {
 } else {
   console.log(`✓ 复用已下载的 ${archive}`)
 }
+
+// 无论新下载还是复用，解压前都按官方 SHASUMS256.txt 校验，防止篡改/不完整包入库。
+await verifyArchive()
 
 rmSync(nodeDir, { recursive: true, force: true })
 mkdirSync(nodeDir, { recursive: true })

@@ -32,7 +32,7 @@
     "test:local-models": "node packages/biyou-local-models/test/unit/run.mjs && node packages/biyou-local-models/test/integration/run.mjs",
     "test:lan": "node --test electron/lan-host/test/lan-host.test.mjs",
     "test:s7": "node --test electron/dsh/test/s7.test.mjs",
-    "test:build": "node --test scripts/test/artifact-hash.test.mjs"
+    "test:build": "node --test scripts/test/artifact-hash.test.mjs scripts/test/shasums.test.mjs"
   },
   "devDependencies": {
     "electron": "44.7.0",

@@ -362,7 +362,7 @@ npm run smoke        # Electron 内开阵 → 入阵 → UDP 发现 → 散阵�
 | `npm start` | 起壳，同样先自检 |
 | `npm run check` | 版本交叉校验 + 依赖检查 |
 | `npm run dsh:install` | 安装 / 更新 profile 依赖 |
-| `npm run node:bootstrap` | 下载锁定 Node 到 `.runtime/node` |
+| `npm run node:bootstrap` | 下载锁定 Node 到 `.runtime/node`（解压前按官方 `SHASUMS256.txt` 校验 sha256，不符即删包报错） |
 | `npm run dsh:web` | 只起 dsh（终端里），用于判断「壳的问题还是 dsh 的问题」 |
 | `npm run smoke:dsh` | dsh 接入无头冒烟（CI 可跑） |
 | `npm run smoke` | Electron 壳冒烟：截图 + 报告写到 `<userData>/smoke/` |
