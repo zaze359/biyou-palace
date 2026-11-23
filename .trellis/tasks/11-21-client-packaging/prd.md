@@ -55,6 +55,9 @@
 - 资源布局：asar 内 = 主进程 + preload + ui/shell + `@noble/hashes`；
   asar 外 = `Resources/runtime`（1.1 GB dsh 依赖）+ `Resources/node-runtime`（锁定 Node 24.22.3）。
 - 产物清单：`dist/build-manifest.json`（版本、pinned 版本、commit、构建时间、每个产物 SHA-256）。
+  目录产物（`.app`）的 SHA-256 是**真实内容哈希**（`scripts/artifact-hash.mjs`：相对路径排序 +
+  逐文件内容流式哈希），内容变化必变、同 commit 重复稳定；`npm run test:build` 6/6 覆盖。
+  可直接用于待做 #2 的「同 commit 两次构建校验和一致」校验。
 - 前置依赖：`npm install`、`npm run dsh:install`、`npm run node:bootstrap`（缺一即报错，不产半成品）。
 
 ### 本任务待做（桌面端）

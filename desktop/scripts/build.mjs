@@ -10,11 +10,11 @@
  * V2 不做签名/公证/自动更新；产物是未签名包，交给 11-21-client-packaging。
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { DESKTOP_ROOT, runtimeSourceRoot, pinnedNodeRoot } from '../electron/paths.js'
 import { PINNED } from '../electron/versions.js'
+import { hashDirectory, hashFile } from './artifact-hash.mjs'
 
 const APP_VERSION = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'package.json'), 'utf8')).version
 
@@ -110,18 +110,17 @@ const manifest = {
   pinned: PINNED,
   commit: commitHash,
   builtAt,
-  artifacts: artifacts.map((file) => {
+  // 用 top-level await 逐产物算内容哈希；目录产物流式读取，不把 2G 全读进内存。
+  // 哈希函数见 scripts/artifact-hash.mjs：内容/结构变化必然改变 sha256。
+  artifacts: await Promise.all(artifacts.map(async (file) => {
     const isDir = statSync(file).isDirectory()
     return {
       file: relative(distDir, file),
       type: isDir ? 'directory' : 'file',
       bytes: isDir ? dirSize(file) : statSync(file).size,
-      // 目录产物用「路径清单」的哈希，避免把 2G 二进制全读进内存
-      sha256: isDir
-        ? createHash('sha256').update(relative(distDir, file)).digest('hex')
-        : createHash('sha256').update(readFileSync(file)).digest('hex'),
+      sha256: isDir ? await hashDirectory(file) : await hashFile(file),
     }
-  }),
+  })),
 }
 mkdirSync(distDir, { recursive: true })
 writeFileSync(join(distDir, 'build-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)

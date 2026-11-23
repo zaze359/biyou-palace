@@ -248,9 +248,12 @@ S7：健壮性与退出（异常恢复、错误路径、日志脱敏、无残留
 - **仍未验证**：打包 GUI 完整渲染——本沙箱 `sandbox initialization failed: Operation
   not permitted` 导致 GPU 进程反复崩溃退出（SIGTRAP），与 S8 记录的限制一致；真机验收
   仍需 client-packaging 完成。
-- **清单缺陷（待改）**：`build.mjs` 对 `.app` 目录产物用「路径字符串」算 SHA-256，
-  内容变了哈希不变（多次打包 `.app` 哈希均为 `28870c07…`）。需改为真实内容哈希或
-  标注为目录清单哈希，交 client-packaging。
+- **清单哈希缺陷已修（2026-11-24）**：旧 `build.mjs` 对 `.app` 目录产物用「路径字符串」
+  算 SHA-256，内容变了哈希不变（多次打包均为 `28870c07…`），使「同 commit 两次构建
+  校验和一致」验收失效。修法：抽出 `scripts/artifact-hash.mjs`——文件流式哈希、目录按
+  相对路径排序逐文件内容哈希（不整读 2G 进内存）；build.mjs 用 top-level await 调它。
+  单测 `npm run test:build` 6/6（内容/文件增删变化、重复稳定、非退化路径哈希）。
+  完整重打包验证：`.app` 真实哈希 `109e1af6…`，清单哈希与实际一致，两次计算稳定。
 - **Dock 图标圆角/尺寸修正（2026-11-23）**：真机反馈 Dock 图标是直角方图、比系统图标
   大一圈。根因是 `assets/icon.png` 为 1024×1024 满幅 RGB 无 alpha，`app.dock.setIcon()`
   对不透明方图不加圆角。修法：改 `render-icon.main.cjs`，渲染时把源图放进透明画布、
